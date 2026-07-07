@@ -1,4 +1,4 @@
-# TianGong v2
+# TianGong
 
 > 基于事件驱动的多 Agent 协作引擎，支持交互式 TUI 与 Headless 无头模式，通过 MCP 协议动态扩展工具能力。
 

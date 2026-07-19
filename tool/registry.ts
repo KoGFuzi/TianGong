@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { tool } from 'ai';
 import type { ToolSet } from 'ai';
-import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
+import { getScriptToolDefinitions } from './local/script-loader.ts';
 
 export interface ToolDefinition {
   readonly name: string;
@@ -68,13 +68,20 @@ const taskCompleteDef: ToolDefinition = {
   allowedAgents: [],
 };
 
-export const allToolDefinitions: readonly ToolDefinition[] = [
+/** 内置工具定义（硬编码） */
+const builtinToolDefinitions: readonly ToolDefinition[] = [
   handoffToAgentDef,
   executeBashDef,
   writeToWorkspaceDef,
   executeWorkspaceScriptDef,
   webSearchDef,
   taskCompleteDef,
+];
+
+/** 全部工具定义 = 内置 + 脚本工具（.py 等动态加载） */
+export const allToolDefinitions: readonly ToolDefinition[] = [
+  ...builtinToolDefinitions,
+  ...getScriptToolDefinitions(),
 ];
 
 export function getToolsForAgent(agentId: string): ToolDefinition[] {
@@ -94,8 +101,3 @@ export function buildToolSet(defs: ToolDefinition[]): ToolSet {
   return toolSet;
 }
 
-export const searchTools = allToolDefinitions.map(def => ({
-  name: def.name,
-  description: def.description,
-  inputSchema: toJsonSchemaCompat(def.inputSchema),
-}));

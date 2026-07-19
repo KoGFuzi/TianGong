@@ -11,7 +11,83 @@ import type { NormalizedToolCall } from './pipeline/adapter.ts';
 import { injectToolsToPrompt, parseToolCallsFromText } from './pipeline/fallback.ts';
 import { getToolsForAgent, buildToolSet, executeTool, getMcpToolsForAgent, buildMcpToolSet, mcpClient, allToolDefinitions } from '../tool/index.ts';
 import { getConfig } from '../config/config.ts';
-import { BudgetManager, estimateTokens } from '../runtime/budget/index.ts';
+import { BudgetManager, estimateTokens, estimateMessagesTokens } from '../runtime/budget/index.ts';
+import { compactToolOutput, compactOldToolResults } from './pipeline/compactor.ts';
+import { shouldSummarize, summarizeMessages, compactMessagesWithSummary } from './pipeline/summarizer.ts';
+import { TODOTracker } from './pipeline/todo-tracker.ts';
+
+/**
+ * 清洗消息历史：移除孤立的 tool 角色消息。
+ *
+ * OpenAI Chat Completions API 要求 role='tool' 的消息必须紧跟在
+ * 带 tool_calls 的 assistant 消息之后。推理模型（如 DeepSeek V4 Pro）
+ * 或 handoff 后的会话恢复可能产生孤立的 tool 消息，导致 400 错误。
+ *
+ * 策略：扫描每条 tool 消息，若前一条 assistant 消息中没有对应的
+ * toolCallId，则将该 tool 消息转为 user 消息（保留上下文但不违反 API 约束）。
+ */
+function sanitizeMessages(messages: ModelMessage[]): ModelMessage[] {
+  if (messages.length === 0) return messages;
+
+  const result: ModelMessage[] = [];
+  // 记录上一条 assistant 消息中的所有 toolCallId
+  let lastAssistantToolCallIds = new Set<string>();
+
+  for (const msg of messages) {
+    if (msg.role === 'assistant') {
+      // 提取 assistant 消息中的 tool-call ID
+      const ids = new Set<string>();
+      const content = msg.content;
+      if (Array.isArray(content)) {
+        for (const part of content) {
+          if (typeof part === 'object' && part !== null && 'type' in part && part.type === 'tool-call') {
+            const tcPart = part as { toolCallId: string };
+            ids.add(tcPart.toolCallId);
+          }
+        }
+      }
+      lastAssistantToolCallIds = ids;
+      result.push(msg);
+    } else if (msg.role === 'tool') {
+      // 检查 tool 消息中的 toolCallId 是否在上一条 assistant 消息中
+      const content = msg.content;
+      const toolCallIds: string[] = [];
+      if (Array.isArray(content)) {
+        for (const part of content) {
+          if (typeof part === 'object' && part !== null && 'type' in part && part.type === 'tool-result') {
+            const trPart = part as { toolCallId: string };
+            toolCallIds.push(trPart.toolCallId);
+          }
+        }
+      }
+      const allMatch = toolCallIds.length > 0 && toolCallIds.every(id => lastAssistantToolCallIds.has(id));
+      if (allMatch) {
+        result.push(msg);
+      } else {
+        // 孤立 tool 消息 → 转为 user 消息，保留上下文信息
+        const textParts = toolCallIds.map(id => `[工具结果 ${id}]`);
+        if (Array.isArray(content)) {
+          for (const part of content) {
+            if (typeof part === 'object' && part !== null && 'type' in part && part.type === 'tool-result') {
+              const tr = part as { toolName: string; output?: { value?: unknown } };
+              textParts.push(`[${tr.toolName}]: ${JSON.stringify(tr.output?.value ?? '')}`);
+            }
+          }
+        }
+        result.push({
+          role: 'user',
+          content: textParts.join('\n'),
+        });
+      }
+    } else {
+      // user / system 等角色直接保留，重置 toolCallId 集合
+      lastAssistantToolCallIds = new Set();
+      result.push(msg);
+    }
+  }
+
+  return result;
+}
 
 /**
  * 检测模型是否支持原生 Tool Call（function calling）。
@@ -88,6 +164,7 @@ export async function runEngine(userInput: string, sessionId?: string): Promise<
   let activeAgentId = 'planner';
   let messages: ModelMessage[] = [{ role: 'user', content: userInput }];
   let stepCount = 0;
+  const todoTracker = new TODOTracker();
 
   // 尝试恢复已有会话
   const savedState = sessionManager.loadState(sid);
@@ -95,6 +172,9 @@ export async function runEngine(userInput: string, sessionId?: string): Promise<
     activeAgentId = savedState.activeAgentId;
     messages = savedState.messages as ModelMessage[];
     stepCount = savedState.stepCount;
+    if (savedState.todoList != null) {
+      todoTracker.restore(savedState.todoList);
+    }
   }
 
   try {
@@ -157,7 +237,38 @@ export async function runEngine(userInput: string, sessionId?: string): Promise<
 
     let response: StreamAgentResponse;
     try {
-      response = await streamAgentResponse(agent, messages, effectiveTools, enhancedSystemPrompt);
+      // 消息处理管线：sanitize → compactOldToolResults → checkAndSummarize → injectTODO
+      let safeMessages = sanitizeMessages(messages);
+      safeMessages = compactOldToolResults(safeMessages);
+
+      // 检查是否需要触发摘要（每 5 步或 handoff 时检查）
+      if (stepCount % 5 === 0 && shouldSummarize(safeMessages)) {
+        const originalTokens = estimateMessagesTokens(safeMessages);
+        const summary = await summarizeMessages(safeMessages, agent.subscription);
+        safeMessages = await compactMessagesWithSummary(safeMessages, summary);
+        const summaryTokens = estimateMessagesTokens(safeMessages);
+        eventBus.emit('context:summarized', { originalTokens, summaryTokens });
+
+        // 缓存摘要到会话状态
+        saveSessionState({
+          activeAgentId,
+          messages: messages as unknown[],
+          stepCount,
+          summaryCache: summary,
+          todoList: todoTracker.getAllTasks(),
+        });
+      }
+
+      // 注入 TODO 状态到消息
+      const formattedTODO = todoTracker.getFormattedTODO();
+      if (formattedTODO.length > 0) {
+        safeMessages.push({
+          role: 'user',
+          content: formattedTODO,
+        });
+      }
+
+      response = await streamAgentResponse(agent, safeMessages, effectiveTools, enhancedSystemPrompt);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       eventBus.emit('engine:error', { agentId: agent.id, error: errorMessage });
@@ -172,6 +283,20 @@ export async function runEngine(userInput: string, sessionId?: string): Promise<
 
     // 将模型回复消息追加到历史
     messages.push(...response.responseMessages);
+
+    // 提取 TODO 并更新追踪器
+    if (response.text) {
+      const todoRegex = /- \[([ xX])\] (.+)/g;
+      const newTodos: Array<{ text: string; done: boolean }> = [];
+      let todoMatch: RegExpExecArray | null;
+      while ((todoMatch = todoRegex.exec(response.text)) !== null) {
+        newTodos.push({ text: todoMatch[2], done: todoMatch[1] !== ' ' });
+      }
+      if (newTodos.length > 0) {
+        todoTracker.updateTODO(newTodos);
+        eventBus.emit('todo:updated', { todoList: newTodos });
+      }
+    }
 
     // Fallback 路径：从文本中解析工具调用（不支持原生 Tool Call 的模型）
     let fallbackCalls: NormalizedToolCall[] = [];
@@ -190,7 +315,7 @@ export async function runEngine(userInput: string, sessionId?: string): Promise<
     ];
     const normalizedCalls = normalizeToolCalls(allRawToolCalls);
 
-    saveSessionState({ activeAgentId, messages: messages as unknown[], stepCount });
+    saveSessionState({ activeAgentId, messages: messages as unknown[], stepCount, todoList: todoTracker.getAllTasks() });
 
     // 发送完整文本事件
     if (response.text) {
@@ -223,20 +348,29 @@ export async function runEngine(userInput: string, sessionId?: string): Promise<
       });
 
       // 使用 formatToolResults 格式化结果并注入消息历史
+      // 使用 compactToolOutput 压缩工具输出后再注入消息历史
+      const compactedResult = compactToolOutput(tc.name, result);
+
+      // 发送事件
+      eventBus.emit('context:compacted', {
+        removedTokens: Math.max(0, estimateTokens(JSON.stringify(result.output ?? '')) - estimateTokens(JSON.stringify(compactedResult.output ?? ''))),
+        toolName: tc.name,
+      });
+
       if (supportsTools) {
-        messages.push(formatToolResults(tc.id, tc.name, result));
+        messages.push(formatToolResults(tc.id, tc.name, compactedResult));
       } else {
         // Fallback 路径：以文本消息形式注入工具结果
-        const outputText = result.success
-          ? JSON.stringify({ success: true, output: result.output })
-          : JSON.stringify({ success: false, error: result.error });
+        const outputText = compactedResult.success
+          ? JSON.stringify({ success: true, output: compactedResult.output })
+          : JSON.stringify({ success: false, error: compactedResult.error });
         messages.push({
           role: 'user',
           content: `[工具结果 ${tc.name}]: ${outputText}`,
         });
       }
     }
-    saveSessionState({ activeAgentId, messages: messages as unknown[], stepCount });
+    saveSessionState({ activeAgentId, messages: messages as unknown[], stepCount, todoList: todoTracker.getAllTasks() });
 
     // 检查 handoff_to_agent 调用
     const handoffCall = normalizedCalls.find(
@@ -305,7 +439,7 @@ export async function runEngine(userInput: string, sessionId?: string): Promise<
         toAgentId: activeAgentId,
         reason: input.reason,
       });
-      saveSessionState({ activeAgentId, messages: messages as unknown[], stepCount });
+      saveSessionState({ activeAgentId, messages: messages as unknown[], stepCount, todoList: todoTracker.getAllTasks() });
 
       messages.push({
         role: 'user',

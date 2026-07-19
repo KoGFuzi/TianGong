@@ -1,4 +1,3 @@
-import 'dotenv/config';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { eventBus } from '../../runtime/eventbus/splitter.ts';
@@ -42,7 +41,7 @@ async function main(): Promise<void> {
   const llmConfigPath = resolve(__dirname, '../../config/LLMconfig.jsonc');
   if (!existsSync(llmConfigPath)) {
     emit('headless:warning', {
-      message: 'LLMconfig.jsonc not found. Run interactive mode (bun run kernel/bootstrap.ts) to set up configuration, or use environment variables.'
+      message: 'LLMconfig.jsonc not found. Run interactive mode (bun run start) to set up configuration, or use environment variables.'
     });
   }
 

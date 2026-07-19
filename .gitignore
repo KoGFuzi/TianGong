@@ -9,3 +9,6 @@ node_modules/
 # 环境变量
 .env
 .qoder
+
+#.git
+.git

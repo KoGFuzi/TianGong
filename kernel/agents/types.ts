@@ -13,7 +13,5 @@ export interface AgentConfig {
 
 export interface AgentEnhancements {
   readonly guideRefs: readonly string[];
-  readonly chainRefs: readonly string[];
-  readonly toolPreferences: readonly string[];
 }
 

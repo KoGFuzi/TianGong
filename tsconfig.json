@@ -46,5 +46,5 @@
     "emitDeclarationOnly": true,
     "esModuleInterop": true
   },
-  "include": ["apps/**/*", "config/**/*", "kernel/**/*", "model/**/*", "tool/**/*", "runtime/**/*"]
+  "include": ["apps/**/*", "bin/**/*", "config/**/*", "kernel/**/*", "model/**/*", "tool/**/*", "runtime/**/*"]
 }

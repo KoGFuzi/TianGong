@@ -13,6 +13,7 @@ interface AppState {
   readonly messages: ChatMessage[];
   readonly activeAgent: string;
   readonly isRunning: boolean;
+  readonly engineWaiting: boolean; // 引擎挂起等待用户新输入
   readonly streamingText: string;
   readonly currentTool: string | null;
   readonly stepCount: number;
@@ -22,6 +23,7 @@ interface AppState {
   addMessage: (msg: Omit<ChatMessage, 'id' | 'timestamp'>) => void;
   setActiveAgent: (agentId: string) => void;
   setRunning: (running: boolean) => void;
+  setEngineWaiting: (waiting: boolean) => void;
   appendStream: (chunk: string) => void;
   clearStream: () => void;
   setCurrentTool: (tool: string | null) => void;
@@ -36,6 +38,7 @@ export const useAppStore = create<AppState>()((set) => ({
   messages: [],
   activeAgent: 'planner',
   isRunning: false,
+  engineWaiting: false,
   streamingText: '',
   currentTool: null,
   stepCount: 0,
@@ -46,6 +49,7 @@ export const useAppStore = create<AppState>()((set) => ({
   })),
   setActiveAgent: (agentId) => set({ activeAgent: agentId }),
   setRunning: (running) => set({ isRunning: running }),
+  setEngineWaiting: (waiting) => set({ engineWaiting: waiting }),
   appendStream: (chunk) => set((state) => ({ streamingText: state.streamingText + chunk })),
   clearStream: () => set({ streamingText: '' }),
   setCurrentTool: (tool) => set({ currentTool: tool }),
@@ -111,8 +115,22 @@ export function bindEventBus(): void {
     useAppStore.getState().addMessage({ agentId: agentId ?? 'system', type: 'error', content: error });
   });
 
+  // 引擎完成一轮输出，挂起等待用户新输入 → 解除 isRunning 锁定
+  eventBus.on('engine:awaiting_input', ({ agentId, message }) => {
+    if (message.length > 0) {
+      const stream = useAppStore.getState().streamingText;
+      if (stream.length > 0) {
+        useAppStore.getState().addMessage({ agentId, type: 'text', content: stream });
+      }
+      useAppStore.getState().clearStream();
+    }
+    useAppStore.getState().setRunning(false);
+    useAppStore.getState().setEngineWaiting(true);
+  });
+
   eventBus.on('engine:end', ({ reason, totalSteps }) => {
     useAppStore.getState().setRunning(false);
+    useAppStore.getState().setEngineWaiting(false);
     useAppStore.getState().setStepCount(totalSteps);
     useAppStore.getState().clearStream();
     useAppStore.getState().addMessage({ agentId: 'system', type: 'system', content: `结束 | ${reason} | ${totalSteps} 步` });

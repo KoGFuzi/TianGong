@@ -4,7 +4,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { stringifyJsonc } from './jsonc.ts';
 import type { AgentModelConfig, ThinkingLevel } from './config.ts';
-import { resetConfig } from './config.ts';
+import { resetConfig, LOCAL_PROVIDER_PRESETS, CLOUD_PROVIDER_PRESETS } from './config.ts';
 
 // ── 内部类型 ────────────────────────────────────────────────
 
@@ -13,13 +13,15 @@ type Phase =
   | 'subscription_details'
   | 'more_subscriptions'
   | 'agent_subscription'
+  | 'agent_model_fetching'
+  | 'agent_model_select'
   | 'agent_model'
   | 'agent_thinking'
   | 'preview'
   | 'done';
 
 interface SubData {
-  provider: 'openai' | 'anthropic';
+  provider: 'openai' | 'anthropic' | 'ollama' | 'lm-studio';
   baseURL: string;
   apiKey: string;
 }
@@ -28,6 +30,43 @@ interface AgentData {
   subscription: string;
   modelId: string;
   thinkingLevel: ThinkingLevel;
+}
+
+interface FetchedModel {
+  id: string;
+  ownedBy?: string;
+}
+
+const MODEL_FETCH_TIMEOUT_MS = 8_000;
+
+/**
+ * 调用 {baseURL}/models 获取可用模型列表。
+ * 兼容 OpenAI 标准 /models 接口（含 Ollama、LM Studio、DeepSeek、Kimi、Qwen 等）。
+ */
+async function fetchModelList(sub: SubData): Promise<FetchedModel[]> {
+  const base = sub.baseURL.replace(/\/+$/, '');
+  const url = `${base}/models`;
+  const headers: Record<string, string> = {};
+  if (sub.apiKey !== '') {
+    headers['Authorization'] = `Bearer ${sub.apiKey}`;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), MODEL_FETCH_TIMEOUT_MS);
+  try {
+    const resp = await fetch(url, { headers, signal: controller.signal });
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    const data = await resp.json() as { data?: Array<{ id: string; owned_by?: string }>; models?: Array<{ id: string; owned_by?: string }> };
+    const raw = data.data ?? data.models ?? [];
+    const models: FetchedModel[] = raw.map(m => ({ id: m.id, ...(m.owned_by != null ? { ownedBy: m.owned_by } : {}) }));
+    // 按 id 排序，方便查找
+    models.sort((a, b) => a.id.localeCompare(b.id));
+    return models;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 interface SelectOption {
@@ -125,6 +164,8 @@ function Wizard(props: { onComplete: () => void }): React.JSX.Element {
   const [agents, setAgents] = useState<Record<string, AgentData>>({});
   const [currentAgentIndex, setCurrentAgentIndex] = useState(0);
   const [currentAgentData, setCurrentAgentData] = useState<AgentData>({ subscription: '', modelId: '', thinkingLevel: 'medium' });
+  const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   // ── 卡死检测 + 防竞态推进锁 ──
   const phaseEnteredAt = useRef(Date.now());
@@ -148,6 +189,10 @@ function Wizard(props: { onComplete: () => void }): React.JSX.Element {
       advancingRef.current = true;
       exit();
       props.onComplete();
+    }
+    // 拉取模型阶段按 'n' 跳过，转手动输入
+    if (char === 'n' && phase === 'agent_model_fetching') {
+      setPhase('agent_model');
     }
   });
 
@@ -231,8 +276,25 @@ function Wizard(props: { onComplete: () => void }): React.JSX.Element {
   // ── 阶段 A：填写订阅详情 ──
   const handleDetailSelect = useCallback((value: string) => {
     // detailStep === 0: provider select
-    setCurrentSubData(prev => ({ ...prev, provider: value as 'openai' | 'anthropic' }));
-    setDetailStep(1);
+    // 占位符（分隔标题）忽略
+    if (value.startsWith('__placeholder')) return;
+    // 云厂商预设：填充 provider + baseURL，跳过 URL 输入直接进入 apiKey 步骤
+    const cloudPreset = CLOUD_PROVIDER_PRESETS[value as keyof typeof CLOUD_PROVIDER_PRESETS];
+    if (cloudPreset != null) {
+      setCurrentSubData(prev => ({ ...prev, provider: cloudPreset.provider, baseURL: cloudPreset.baseURL }));
+      setDetailStep(2);
+      return;
+    }
+    const provider = value as SubData['provider'];
+    // 本地模型预设：自动填充 baseURL，跳过 URL 输入直接进入 apiKey 步骤
+    if (provider === 'ollama' || provider === 'lm-studio') {
+      const preset = LOCAL_PROVIDER_PRESETS[provider];
+      setCurrentSubData(prev => ({ ...prev, provider, baseURL: preset.baseURL }));
+      setDetailStep(2);
+    } else {
+      setCurrentSubData(prev => ({ ...prev, provider }));
+      setDetailStep(1);
+    }
   }, []);
 
   const handleDetailText = useCallback((value: string) => {
@@ -269,10 +331,49 @@ function Wizard(props: { onComplete: () => void }): React.JSX.Element {
   // ── 阶段 B：Agent 配置 ──
   const handleAgentSubscriptionSelect = useCallback((value: string) => {
     setCurrentAgentData(prev => ({ ...prev, subscription: value }));
-    setPhase('agent_model');
+    setFetchedModels([]);
+    setFetchError(null);
+    setPhase('agent_model_fetching');
+  }, []);
+
+  // 自动拉取模型列表
+  useEffect(() => {
+    if (phase !== 'agent_model_fetching') return;
+    const sub = subscriptions[currentAgentData.subscription];
+    if (sub == null || sub.baseURL === '') {
+      setPhase('agent_model');
+      return;
+    }
+    let cancelled = false;
+    fetchModelList(sub)
+      .then(models => {
+        if (cancelled) return;
+        if (models.length > 0) {
+          setFetchedModels(models);
+          setPhase('agent_model_select');
+        } else {
+          setPhase('agent_model');
+        }
+      })
+      .catch(err => {
+        if (cancelled) return;
+        setFetchError(err instanceof Error ? err.message : String(err));
+        setPhase('agent_model');
+      });
+    return () => { cancelled = true; };
+  }, [phase, subscriptions, currentAgentData.subscription]);
+
+  const handleAgentModelSelect = useCallback((value: string) => {
+    if (value === '__manual__') {
+      setPhase('agent_model');
+      return;
+    }
+    setCurrentAgentData(prev => ({ ...prev, modelId: value }));
+    setPhase('agent_thinking');
   }, []);
 
   const handleAgentModelText = useCallback((value: string) => {
+    if (value.trim().length === 0) return;
     setCurrentAgentData(prev => ({ ...prev, modelId: value }));
     setPhase('agent_thinking');
   }, []);
@@ -354,8 +455,19 @@ function Wizard(props: { onComplete: () => void }): React.JSX.Element {
             <Select
               key="sub-provider"
               options={[
+                { label: '── 云厂商预设 ──', value: '__placeholder__' },
+                { label: CLOUD_PROVIDER_PRESETS['deepseek-openai'].label, value: 'deepseek-openai' },
+                { label: CLOUD_PROVIDER_PRESETS['deepseek-anthropic'].label, value: 'deepseek-anthropic' },
+                { label: CLOUD_PROVIDER_PRESETS['qwen-openai'].label, value: 'qwen-openai' },
+                { label: CLOUD_PROVIDER_PRESETS['qwen-anthropic'].label, value: 'qwen-anthropic' },
+                { label: CLOUD_PROVIDER_PRESETS['glm'].label, value: 'glm' },
+                { label: CLOUD_PROVIDER_PRESETS['kimi'].label, value: 'kimi' },
+                { label: CLOUD_PROVIDER_PRESETS['minimax'].label, value: 'minimax' },
+                { label: '── 自定义 ──', value: '__placeholder2__' },
                 { label: 'OpenAI', value: 'openai' },
                 { label: 'Anthropic', value: 'anthropic' },
+                { label: 'Ollama（本地）', value: 'ollama' },
+                { label: 'LM Studio（本地）', value: 'lm-studio' },
               ]}
               onSelect={handleDetailSelect}
             />
@@ -428,16 +540,60 @@ function Wizard(props: { onComplete: () => void }): React.JSX.Element {
     );
   }
 
-  if (phase === 'agent_model') {
+  // 阶段 B2：拉取模型列表中
+  if (phase === 'agent_model_fetching') {
+    const sub = subscriptions[currentAgentData.subscription];
     return (
       <Box flexDirection="column" padding={1}>
         <Text bold color="cyan">── Agent: {agentName} ({currentAgentIndex + 1}/4) ──</Text>
         <Text> </Text>
+        <Text color="yellow">⏳ 正在获取可用模型列表…</Text>
+        <Text color="gray">  端点: {sub?.baseURL ?? '(未知)'}/models</Text>
+        <Text color="gray">  按 n 跳过，手动输入模型名</Text>
+      </Box>
+    );
+  }
+
+  // 阶段 B2b：从列表选择模型
+  if (phase === 'agent_model_select') {
+    const sub = subscriptions[currentAgentData.subscription];
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Text bold color="cyan">── Agent: {agentName} ({currentAgentIndex + 1}/4) ──</Text>
+        <Text> </Text>
+        <Text>选择模型（共 {fetchedModels.length} 个，订阅: {currentAgentData.subscription}）：</Text>
+        <Select
+          key={`agent-${currentAgentIndex}-model-select`}
+          options={[
+            ...fetchedModels.map((m, i) => ({
+              label: `${m.id}${m.ownedBy != null ? `  [${m.ownedBy}]` : ''}${i < 10 ? '' : ''}`,
+              value: m.id,
+            })),
+            { label: '── 手动输入模型名 ──', value: '__manual__' },
+          ]}
+          onSelect={handleAgentModelSelect}
+        />
+        <Text color="gray">上下键选择，Enter 确认；选「手动输入」可自行填写</Text>
+      </Box>
+    );
+  }
+
+  // 阶段 B3：手动输入模型 ID（获取失败或用户选择手动输入）
+  if (phase === 'agent_model') {
+    const sub = subscriptions[currentAgentData.subscription];
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Text bold color="cyan">── Agent: {agentName} ({currentAgentIndex + 1}/4) ──</Text>
+        <Text> </Text>
+        {fetchError != null && (
+          <Text color="red">⚠ 自动获取失败（{fetchError}），请手动输入</Text>
+        )}
         <Text>Model ID（当前订阅: {currentAgentData.subscription}）：</Text>
+        <Text color="gray">  端点: {sub?.baseURL ?? '(未知)'}</Text>
         <TextInput
           key={`agent-${currentAgentIndex}-model`}
           onSubmit={handleAgentModelText}
-          placeholder="gpt-4o"
+          placeholder="deepseek-chat, gpt-4o, qwen-plus…"
         />
       </Box>
     );

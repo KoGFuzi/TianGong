@@ -8,11 +8,82 @@ import { parseJsonc } from './jsonc.ts';
 export type ThinkingLevel = 'low' | 'medium' | 'high';
 
 export interface SubscriptionConfig {
-  readonly provider: 'openai' | 'anthropic';
+  readonly provider: 'openai' | 'anthropic' | 'ollama' | 'lm-studio';
   readonly baseURL: string;
   readonly modelId?: string;
   readonly apiKey?: string; // 可选；留空回退环境变量
 }
+
+/** 本地模型预设配置 */
+export const LOCAL_PROVIDER_PRESETS = {
+  'ollama': {
+    label: 'Ollama（本地）',
+    baseURL: 'http://localhost:11434/v1',
+    apiKey: '',
+  },
+  'lm-studio': {
+    label: 'LM Studio（本地）',
+    baseURL: 'http://localhost:1234/v1',
+    apiKey: '',
+  },
+} as const satisfies Record<'ollama' | 'lm-studio', { label: string; baseURL: string; apiKey: string }>;
+
+/** 云厂商预设配置（provider 已确定，baseURL 固定） */
+export interface CloudProviderPreset {
+  readonly label: string;
+  readonly provider: 'openai' | 'anthropic';
+  readonly baseURL: string;
+}
+
+export const CLOUD_PROVIDER_PRESETS = {
+  'deepseek-openai': {
+    label: 'DeepSeek（OpenAI 兼容）',
+    provider: 'openai' as const,
+    baseURL: 'https://api.deepseek.com',
+  },
+  'deepseek-anthropic': {
+    label: 'DeepSeek（Anthropic 兼容）',
+    provider: 'anthropic' as const,
+    baseURL: 'https://api.deepseek.com/anthropic',
+  },
+  'qwen-openai': {
+    label: 'Qwen 通义千问（OpenAI 兼容）',
+    provider: 'openai' as const,
+    baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  },
+  'qwen-anthropic': {
+    label: 'Qwen 通义千问（Anthropic 兼容）',
+    provider: 'anthropic' as const,
+    baseURL: 'https://dashscope.aliyuncs.com/apps/anthropic',
+  },
+  'glm': {
+    label: 'GLM 智谱清言',
+    provider: 'openai' as const,
+    baseURL: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+  },
+  'kimi': {
+    label: 'Kimi 月之暗面',
+    provider: 'openai' as const,
+    baseURL: 'https://api.moonshot.cn/v1',
+  },
+  'minimax': {
+    label: 'MiniMax',
+    provider: 'anthropic' as const,
+    baseURL: 'https://api.minimaxi.com/anthropic',
+  },
+} as const satisfies Record<string, CloudProviderPreset>;
+
+/** 已知模型的上下文窗口大小映射 */
+export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  'deepseek-v3': 65536,
+  'deepseek-r1': 65536,
+  'deepseek-v4': 65536,
+  'claude-sonnet-4-20250514': 200000,
+  'claude-3-5-sonnet': 200000,
+  'gpt-4o': 128000,
+  'gpt-4-turbo': 128000,
+  'gpt-4': 128000,
+};
 
 export interface AgentModelConfig {
   readonly subscription: string; // 'coding' | 'token' 等订阅键
@@ -40,6 +111,13 @@ export interface AppConfig {
     readonly maxTokensPerSession: number;
     readonly maxStepsPerTask: number;
     readonly stepTimeoutMs: number;
+  };
+  readonly context: {
+    readonly contextWindow: number;        // 模型上下文窗口大小，默认 32768
+    readonly summaryThreshold: number;     // 触发摘要的 Token 占比阈值，默认 0.7
+    readonly slidingWindowSize: number;    // 滑动窗口保留的最近消息轮数，默认 10
+    readonly toolOutputMaxTokens: number;  // 单条工具输出最大 Token 数，默认 2000
+    readonly summaryModel: string | null;  // 摘要使用的轻量模型 ID，可选
   };
   readonly workspace: {
     readonly baseDir: string;
@@ -90,6 +168,13 @@ const DEFAULT_CONFIG: AppConfig = {
     maxTokensPerSession: 100_000,
     maxStepsPerTask: 50,
     stepTimeoutMs: 30_000,
+  },
+  context: {
+    contextWindow: 32768,
+    summaryThreshold: 0.7,
+    slidingWindowSize: 10,
+    toolOutputMaxTokens: 2000,
+    summaryModel: null,
   },
   workspace: {
     baseDir: resolve(process.cwd(), 'runtime/workspace'),
@@ -153,6 +238,20 @@ export function loadConfig(): AppConfig {
     ? parseInt(mcpTimeoutEnv, 10)
     : mcpFileData.timeout ?? DEFAULT_CONFIG.mcp.timeout;
 
+  // 上下文窗口：环境变量 > 用户显式配置 > MODEL_CONTEXT_WINDOWS 映射 > 默认值
+  const defaultModel = env['TIANGONG_DEFAULT_MODEL'] ?? DEFAULT_CONFIG.llm.defaultModel;
+  let contextWindow = DEFAULT_CONFIG.context.contextWindow;
+  for (const [prefix, size] of Object.entries(MODEL_CONTEXT_WINDOWS)) {
+    if (defaultModel.startsWith(prefix)) {
+      contextWindow = size;
+      break;
+    }
+  }
+  const contextWindowEnv = env['TIANGONG_CONTEXT_WINDOW'];
+  if (contextWindowEnv != null) {
+    contextWindow = parseInt(contextWindowEnv, 10);
+  }
+
   return {
     llm: {
       defaultModel: env['TIANGONG_DEFAULT_MODEL'] ?? DEFAULT_CONFIG.llm.defaultModel,
@@ -171,6 +270,13 @@ export function loadConfig(): AppConfig {
       maxTokensPerSession: parseInt(env['TIANGONG_MAX_TOKENS_SESSION'] ?? String(DEFAULT_CONFIG.budget.maxTokensPerSession), 10),
       maxStepsPerTask: parseInt(env['TIANGONG_MAX_STEPS'] ?? String(DEFAULT_CONFIG.budget.maxStepsPerTask), 10),
       stepTimeoutMs: parseInt(env['TIANGONG_STEP_TIMEOUT_MS'] ?? String(DEFAULT_CONFIG.budget.stepTimeoutMs), 10),
+    },
+    context: {
+      contextWindow,
+      summaryThreshold: DEFAULT_CONFIG.context.summaryThreshold,
+      slidingWindowSize: DEFAULT_CONFIG.context.slidingWindowSize,
+      toolOutputMaxTokens: DEFAULT_CONFIG.context.toolOutputMaxTokens,
+      summaryModel: DEFAULT_CONFIG.context.summaryModel,
     },
     workspace: {
       baseDir: env['TIANGONG_WORKSPACE_DIR'] ?? DEFAULT_CONFIG.workspace.baseDir,

@@ -24,6 +24,10 @@ export interface AppEvents {
 
   'budget:exceeded': { sessionId: string; usage: number; limit: number };
 
+  'context:compacted': { removedTokens: number; toolName: string };
+  'context:summarized': { originalTokens: number; summaryTokens: number };
+  'todo:updated': { todoList: Array<{ text: string; done: boolean }> };
+
   'headless:init': { mode: string; input?: string };
   'headless:warning': { message: string };
   'headless:exit': { code?: number };

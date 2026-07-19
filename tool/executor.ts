@@ -1,5 +1,6 @@
 import { getShell, writeFile as wsWriteFile, executeScript as wsExecuteScript } from '../runtime/workspace/index.ts';
 import { executeWebSearch } from './local/web-search.ts';
+import { executeScriptTool, getScriptToolNames } from './local/script-loader.ts';
 import { allToolDefinitions } from './registry.ts';
 import { mcpClient } from './mcp/client.ts';
 import { getConfig } from '../config/config.ts';
@@ -63,6 +64,10 @@ export async function executeTool(
     case 'task_complete':
       return { success: true, output: `任务已完成。摘要: ${args.summary as string}` };
     default:
+      // 脚本工具（.py 等）：在动态加载的脚本工具中查找
+      if (getScriptToolNames().has(toolName)) {
+        return executeScriptTool(toolName, args);
+      }
       return { success: false, error: `Unknown tool: ${toolName}` };
   }
 }

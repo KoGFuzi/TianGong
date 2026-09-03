@@ -1,8 +1,11 @@
-# dependencies (bun install)
+# dependencies
 node_modules
 
+# bun
+.bun
+bun.lockb
+
 # output
-out
 dist
 *.tgz
 
@@ -10,25 +13,34 @@ dist
 coverage
 *.lcov
 
-# logs
-logs
-_.log
-report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
-
-# dotenv environment variable files
-.env
-.env.development.local
-.env.test.local
-.env.production.local
-.env.local
+# test
+*.tsbuildinfo
 
 # caches
-.eslintcache
+.bunx
 .cache
-*.tsbuildinfo
+.eslintcache
 
 # IntelliJ based IDEs
 .idea
 
+# VS Code
+.vscode
+
 # Finder (MacOS) folder config
 .DS_Store
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# OS
+Thumbs.db
+
+# logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

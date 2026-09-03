@@ -1,0 +1,20 @@
+{
+  "name": "tiangongsec",
+  "type": "module",
+  "private": true,
+  "workspaces": [
+    "packages/ai",
+    "packages/telemetry",
+    "packages/agent",
+    "packages/session-backends/sqlite-bun"
+  ],
+  "scripts": {
+    "test": "bun test packages/ai/test packages/agent/test",
+    "typecheck": "bunx tsc --noEmit",
+    "build": "bun run --filter '*' build"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "latest"
+  }
+}

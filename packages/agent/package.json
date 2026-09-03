@@ -1,0 +1,60 @@
+{
+	"name": "@onepanda-tiangongsec/tg-agent-core",
+	"version": "2.0.0",
+	"description": "General-purpose agent with transport abstraction, state management, and attachment support",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/agent/src/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/agent/src/index.d.ts",
+			"bun": "./dist/index.js"
+		},
+		"./node": {
+			"types": "./dist/agent/src/node.d.ts",
+			"bun": "./dist/node.js"
+		},
+		"./session/testing": {
+			"types": "./dist/agent/src/harness/session/testing/index.d.ts",
+			"bun": "./dist/harness/session/testing/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"scripts": {
+		"clean": "bun -e \"await Bun.$`rm -rf dist`\"",
+		"generate-telemetry-docs": "bun scripts/generate-telemetry-docs.ts",
+		"check:telemetry-docs": "bun scripts/generate-telemetry-docs.ts --check",
+		"build": "bun run clean && bun build src/index.ts --outdir dist --target bun --format esm --sourcemap --splitting && bun build src/node.ts --outdir dist --target bun --format esm --sourcemap --splitting && bun build src/harness/session/testing/index.ts --outdir dist/harness/session/testing --target bun --format esm --sourcemap --splitting",
+		"test": "bun test test",
+		"test:harness": "bun test test/harness",
+		"coverage:harness": "bun test --coverage test/harness",
+		"prepublishOnly": "bun run build"
+	},
+	"dependencies": {
+		"@onepanda-tiangongsec/tg-ai": "workspace:*",
+		"@onepanda-tiangongsec/tg-telemetry": "workspace:*",
+		"effect": "4.0.0-rc.111",
+		"diff": "8.0.4",
+		"ignore": "7.0.5",
+		"typebox": "1.3.7",
+		"yaml": "2.9.0"
+	},
+	"keywords": [
+		"ai",
+		"agent",
+		"llm",
+		"transport",
+		"state-management"
+	],
+	"engines": {
+		"bun": ">=1.2.0"
+	},
+	"devDependencies": {
+		"@types/bun": "^1.3.14",
+		"typescript": "7.0.2"
+	}
+}

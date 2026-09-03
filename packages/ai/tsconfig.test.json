@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noCheck": true },
+  "include": ["test/**/*.ts"],
+  "exclude": ["test/codex-websocket-cached-probe.ts"]
+}

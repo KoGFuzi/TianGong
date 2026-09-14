@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "./bun-test.ts";
+import { describe, expect, it, mock } from "bun:test";
 import { InMemoryCredentialStore } from "../src/auth/credential-store.ts";
 import type { ApiKeyAuth, CredentialStore, OAuthAuth, OAuthCredential, ProviderAuth } from "../src/auth/types.ts";
 import { calculateCost, createModels, createProvider, hasApi, type Provider } from "../src/models.ts";
@@ -886,7 +886,7 @@ describe("Models runtime", () => {
 
 	it("refreshes oauth credentials with less than five minutes remaining", async () => {
 		const credentials = new InMemoryCredentialStore();
-		const refresh = vi.fn(async (credential) => ({
+		const refresh = mock(async (credential) => ({
 			...credential,
 			access: "new-token",
 			expires: Date.now() + 60 * 60_000,
@@ -906,7 +906,7 @@ describe("Models runtime", () => {
 
 	it("honors a caller's longer OAuth minimum validity", async () => {
 		const credentials = new InMemoryCredentialStore();
-		const refresh = vi.fn(async (credential) => ({
+		const refresh = mock(async (credential) => ({
 			...credential,
 			access: "new-token",
 			expires: Date.now() + 60 * 60_000,

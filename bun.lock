@@ -5,8 +5,8 @@
     "": {
       "name": "tiangongsec",
       "devDependencies": {
-        "@types/bun": "latest",
-        "typescript": "latest",
+        "@types/bun": "1.3.14",
+        "typescript": "7.0.2",
       },
     },
     "packages/agent": {
@@ -22,7 +22,7 @@
         "yaml": "2.9.0",
       },
       "devDependencies": {
-        "@types/bun": "^1.3.14",
+        "@types/bun": "1.3.14",
         "typescript": "7.0.2",
       },
     },
@@ -33,7 +33,7 @@
         "tiangong-sec": "dist/cli.js",
       },
       "dependencies": {
-        "@anthropic-ai/sdk": "0.120.0",
+        "@anthropic-ai/sdk": "0.123.0",
         "@aws-sdk/client-bedrock-runtime": "3.1048.0",
         "@google/genai": "2.18.0",
         "@onepanda-tiangongsec/tg-telemetry": "workspace:*",
@@ -47,8 +47,20 @@
       "devDependencies": {
         "@biomejs/biome": "2.0.0",
         "@napi-rs/canvas": "1.0.8",
+        "@types/bun": "1.3.14",
         "@types/node": "26.3.0",
-        "bun-types": "1.3.14",
+      },
+    },
+    "packages/chord": {
+      "name": "@onepanda-tiangongsec/tg-chord",
+      "version": "2.0.0",
+      "dependencies": {
+        "effect": "4.0.0-rc.111",
+      },
+      "devDependencies": {
+        "@onepanda-tiangongsec/tg-chord": "workspace:*",
+        "@types/bun": "1.3.14",
+        "typescript": "7.0.2",
       },
     },
     "packages/session-backends/sqlite-bun": {
@@ -60,8 +72,8 @@
         "effect": "4.0.0-rc.111",
       },
       "devDependencies": {
-        "@types/bun": "^1.3.14",
-        "typescript": "^7.0.2",
+        "@types/bun": "1.3.14",
+        "typescript": "7.0.2",
       },
     },
     "packages/telemetry": {
@@ -71,8 +83,8 @@
         "effect": "4.0.0-rc.111",
       },
       "devDependencies": {
-        "@types/bun": "^1.3.14",
-        "typescript": "^7.0.2",
+        "@types/bun": "1.3.14",
+        "typescript": "7.0.2",
       },
     },
   },
@@ -80,7 +92,7 @@
     "@napi-rs/canvas",
   ],
   "packages": {
-    "@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.120.0", "", { "dependencies": { "json-schema-to-ts": "^3.1.1", "standardwebhooks": "^1.0.0" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["zod"], "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-ZlvmNFT/iIF6JD13rxbbMWD8nvGR0RaUp6yMQnoc+4Af0YjVVe/bIdW1XSQQsoxXAtg1NaT6Vak0LKFlJ4d37Q=="],
+    "@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.123.0", "", { "dependencies": { "json-schema-to-ts": "^3.1.1", "standardwebhooks": "^1.0.0" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["zod"], "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-Y9oX9mPNGZClHQOFqrWRk43Srcu/UHuPq3rfxxOq7JgW0gi+lJA2MAOK4Ul3k/+AUrwRWFJvd0tK3oC0Pw25dw=="],
 
     "@aws-crypto/sha256-browser": ["@aws-crypto/sha256-browser@5.2.0", "", { "dependencies": { "@aws-crypto/sha256-js": "^5.2.0", "@aws-crypto/supports-web-crypto": "^5.2.0", "@aws-crypto/util": "^5.2.0", "@aws-sdk/types": "^3.222.0", "@aws-sdk/util-locate-window": "^3.0.0", "@smithy/util-utf8": "^2.0.0", "tslib": "^2.6.2" } }, "sha512-AXfN/lGotSQwu6HNcEsIASo7kWXZ5HYWvfOmSNKDsEqC4OashTp8alTmaz+F7TC2L083SFv5RdB+qU3Vs1kZqw=="],
 
@@ -192,6 +204,8 @@
 
     "@onepanda-tiangongsec/tg-ai": ["@onepanda-tiangongsec/tg-ai@workspace:packages/ai"],
 
+    "@onepanda-tiangongsec/tg-chord": ["@onepanda-tiangongsec/tg-chord@workspace:packages/chord"],
+
     "@onepanda-tiangongsec/tg-session-backend-sqlite-bun": ["@onepanda-tiangongsec/tg-session-backend-sqlite-bun@workspace:packages/session-backends/sqlite-bun"],
 
     "@onepanda-tiangongsec/tg-telemetry": ["@onepanda-tiangongsec/tg-telemetry@workspace:packages/telemetry"],
@@ -236,7 +250,7 @@
 
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
 
-    "@types/bun": ["@types/bun@1.4.0", "", { "dependencies": { "bun-types": "1.4.0" } }, "sha512-K+lZULY23vRgK/CfTjFIV+tyifaNdSMlPh9j+6mQ/cLfpOznLyAuzgV/JQysyECpkBQLVMSyvjlr2fBUSA9wFQ=="],
+    "@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
 
     "@types/node": ["@types/node@26.3.0", "", { "dependencies": { "undici-types": "~8.3.0" } }, "sha512-L3fgrnchriRC2ExBflb8j4uZZURHZfQsmQeyVzhjcHW4kkwVyo8/0h1B2MVzMTrYUJYu6G7EWs14hW/L9putqw=="],
 
@@ -388,14 +402,8 @@
 
     "@aws-sdk/nested-clients/@smithy/node-http-handler": ["@smithy/node-http-handler@4.11.3", "", { "dependencies": { "@smithy/core": "^3.33.3", "@smithy/types": "^4.17.2", "tslib": "^2.6.2" } }, "sha512-2jY1tSpERfPfWqyBV2pH+iGFaghVsIJszJNsT7hxtQYhVJpWDyc0LqOWI+nXOxOAHaEfZ4PXXtp1wW1TGpHhkA=="],
 
-    "@types/bun/bun-types": ["bun-types@1.4.0", "", { "dependencies": { "@types/node": "*" } }, "sha512-iIKw23BspnQQYd3prITOBxeUsxBHnwzX6YJfGMuNOZzeNcMmVqzIIVGRm1l69ogaPQmb4wB6BN8mA5bE9YuC5Q=="],
-
     "protobufjs/@types/node": ["@types/node@22.19.19", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-dyh/xO2Fh5bYrfWaaqGrRQQGkNdmYw6AmaAUvYeUMNTWQtvb796ikLdmTchRmOlOiIJ1TDXfWgVx1QkUlQ6Hew=="],
 
-    "@types/bun/bun-types/@types/node": ["@types/node@22.19.19", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-dyh/xO2Fh5bYrfWaaqGrRQQGkNdmYw6AmaAUvYeUMNTWQtvb796ikLdmTchRmOlOiIJ1TDXfWgVx1QkUlQ6Hew=="],
-
     "protobufjs/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
-
-    "@types/bun/bun-types/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
   }
 }

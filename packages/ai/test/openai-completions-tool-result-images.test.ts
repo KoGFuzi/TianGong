@@ -1,4 +1,4 @@
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { convertMessages } from "../src/api/openai-completions.ts";
 import { getModel } from "../src/compat.ts";
 import type {
@@ -19,7 +19,10 @@ const emptyUsage: Usage = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-const compat: Omit<Required<OpenAICompletionsCompat>, "deferredToolsMode" | "thinkingTokenBudgetField"> & {
+const compat: Omit<
+	Required<OpenAICompletionsCompat>,
+	"deferredToolsMode" | "thinkingTokenBudgetField" | "vllmPriority"
+> & {
 	deferredToolsMode?: OpenAICompletionsCompat["deferredToolsMode"];
 	thinkingTokenBudgetField?: OpenAICompletionsCompat["thinkingTokenBudgetField"];
 } = {

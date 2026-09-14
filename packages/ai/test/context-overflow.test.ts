@@ -13,7 +13,7 @@
 
 import type { ChildProcess } from "child_process";
 import { execSync, spawn } from "child_process";
-import { afterAll, beforeAll, describe, expect, it } from "./bun-test.ts";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { complete, getModel, getModels } from "../src/compat.ts";
 import type { AssistantMessage, Context, Model, Usage } from "../src/types.ts";
 import { isContextOverflow } from "../src/utils/overflow.ts";

@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "./bun-test.ts";
+import { afterEach, describe, expect, it, mock } from "bun:test";
+import { stubGlobal, unstubAllGlobals } from "./utils/testing.ts";
 import { InMemoryCredentialStore } from "../src/auth/credential-store.ts";
 import { anthropicOAuth } from "../src/auth/oauth/anthropic.ts";
 import { githubCopilotOAuth } from "../src/auth/oauth/github-copilot.ts";
@@ -17,14 +18,14 @@ function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
-describe.sequential("OAuthAuth adapters", () => {
+describe("OAuthAuth adapters", () => {
 	it("keeps the extension OAuth barrel free of built-in flow implementations", () => {
 		expect(extensionOAuthCompatibility).not.toHaveProperty("loginAnthropic");
 		expect(extensionOAuthCompatibility).not.toHaveProperty("anthropicOAuth");
 	});
 
 	afterEach(() => {
-		vi.unstubAllGlobals();
+		unstubAllGlobals();
 	});
 
 	it("identifies only subscription-backed OAuth flows as subscriptions", () => {
@@ -81,9 +82,9 @@ describe.sequential("OAuthAuth adapters", () => {
 	});
 
 	it("anthropic refresh exchanges the refresh token and returns a typed credential", async () => {
-		vi.stubGlobal(
+		stubGlobal(
 			"fetch",
-			vi.fn(async () =>
+			mock(async () =>
 				jsonResponse({ access_token: "new-access", refresh_token: "new-refresh", expires_in: 3600 }),
 			),
 		);
@@ -100,7 +101,7 @@ describe.sequential("OAuthAuth adapters", () => {
 
 	it("github-copilot refresh preserves the enterprise domain", async () => {
 		const fetchedUrls: string[] = [];
-		const fetchMock = vi.fn(async (input: unknown) => {
+		const fetchMock = mock(async (input: unknown) => {
 			const url = typeof input === "string" ? input : String(input);
 			fetchedUrls.push(url);
 			if (url.endsWith("/models")) {
@@ -108,7 +109,7 @@ describe.sequential("OAuthAuth adapters", () => {
 			}
 			return jsonResponse({ token: "new-token", expires_at: 9999999999 });
 		});
-		vi.stubGlobal("fetch", fetchMock);
+		stubGlobal("fetch", fetchMock);
 
 		const refreshed = await githubCopilotOAuth.refresh(
 			{

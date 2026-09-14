@@ -216,6 +216,11 @@ export interface Models {
 
 	streamSimple(model: Model<Api>, context: AppContext, options?: ModelsSimpleStreamOptions): AssistantMessageEventStream;
 	completeSimple(model: Model<Api>, context: AppContext, options?: ModelsSimpleStreamOptions): Promise<AssistantMessage>;
+	streamDeferred(
+		model: Model<Api>,
+		handle: DeferredHandle,
+		options?: ModelsDeferredFetchOptions,
+	): AssistantMessageEventStream;
 	fetchDeferred(
 		model: Model<Api>,
 		handle: DeferredHandle,
@@ -752,11 +757,11 @@ class ModelsImpl implements MutableModels {
 		return this.streamSimple(model, context, options).result();
 	}
 
-	async fetchDeferred(
+	streamDeferred(
 		model: Model<Api>,
 		handle: DeferredHandle,
 		options?: ModelsDeferredFetchOptions,
-	): Promise<AssistantMessage> {
+	): AssistantMessageEventStream {
 		return lazyStream(model, () =>
 			Effect.tryPromise({
 				try: async () => {
@@ -769,7 +774,15 @@ class ModelsImpl implements MutableModels {
 				},
 				catch: (error) => error,
 			}),
-		).result();
+		);
+	}
+
+	async fetchDeferred(
+		model: Model<Api>,
+		handle: DeferredHandle,
+		options?: ModelsDeferredFetchOptions,
+	): Promise<AssistantMessage> {
+		return this.streamDeferred(model, handle, options).result();
 	}
 
 	async cancelDeferred(

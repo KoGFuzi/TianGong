@@ -1,5 +1,5 @@
 import type { GenerateContentParameters } from "@google/genai";
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { streamSimple as streamSimpleGoogle } from "../src/api/google-generative-ai.ts";
 import { resolveGoogleThinkingLevel } from "../src/api/google-shared.ts";
 import { streamSimple as streamSimpleVertex } from "../src/api/google-vertex.ts";

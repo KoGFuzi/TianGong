@@ -1,13 +1,14 @@
 import { arch, platform, release } from "node:os";
-import { describe, expect, it, vi } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
+import { mockModule, hoisted } from "./utils/testing.ts";
 
-const googleGenAiMock = vi.hoisted(() => ({
+const googleGenAiMock = hoisted(() => ({
 	constructorCalls: [] as Array<Record<string, unknown>>,
 	finishReason: "MALFORMED_FUNCTION_CALL",
 	includeFunctionCall: false,
 }));
 
-vi.mock("@google/genai", () => {
+mockModule("@google/genai", () => {
 	class GoogleGenAI {
 		constructor(config: Record<string, unknown>) {
 			googleGenAiMock.constructorCalls.push(config);

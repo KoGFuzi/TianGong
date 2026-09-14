@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
+import { mockModule, hoisted } from "./utils/testing.ts";
 
-const bedrockMock = vi.hoisted(() => ({
+const bedrockMock = hoisted(() => ({
 	stopReason: "end_turn" as string,
 }));
 
-vi.mock("@aws-sdk/client-bedrock-runtime", () => {
+mockModule("@aws-sdk/client-bedrock-runtime", () => {
 	class BedrockRuntimeServiceException extends Error {}
 
 	class BedrockRuntimeClient {

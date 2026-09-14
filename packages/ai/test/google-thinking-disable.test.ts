@@ -1,4 +1,4 @@
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { getModel, streamSimple } from "../src/compat.ts";
 import type { Api, Context, Model, SimpleStreamOptions } from "../src/types.ts";
 

@@ -12,7 +12,7 @@
  * - Other OpenAI-compatible providers: Uses native total_tokens field
  */
 
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { complete, getModel } from "../src/compat.ts";
 import type { Api, Context, Model, StreamOptions, Usage } from "../src/types.ts";
 

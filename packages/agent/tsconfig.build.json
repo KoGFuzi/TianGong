@@ -1,0 +1,20 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"rootDir": "src",
+		"outDir": "dist/agent/src",
+		"declaration": true,
+		"emitDeclarationOnly": true,
+		"noEmit": false,
+		"declarationMap": false,
+		"rewriteRelativeImportExtensions": true,
+		"paths": {
+			"@onepanda-tiangongsec/tg-ai": ["../ai/dist/index.d.ts"],
+			"@onepanda-tiangongsec/tg-ai/compat": ["../ai/dist/compat.d.ts"],
+			"@onepanda-tiangongsec/tg-ai/*": ["../ai/dist/*.d.ts", "../ai/dist/providers/*.d.ts"],
+			"@onepanda-tiangongsec/tg-telemetry": ["../telemetry/dist/index.d.ts"],
+			"@onepanda-tiangongsec/tg-telemetry/testing": ["../telemetry/dist/testing/index.d.ts"]
+		}
+	},
+	"include": ["src/**/*.ts"]
+}

@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "./bun-test.ts";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mockModule, hoisted } from "./utils/testing.ts";
 import { getModel, streamSimple } from "../src/compat.ts";
 
 // Empty tools arrays must NOT be serialized as `tools: []` — some OpenAI-compatible
@@ -6,12 +7,12 @@ import { getModel, streamSimple } from "../src/compat.ts";
 // `"[] is too short - 'tools'"` (HTTP 400) when `--no-tools` produces an empty array.
 // Regression for https://github.com/earendil-works/pi-mono/issues/<issue-number>
 
-const mockState = vi.hoisted(() => ({
+const mockState = hoisted(() => ({
 	lastParams: undefined as unknown,
 	lastClientOptions: undefined as unknown,
 }));
 
-vi.mock("openai", () => {
+mockModule("openai", () => {
 	class FakeOpenAI {
 		constructor(options: unknown) {
 			mockState.lastClientOptions = options;
@@ -54,9 +55,25 @@ vi.mock("openai", () => {
 });
 
 describe("openai-completions empty tools handling", () => {
+	// The Cloudflare cases below seed CLOUDFLARE_* credentials via process.env.
+	// Without restoring them, sibling suites' skipIf(!hasCloudflare*Credentials())
+	// checks (evaluated at file load in a shared worker) un-skip live-network E2E
+	// tests with fake credentials.
+	const savedEnv = new Map<string, string | undefined>();
 	beforeEach(() => {
 		mockState.lastParams = undefined;
 		mockState.lastClientOptions = undefined;
+		for (const key of ["CLOUDFLARE_API_KEY", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"]) {
+			if (!savedEnv.has(key)) savedEnv.set(key, process.env[key]);
+		}
+	});
+
+	afterEach(() => {
+		for (const [key, value] of savedEnv) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+		savedEnv.clear();
 	});
 
 	it("omits tools field when context.tools is an empty array", async () => {

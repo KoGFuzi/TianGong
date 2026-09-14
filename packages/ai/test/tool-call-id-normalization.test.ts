@@ -11,7 +11,7 @@
  */
 
 import { Type } from "typebox";
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { completeSimple, getEnvApiKey, getModel } from "../src/compat.ts";
 import type { AssistantMessage, Message, Tool, ToolResultMessage } from "../src/types.ts";
 import { resolveApiKey } from "./oauth.ts";

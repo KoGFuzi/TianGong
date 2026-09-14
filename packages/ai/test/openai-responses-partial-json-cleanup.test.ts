@@ -1,5 +1,5 @@
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.js";
-import { describe, expect, it, vi } from "./bun-test.ts";
+import { describe, expect, it, spyOn } from "bun:test";
 import { processResponsesStream } from "../src/api/openai-responses-shared.ts";
 import type { AssistantMessage, AssistantMessageEvent, Model } from "../src/types.ts";
 import { AssistantMessageEventStream } from "../src/utils/event-stream.ts";
@@ -80,7 +80,7 @@ describe("openai responses partialJson cleanup", () => {
 		};
 		const output = createOutput(model);
 		const stream = new AssistantMessageEventStream();
-		const pushSpy = vi.spyOn(stream, "push");
+		const pushSpy = spyOn(stream, "push");
 		const argumentsJson = '{"path":"README.md","content":"updated"}';
 
 		await processResponsesStream(createFunctionCallEvents(argumentsJson), output, stream, model);

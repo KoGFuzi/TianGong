@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { getModel, stream } from "../src/compat.ts";
 import type { Context, Tool } from "../src/types.ts";
 import { resolveApiKey } from "./oauth.ts";

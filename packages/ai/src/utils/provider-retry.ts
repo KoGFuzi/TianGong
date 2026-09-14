@@ -1,9 +1,22 @@
 const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
 
+export interface ProviderRetryClock {
+	now(): number;
+	setTimeout(callback: () => void, milliseconds: number): ReturnType<typeof setTimeout>;
+	clearTimeout(timeout: ReturnType<typeof setTimeout>): void;
+}
+
+const realClock: ProviderRetryClock = {
+	now: () => Date.now(),
+	setTimeout: (callback, milliseconds) => setTimeout(callback, milliseconds),
+	clearTimeout: (timeout) => clearTimeout(timeout),
+};
+
 interface ProviderRetryOptions {
 	maxRetries?: number;
 	maxRetryDelayMs?: number;
 	signal?: AbortSignal;
+	clock?: ProviderRetryClock;
 }
 
 interface ProviderError extends Error {
@@ -48,7 +61,12 @@ function validateServerRetryDelayMs(
 	return delayMs;
 }
 
-function getRetryDelayMs(error: ProviderError, retryIndex: number, maxRetryDelayMs: number | undefined): number {
+function getRetryDelayMs(
+	error: ProviderError,
+	retryIndex: number,
+	maxRetryDelayMs: number | undefined,
+	now: () => number,
+): number {
 	const retryAfterMs = error.headers?.get("retry-after-ms");
 	if (retryAfterMs) {
 		const value = Number.parseFloat(retryAfterMs);
@@ -58,7 +76,7 @@ function getRetryDelayMs(error: ProviderError, retryIndex: number, maxRetryDelay
 	const retryAfter = error.headers?.get("retry-after");
 	if (retryAfter) {
 		const seconds = Number.parseFloat(retryAfter);
-		const delayMs = Number.isNaN(seconds) ? Date.parse(retryAfter) - Date.now() : seconds * 1000;
+		const delayMs = Number.isNaN(seconds) ? Date.parse(retryAfter) - now() : seconds * 1000;
 		return validateServerRetryDelayMs(delayMs, maxRetryDelayMs, error.message);
 	}
 
@@ -72,7 +90,7 @@ function createAbortError(): Error {
 	return error;
 }
 
-function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+function abortableSleep(ms: number, signal: AbortSignal | undefined, clock: ProviderRetryClock): Promise<void> {
 	return new Promise((resolve, reject) => {
 		if (signal?.aborted) {
 			reject(createAbortError());
@@ -80,10 +98,10 @@ function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
 		}
 
 		const onAbort = () => {
-			clearTimeout(timeout);
+			clock.clearTimeout(timeout);
 			reject(createAbortError());
 		};
-		const timeout = setTimeout(
+		const timeout = clock.setTimeout(
 			() => {
 				signal?.removeEventListener("abort", onAbort);
 				resolve();
@@ -107,6 +125,7 @@ export async function retryProviderRequest<T>(
 	options: ProviderRetryOptions = {},
 ): Promise<T> {
 	const maxRetries = options.maxRetries ?? 0;
+	const clock = options.clock ?? realClock;
 	let retriesRemaining = maxRetries;
 
 	for (;;) {
@@ -119,7 +138,7 @@ export async function retryProviderRequest<T>(
 
 			const retryIndex = maxRetries - retriesRemaining;
 			retriesRemaining--;
-			await abortableSleep(getRetryDelayMs(error, retryIndex, options.maxRetryDelayMs), options.signal);
+			await abortableSleep(getRetryDelayMs(error, retryIndex, options.maxRetryDelayMs, () => clock.now()), options.signal, clock);
 		}
 	}
 }

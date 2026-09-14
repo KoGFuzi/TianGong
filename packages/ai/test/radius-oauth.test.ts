@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "./bun-test.ts";
+import { afterEach, describe, expect, it, mock } from "bun:test";
+import { useFakeTimers, useRealTimers, setSystemTime, stubGlobal, unstubAllGlobals } from "./utils/testing.ts";
 import { createRadiusOAuth } from "../src/auth/oauth/radius.ts";
 import type { AuthEvent, ProviderAuthInteraction } from "../src/auth/types.ts";
 
@@ -28,19 +29,19 @@ function interaction(loginMethod: "browser" | "device-code", events: AuthEvent[]
 
 describe("Radius OAuth", () => {
 	afterEach(() => {
-		vi.restoreAllMocks();
-		vi.unstubAllGlobals();
-		vi.useRealTimers();
+		mock.restore();
+		unstubAllGlobals();
+		useRealTimers();
 	});
 
 	it("uses gateway endpoints directly for device login", async () => {
-		vi.useFakeTimers();
-		vi.setSystemTime(new Date("2026-07-24T00:00:00Z"));
+		useFakeTimers();
+		setSystemTime(new Date("2026-07-24T00:00:00Z"));
 		const events: AuthEvent[] = [];
 		const urls: string[] = [];
-		vi.stubGlobal(
+		stubGlobal(
 			"fetch",
-			vi.fn(async (input: unknown, init?: RequestInit) => {
+			mock(async (input: unknown, init?: RequestInit) => {
 				const url = requestUrl(input);
 				urls.push(url);
 				const form = new URLSearchParams(String(init?.body));
@@ -91,7 +92,7 @@ describe("Radius OAuth", () => {
 	});
 
 	it("refreshes directly through the gateway without discovery", async () => {
-		const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+		const fetchMock = mock(async (input: unknown, init?: RequestInit) => {
 			expect(requestUrl(input)).toBe(`${GATEWAY}/v1/oauth/token`);
 			const form = new URLSearchParams(String(init?.body));
 			expect(form.get("grant_type")).toBe("refresh_token");
@@ -103,7 +104,7 @@ describe("Radius OAuth", () => {
 				expires_in: 3600,
 			});
 		});
-		vi.stubGlobal("fetch", fetchMock);
+		stubGlobal("fetch", fetchMock);
 
 		const oauth = createRadiusOAuth({ name: "Radius", gateway: GATEWAY });
 		await expect(
@@ -116,11 +117,11 @@ describe("Radius OAuth", () => {
 	});
 
 	it("discovers only the interactive browser authorization endpoint", async () => {
-		const fetchMock = vi.fn(async (input: unknown) => {
+		const fetchMock = mock(async (input: unknown) => {
 			expect(requestUrl(input)).toBe(`${GATEWAY}/v1/oauth`);
 			return jsonResponse({ issuer: "https://radius-ui.example" });
 		});
-		vi.stubGlobal("fetch", fetchMock);
+		stubGlobal("fetch", fetchMock);
 
 		const oauth = createRadiusOAuth({ name: "Radius", gateway: GATEWAY });
 		await expect(oauth.login(interaction("browser"))).rejects.toThrow(`Invalid Radius OAuth config from ${GATEWAY}`);

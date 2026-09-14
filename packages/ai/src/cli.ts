@@ -32,7 +32,7 @@ async function answerPrompt(rl: ReturnType<typeof createInterface>, authPrompt: 
 	if (authPrompt.type === "select") {
 		console.log(`\n${authPrompt.message}`);
 		for (let index = 0; index < authPrompt.options.length; index++) {
-			console.log(`  ${index + 1}. ${authPrompt.options[index].label}`);
+			console.log(`  ${index + 1}. ${authPrompt.options[index]!.label}`);
 		}
 		const choice = Number.parseInt(await prompt(rl, `Enter number (1-${authPrompt.options.length}): `), 10) - 1;
 		const selected = authPrompt.options[choice];
@@ -96,7 +96,7 @@ async function main(): Promise<void> {
 			const rl = createInterface({ input: process.stdin, output: process.stdout });
 			try {
 				for (let index = 0; index < PROVIDERS.length; index++) {
-					console.log(`  ${index + 1}. ${PROVIDERS[index].name}`);
+					console.log(`  ${index + 1}. ${PROVIDERS[index]!.name}`);
 				}
 				const index = Number.parseInt(await prompt(rl, `Enter number (1-${PROVIDERS.length}): `), 10) - 1;
 				providerId = PROVIDERS[index]?.id;

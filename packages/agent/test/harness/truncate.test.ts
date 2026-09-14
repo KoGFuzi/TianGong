@@ -1,4 +1,4 @@
-import { describe, expect, it } from "../bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { truncateHead, truncateTail } from "../../src/harness/utils/truncate.ts";
 
 const encoder = new TextEncoder();
@@ -46,6 +46,23 @@ function bufferTail(content: string, maxBytes: number): string {
 }
 
 function assertMatchesBufferTail(input: string, maxByteValues?: readonly number[]): void {
+	// Bun's UTF-8 decoding replaces unpaired surrogates with U+FFFD, so the
+	// implementation normalizes them before byte-slicing (Node preserves them
+	// verbatim). Normalize the reference input the same way, then compare the
+	// independent byte-aligned walk below.
+	let normalized = "";
+	for (let i = 0; i < input.length; i++) {
+		const code = input.charCodeAt(i);
+		if (code >= 0xd800 && code <= 0xdbff) {
+			const next = i + 1 < input.length ? input.charCodeAt(i + 1) : 0;
+			if (next >= 0xdc00 && next <= 0xdfff) {
+				normalized += input[i] + input[i + 1];
+				i++;
+			} else normalized += "\uFFFD";
+		} else if (code >= 0xdc00 && code <= 0xdfff) normalized += "\uFFFD";
+		else normalized += input[i];
+	}
+	input = normalized;
 	const totalBytes = Buffer.byteLength(input, "utf8");
 	const values = maxByteValues ?? Array.from({ length: totalBytes + 5 }, (_, maxBytes) => maxBytes);
 	for (const maxBytes of values) {

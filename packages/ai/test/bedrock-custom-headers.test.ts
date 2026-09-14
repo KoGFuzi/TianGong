@@ -1,15 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from "./bun-test.ts";
+import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { mockModule, hoisted } from "./utils/testing.ts";
 
 type MiddlewareHandler = (next: (args: unknown) => Promise<unknown>) => (args: unknown) => Promise<unknown>;
 
-const bedrockMock = vi.hoisted(() => ({
+const bedrockMock = hoisted(() => ({
 	middlewareRegistrations: [] as Array<{
 		handler: MiddlewareHandler;
 		opts: { step?: string; name?: string; priority?: string };
 	}>,
 }));
 
-vi.mock("@aws-sdk/client-bedrock-runtime", () => {
+mockModule("@aws-sdk/client-bedrock-runtime", () => {
 	class BedrockRuntimeServiceException extends Error {}
 
 	class BedrockRuntimeClient {
@@ -98,7 +99,7 @@ describe("bedrock custom headers middleware", () => {
 		expect(reg.opts.priority).toBe("low");
 		expect(reg.opts.name).toBe(MIDDLEWARE_NAME);
 
-		const nextSpy = vi.fn(async (a: unknown) => a);
+		const nextSpy = mock(async (a: unknown) => a);
 		const fakeArgs = { request: { headers: {} as Record<string, string> } };
 		await reg.handler(nextSpy)(fakeArgs);
 
@@ -123,7 +124,7 @@ describe("bedrock custom headers middleware", () => {
 		const [reg] = findCustomHeadersRegistration();
 		expect(reg).toBeDefined();
 
-		const nextSpy = vi.fn(async (a: unknown) => a);
+		const nextSpy = mock(async (a: unknown) => a);
 		const fakeArgs = {
 			request: {
 				headers: {
@@ -169,7 +170,7 @@ describe("bedrock custom headers middleware", () => {
 		const [reg] = findCustomHeadersRegistration();
 		expect(reg).toBeDefined();
 
-		const nextSpy = vi.fn(async (a: unknown) => a);
+		const nextSpy = mock(async (a: unknown) => a);
 
 		const argsNoHeaders = { request: {} };
 		await expect(reg.handler(nextSpy)(argsNoHeaders)).resolves.toBeDefined();
@@ -193,7 +194,7 @@ describe("bedrock custom headers middleware", () => {
 		const [reg] = registrations;
 		expect(reg.opts.step).toBe("build");
 
-		const nextSpy = vi.fn(async (a: unknown) => a);
+		const nextSpy = mock(async (a: unknown) => a);
 		const fakeArgs = { request: { headers: {} as Record<string, string> } };
 		await reg.handler(nextSpy)(fakeArgs);
 

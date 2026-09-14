@@ -1,4 +1,4 @@
-import { describe, expect, it } from "../bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { formatSkillsForSystemPrompt } from "../../src/harness/system-prompt.ts";
 
 const visibleSkill = {

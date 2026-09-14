@@ -1,14 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "./bun-test.ts";
+import { beforeEach, describe, expect, it } from "bun:test";
+import { mockModule, hoisted } from "./utils/testing.ts";
 
 type SendResult = { kind: "reject"; error: unknown } | { kind: "resolve"; response: unknown };
 
-const bedrockMock = vi.hoisted(() => ({
+const bedrockMock = hoisted(() => ({
 	send: undefined as SendResult | undefined,
 	// Exposed so tests can build errors that are real instances of the mocked base class.
 	ServiceException: undefined as unknown as new (message?: string) => Error,
 }));
 
-vi.mock("@aws-sdk/client-bedrock-runtime", () => {
+mockModule("@aws-sdk/client-bedrock-runtime", () => {
 	class BedrockRuntimeServiceException extends Error {}
 	bedrockMock.ServiceException = BedrockRuntimeServiceException;
 

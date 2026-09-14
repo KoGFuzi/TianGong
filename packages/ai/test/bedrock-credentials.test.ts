@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "./bun-test.ts";
+import { afterEach, describe, expect, it } from "bun:test";
+import { mockModule, hoisted, stubEnv, unstubAllEnvs } from "./utils/testing.ts";
 
-const bedrockMock = vi.hoisted(() => ({
+const bedrockMock = hoisted(() => ({
 	constructorCalls: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("@aws-sdk/client-bedrock-runtime", () => {
+mockModule("@aws-sdk/client-bedrock-runtime", () => {
 	class BedrockRuntimeServiceException extends Error {}
 
 	class BedrockRuntimeClient {
@@ -65,12 +66,12 @@ async function captureClientConfig(
 
 describe("bedrock credential priority", () => {
 	afterEach(() => {
-		vi.unstubAllEnvs();
+		unstubAllEnvs();
 	});
 
 	it("prefers explicit and scoped profiles over ambient AWS access keys", async () => {
-		vi.stubEnv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE");
-		vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secretexample");
+		stubEnv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE");
+		stubEnv("AWS_SECRET_ACCESS_KEY", "secretexample");
 		const model = getBuiltinModel("amazon-bedrock", "us.anthropic.claude-opus-4-8");
 
 		let config = await captureClientConfig(model, { profile: "explicit-profile" });
@@ -85,8 +86,8 @@ describe("bedrock credential priority", () => {
 	});
 
 	it("uses ambient AWS access keys when no profile is configured", async () => {
-		vi.stubEnv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE");
-		vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secretexample");
+		stubEnv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE");
+		stubEnv("AWS_SECRET_ACCESS_KEY", "secretexample");
 		const model = getBuiltinModel("amazon-bedrock", "us.anthropic.claude-opus-4-8");
 
 		const config = await captureClientConfig(model);
@@ -99,9 +100,9 @@ describe("bedrock credential priority", () => {
 	});
 
 	it("uses ambient AWS access keys when only an ambient profile is set", async () => {
-		vi.stubEnv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE");
-		vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secretexample");
-		vi.stubEnv("AWS_PROFILE", "ambient-profile");
+		stubEnv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE");
+		stubEnv("AWS_SECRET_ACCESS_KEY", "secretexample");
+		stubEnv("AWS_PROFILE", "ambient-profile");
 		const model = getBuiltinModel("amazon-bedrock", "us.anthropic.claude-opus-4-8");
 
 		const config = await captureClientConfig(model);

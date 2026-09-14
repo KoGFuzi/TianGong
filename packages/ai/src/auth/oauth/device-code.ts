@@ -1,3 +1,11 @@
+import type { ProviderRetryClock } from "../../utils/provider-retry.ts";
+
+const realClock: ProviderRetryClock = {
+	now: () => Date.now(),
+	setTimeout: (callback, milliseconds) => setTimeout(callback, milliseconds),
+	clearTimeout: (timeout) => clearTimeout(timeout),
+};
+
 const CANCEL_MESSAGE = "Login cancelled";
 const TIMEOUT_MESSAGE = "Device flow timed out";
 const SLOW_DOWN_TIMEOUT_MESSAGE =
@@ -21,9 +29,16 @@ export type OAuthDeviceCodePollOptions<T> = {
 	waitBeforeFirstPoll?: boolean;
 	poll: () => Promise<OAuthDeviceCodePollResult<T>>;
 	signal: AbortSignal;
+	/** Injectable time source; tests use it to advance polling without real waits. */
+	clock?: ProviderRetryClock;
 };
 
-export function abortableSleep(ms: number, signal: AbortSignal, cancelMessage: string): Promise<void> {
+export function abortableSleep(
+	ms: number,
+	signal: AbortSignal,
+	cancelMessage: string,
+	clock: ProviderRetryClock = realClock,
+): Promise<void> {
 	return new Promise((resolve, reject) => {
 		if (signal.aborted) {
 			reject(new Error(cancelMessage));
@@ -31,10 +46,10 @@ export function abortableSleep(ms: number, signal: AbortSignal, cancelMessage: s
 		}
 
 		const onAbort = () => {
-			clearTimeout(timeout);
+			clock.clearTimeout(timeout);
 			reject(new Error(cancelMessage));
 		};
-		const timeout = setTimeout(() => {
+		const timeout = clock.setTimeout(() => {
 			signal.removeEventListener("abort", onAbort);
 			resolve();
 		}, ms);
@@ -44,10 +59,10 @@ export function abortableSleep(ms: number, signal: AbortSignal, cancelMessage: s
 }
 
 export async function pollOAuthDeviceCodeFlow<T>(options: OAuthDeviceCodePollOptions<T>): Promise<T> {
+	const clock = options.clock ?? realClock;
+	const now = () => clock.now();
 	const deadline =
-		typeof options.expiresInSeconds === "number"
-			? Date.now() + options.expiresInSeconds * 1000
-			: Number.POSITIVE_INFINITY;
+		typeof options.expiresInSeconds === "number" ? now() + options.expiresInSeconds * 1000 : Number.POSITIVE_INFINITY;
 	let intervalMs = Math.max(
 		MINIMUM_INTERVAL_MS,
 		Math.floor((options.intervalSeconds ?? DEFAULT_POLL_INTERVAL_SECONDS) * 1000),
@@ -55,13 +70,13 @@ export async function pollOAuthDeviceCodeFlow<T>(options: OAuthDeviceCodePollOpt
 
 	let slowDownResponses = 0;
 	if (options.waitBeforeFirstPoll) {
-		const remainingMs = deadline - Date.now();
+		const remainingMs = deadline - now();
 		if (remainingMs > 0) {
-			await abortableSleep(Math.min(intervalMs, remainingMs), options.signal, CANCEL_MESSAGE);
+			await abortableSleep(Math.min(intervalMs, remainingMs), options.signal, CANCEL_MESSAGE, clock);
 		}
 	}
 
-	while (Date.now() < deadline) {
+	while (now() < deadline) {
 		if (options.signal.aborted) {
 			throw new Error(CANCEL_MESSAGE);
 		}
@@ -86,12 +101,12 @@ export async function pollOAuthDeviceCodeFlow<T>(options: OAuthDeviceCodePollOpt
 					: Math.max(MINIMUM_INTERVAL_MS, intervalMs + SLOW_DOWN_INTERVAL_INCREMENT_MS);
 		}
 
-		const remainingMs = deadline - Date.now();
+		const remainingMs = deadline - now();
 		if (remainingMs <= 0) {
 			break;
 		}
 
-		await abortableSleep(Math.min(intervalMs, remainingMs), options.signal, CANCEL_MESSAGE);
+		await abortableSleep(Math.min(intervalMs, remainingMs), options.signal, CANCEL_MESSAGE, clock);
 	}
 
 	throw new Error(slowDownResponses > 0 ? SLOW_DOWN_TIMEOUT_MESSAGE : TIMEOUT_MESSAGE);

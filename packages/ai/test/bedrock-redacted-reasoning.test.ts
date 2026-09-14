@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "./bun-test.ts";
+import { beforeEach, describe, expect, it } from "bun:test";
+import { mockModule, hoisted } from "./utils/testing.ts";
 
 /**
  * OpenAI models served through Bedrock Converse (e.g. `global.openai.gpt-5.6-terra`)
@@ -7,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "./bun-test.ts";
  * `Uint8Array`.
  * @see https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ReasoningContentBlockDelta.html
  */
-const bedrockMock = vi.hoisted(() => {
+const bedrockMock = hoisted(() => {
 	const redactedBase64 = "cnNuXzVaVnJpZjRKMGJYSXFtV2RsZWRqN1FJRmVOaWtSUWJF";
 	return {
 		redactedBase64,
@@ -16,7 +17,7 @@ const bedrockMock = vi.hoisted(() => {
 	};
 });
 
-vi.mock("@aws-sdk/client-bedrock-runtime", () => {
+mockModule("@aws-sdk/client-bedrock-runtime", () => {
 	class BedrockRuntimeServiceException extends Error {}
 
 	class BedrockRuntimeClient {

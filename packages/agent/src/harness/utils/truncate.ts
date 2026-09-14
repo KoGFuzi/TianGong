@@ -51,7 +51,7 @@ interface RuntimeBuffer {
 const runtimeBuffer = (globalThis as { Buffer?: RuntimeBuffer }).Buffer;
 const nonAsciiPattern = /[^\x00-\x7f]/;
 
-function utf8ByteLength(content: string): number {
+export function utf8ByteLength(content: string): number {
 	if (runtimeBuffer) return runtimeBuffer.byteLength(content, "utf8");
 
 	const firstNonAscii = content.search(nonAsciiPattern);
@@ -86,8 +86,27 @@ function splitLinesForCounting(content: string): string[] {
 	return lines;
 }
 
-export function replaceUnpairedSurrogates(content: string): string {
-	return content;
+function replaceUnpairedSurrogates(content: string): string {
+	let output = "";
+	for (let i = 0; i < content.length; i++) {
+		const code = content.charCodeAt(i);
+		if (code >= 0xd800 && code <= 0xdbff) {
+			if (i + 1 < content.length) {
+				const next = content.charCodeAt(i + 1);
+				if (next >= 0xdc00 && next <= 0xdfff) {
+					output += content[i] + content[i + 1];
+					i++;
+					continue;
+				}
+			}
+			output += "�";
+		} else if (code >= 0xdc00 && code <= 0xdfff) {
+			output += "�";
+		} else {
+			output += content[i];
+		}
+	}
+	return output;
 }
 
 /**
@@ -136,7 +155,7 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
 	}
 
 	// Check if first line alone exceeds byte limit
-		const firstLineBytes = utf8ByteLength(lines[0]!);
+	const firstLineBytes = utf8ByteLength(lines[0]);
 	if (firstLineBytes > maxBytes) {
 		return {
 			content: "",
@@ -159,7 +178,7 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
 	let truncatedBy: "lines" | "bytes" = "lines";
 
 	for (let i = 0; i < lines.length && i < maxLines; i++) {
-		const line = lines[i]!;
+		const line = lines[i];
 		const lineBytes = utf8ByteLength(line) + (i > 0 ? 1 : 0); // +1 for newline
 
 		if (outputBytesCount + lineBytes > maxBytes) {
@@ -232,7 +251,7 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
 	let lastLinePartial = false;
 
 	for (let i = lines.length - 1; i >= 0 && outputLinesArr.length < maxLines; i--) {
-		const line = lines[i]!;
+		const line = lines[i];
 		const lineBytes = utf8ByteLength(line) + (outputLinesArr.length > 0 ? 1 : 0); // +1 for newline
 
 		if (outputBytesCount + lineBytes > maxBytes) {
@@ -313,7 +332,7 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
 	}
 
 	const output = str.slice(start);
-	return output;
+	return needsReplacement ? replaceUnpairedSurrogates(output) : output;
 }
 
 /**

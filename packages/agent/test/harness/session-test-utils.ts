@@ -1,12 +1,12 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach } from "../bun-test.ts";
+import { afterEach } from "bun:test";
 
 const tempDirs: string[] = [];
 
 export function createTempDir(): string {
-	const dir = join(tmpdir(), `pi-agent-session-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+	const dir = join(tmpdir(), `tg-agent-session-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	mkdirSync(dir, { recursive: true });
 	tempDirs.push(dir);
 	return dir;

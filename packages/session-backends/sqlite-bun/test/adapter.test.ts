@@ -1,7 +1,50 @@
-import { describe, expect, it } from "vitest";
+import { createTempDirectory, fileExists, joinPath, removeDirectoryTree } from "../src/sqlite/bunfs.ts";
+import { describe, expect, it } from "bun:test";
 import { createBunSqliteFactory } from "../src/index.ts";
 
+async function withTempDir<T>(run: (directory: string) => Promise<T>): Promise<T> {
+	const directory = await createTempDirectory("tg-sqlite-adapter-");
+	try {
+		return await run(directory);
+	} finally {
+		await removeDirectoryTree(directory);
+	}
+}
+
 describe("bun:sqlite adapter", () => {
+	it("does not create files for existing or read-only opens", async () => {
+		await withTempDir(async (directory) => {
+			const path = joinPath(directory, "missing % #.sqlite");
+			const factory = createBunSqliteFactory();
+
+			await expect(factory.openExisting(path)).rejects.toThrow();
+			expect(await fileExists(path)).toBe(false);
+			await expect(factory.openReadOnly(path)).rejects.toThrow();
+			expect(await fileExists(path)).toBe(false);
+		});
+	});
+
+	it("opens an existing database read-write or read-only without changing its mode", async () => {
+		await withTempDir(async (directory) => {
+			const path = joinPath(directory, "existing % #.sqlite");
+			const factory = createBunSqliteFactory();
+			const created = await factory.open(path);
+			created.exec("CREATE TABLE values_table (value INTEGER NOT NULL)");
+			created.close();
+
+			const writable = await factory.openExisting(path);
+			writable.exec("INSERT INTO values_table (value) VALUES (1)");
+			writable.close();
+			const readOnly = await factory.openReadOnly(path);
+			try {
+				expect(readOnly.prepare("SELECT value FROM values_table").all()).toEqual([{ value: 1 }]);
+				expect(() => readOnly.exec("INSERT INTO values_table (value) VALUES (2)")).toThrow();
+			} finally {
+				readOnly.close();
+			}
+		});
+	});
+
 	it("commits a synchronous transaction and returns its result", async () => {
 		const db = await createBunSqliteFactory().open(":memory:");
 		try {
@@ -26,12 +69,14 @@ describe("bun:sqlite adapter", () => {
 				changes: 1,
 				lastInsertRowid: 1,
 			});
-			expect(db.prepare("INSERT INTO values_table (value) VALUES (:value)").run({ value: "named" })).toEqual({
+			// bun:sqlite binds named parameters by their prefixed key ($name, :name, @name),
+			// so the statement placeholder and the object key must share the prefix character.
+			expect(db.prepare("INSERT INTO values_table (value) VALUES ($value)").run({ $value: "named" })).toEqual({
 				changes: 1,
 				lastInsertRowid: 2,
 			});
 			expect(db.prepare("SELECT value FROM values_table WHERE id = ?").get(1)).toEqual({ value: "positional" });
-			expect(db.prepare("SELECT value FROM values_table WHERE id >= :id ORDER BY id").all({ id: 2 })).toEqual([
+			expect(db.prepare("SELECT value FROM values_table WHERE id >= $id ORDER BY id").all({ $id: 2 })).toEqual([
 				{ value: "named" },
 			]);
 		} finally {

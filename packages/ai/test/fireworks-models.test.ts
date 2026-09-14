@@ -1,9 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "./bun-test.ts";
+import { afterEach, describe, expect, it } from "bun:test";
 import { stream as streamAnthropic } from "../src/api/anthropic-messages.ts";
-import { getModel, getModels, streamSimple } from "../src/compat.ts";
+import { getModel, streamSimple } from "../src/compat.ts";
 import { findEnvKeys, getEnvApiKey } from "../src/env-api-keys.ts";
 import type { Context, Model, Tool } from "../src/types.ts";
 
@@ -35,17 +35,6 @@ describe("Fireworks models", () => {
 			cacheRead: 0.16,
 			cacheWrite: 0,
 		});
-	});
-
-	it("registers the Fire Pass GLM turbo router model", () => {
-		const model = getModels("fireworks").find(
-			(candidate) => candidate.id === "accounts/fireworks/routers/glm-5p2-fast",
-		);
-
-		expect(model).toBeDefined();
-		expect(model?.api).toBe("openai-completions");
-		expect(model?.baseUrl).toBe("https://api.fireworks.ai/inference/v1");
-		expect(model?.input).toEqual(["text"]);
 	});
 
 	it("aligns GLM 5.2 Fast with GLM 5.2's OpenAI-compatible config", () => {

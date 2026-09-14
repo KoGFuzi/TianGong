@@ -24,7 +24,7 @@
 
 import { writeFileSync } from "fs";
 import { Type } from "typebox";
-import { beforeAll, describe, expect, it } from "./bun-test.ts";
+import { beforeAll, describe, expect, it } from "bun:test";
 import { completeSimple, getEnvApiKey, getModel } from "../src/compat.ts";
 import type { Api, AssistantMessage, Message, Model, Tool, ToolResultMessage } from "../src/types.ts";
 import { hasAzureOpenAICredentials } from "./azure-utils.ts";

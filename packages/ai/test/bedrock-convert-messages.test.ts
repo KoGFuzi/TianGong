@@ -1,12 +1,13 @@
 import { Type } from "typebox";
-import { describe, expect, it, vi } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
+import { mockModule, hoisted } from "./utils/testing.ts";
 
-const bedrockMock = vi.hoisted(() => ({
+const bedrockMock = hoisted(() => ({
 	constructorCalls: [] as Array<Record<string, unknown>>,
 	streamEvents: undefined as unknown[] | undefined,
 }));
 
-vi.mock("@aws-sdk/client-bedrock-runtime", () => {
+mockModule("@aws-sdk/client-bedrock-runtime", () => {
 	class BedrockRuntimeServiceException extends Error {}
 
 	class BedrockRuntimeClient {

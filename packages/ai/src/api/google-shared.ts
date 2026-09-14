@@ -14,7 +14,7 @@ import type {
 	ThinkingLevel,
 	Tool,
 } from "../types.ts";
-import { retryProviderRequest } from "../utils/provider-retry.ts";
+import { retryProviderRequest, type ProviderRetryClock } from "../utils/provider-retry.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { getJsonSchemaToolParameters, resolveJsonSchemaStrictSampling } from "./constrained-sampling.ts";
 import { transformMessages } from "./transform-messages.ts";
@@ -431,7 +431,7 @@ export function mapStopReasonString(reason: string): StopReason {
  */
 export function retryGoogleRequest<T>(
 	request: () => Promise<T>,
-	options?: Pick<StreamOptions, "maxRetries" | "maxRetryDelayMs" | "signal">,
+	options?: Pick<StreamOptions, "maxRetries" | "maxRetryDelayMs" | "signal"> & { clock?: ProviderRetryClock },
 ): Promise<T> {
 	return retryProviderRequest(
 		async () => {
@@ -448,6 +448,7 @@ export function retryGoogleRequest<T>(
 			maxRetries: options?.maxRetries,
 			maxRetryDelayMs: options?.maxRetryDelayMs,
 			signal: options?.signal,
+			clock: options?.clock,
 		},
 	);
 }

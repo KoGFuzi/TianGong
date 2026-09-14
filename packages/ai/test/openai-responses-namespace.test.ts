@@ -1,5 +1,5 @@
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.js";
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { convertResponsesMessages, processResponsesStream } from "../src/api/openai-responses-shared.ts";
 import type { Api, AssistantMessage, Model, ToolCall } from "../src/types.ts";
 import { AssistantMessageEventStream } from "../src/utils/event-stream.ts";
@@ -108,6 +108,15 @@ function getToolCall(output: AssistantMessage): ToolCall {
 	if (!block || block.type !== "toolCall") throw new Error("Expected toolCall block");
 	return block;
 }
+
+describe("OpenAI Responses terminal messages", () => {
+	it("omits an absent error message", async () => {
+		const output = createOutput();
+		await processResponsesStream(createFunctionCallEvents(), output, new AssistantMessageEventStream(), model);
+
+		expect(output).not.toHaveProperty("errorMessage");
+	});
+});
 
 describe("OpenAI Responses tool-call namespaces", () => {
 	it("round-trips a function namespace received only on output_item.done", async () => {

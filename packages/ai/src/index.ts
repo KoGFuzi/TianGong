@@ -2,6 +2,8 @@ export type { Static, TSchema } from "typebox";
 import { contentText as _ct } from "./utils/text.ts";
 export const contentText = _ct;
 
+export * from "./utils/assistant-message-frame.ts";
+
 export type {
 	AssistantMessage,
 	AssistantMessageEvent as AssistantMessageEventType,
@@ -27,7 +29,7 @@ export type { MistralOptions } from "./api/mistral-conversations.ts";
 export type { OpenAICodexResponsesOptions, OpenAICodexWebSocketDebugStats } from "./api/openai-codex-responses.ts";
 export type { OpenAICompletionsOptions } from "./api/openai-completions.ts";
 export type { OpenAIResponsesOptions } from "./api/openai-responses.ts";
-export type { PiMessagesEvent, PiMessagesOptions, PiMessagesRewriteImpact } from "./api/tg-messages.ts";
+export type { TgMessagesEvent, TgMessagesOptions, TgMessagesRewriteImpact } from "./api/tg-messages.ts";
 export * from "./auth/context.ts";
 export * from "./auth/credential-store.ts";
 export * from "./auth/helpers.ts";

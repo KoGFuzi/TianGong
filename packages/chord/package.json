@@ -1,0 +1,61 @@
+{
+  "name": "@onepanda-tiangongsec/tg-chord",
+  "version": "2.0.0",
+  "description": "Bun-native composition runtime for services, replicated state, and plugins",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./context": {
+      "source": "./src/context/index.ts",
+      "types": "./dist/context/index.d.ts",
+      "import": "./dist/context/index.js"
+    },
+    "./delta": {
+      "source": "./src/delta/index.ts",
+      "types": "./dist/delta/index.d.ts",
+      "import": "./dist/delta/index.js"
+    },
+    "./bundler": {
+      "source": "./src/bundler.ts",
+      "types": "./dist/bundler.d.ts",
+      "import": "./dist/bundler.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "src/delta/README.md"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "bunx tsc -p tsconfig.build.json",
+    "test": "bun test test",
+    "typecheck": "bunx tsc -p tsconfig.build.json --noEmit",
+    "prepublishOnly": "bun run clean && bun run build && bun run typecheck && bun run test"
+  },
+  "keywords": [
+    "plugins",
+    "services",
+    "state",
+    "bun"
+  ],
+  "engines": {
+    "bun": ">=1.2.0"
+  },
+  "dependencies": {
+    "effect": "4.0.0-rc.111"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "7.0.2",
+    "@onepanda-tiangongsec/tg-chord": "workspace:*"
+  }
+}

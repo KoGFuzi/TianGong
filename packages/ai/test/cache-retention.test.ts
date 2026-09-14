@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "./bun-test.ts";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { stream as streamAnthropic } from "../src/api/anthropic-messages.ts";
 import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import { stream as streamOpenAIResponses } from "../src/api/openai-responses.ts";

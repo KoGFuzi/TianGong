@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { complete, getEnvApiKey, getModel } from "../src/compat.ts";
 import type { AssistantMessage, Context, Message, Tool, ToolCall } from "../src/types.ts";
 

@@ -1,19 +1,20 @@
-import { afterEach, describe, expect, it, vi } from "./bun-test.ts";
+import { afterEach, describe, expect, it, mock } from "bun:test";
+import { useFakeTimers, useRealTimers, setSystemTime, advanceTimersByTimeAsync } from "./utils/testing.ts";
 import { pollOAuthDeviceCodeFlow } from "../src/auth/oauth/device-code.ts";
 
 const neverAbortedSignal = new AbortController().signal;
 
 describe("OAuth device-code polling", () => {
 	afterEach(() => {
-		vi.useRealTimers();
+		useRealTimers();
 	});
 
 	it("polls immediately and returns the completed value", async () => {
-		vi.useFakeTimers();
-		vi.setSystemTime(new Date("2026-03-09T00:00:00Z"));
+		useFakeTimers();
+		setSystemTime(new Date("2026-03-09T00:00:00Z"));
 
 		const pollTimes: number[] = [];
-		const poll = vi.fn(async () => {
+		const poll = mock(async () => {
 			pollTimes.push(Date.now());
 			return pollTimes.length === 1
 				? { status: "pending" as const }
@@ -27,13 +28,13 @@ describe("OAuth device-code polling", () => {
 			signal: neverAbortedSignal,
 		});
 
-		await vi.advanceTimersByTimeAsync(0);
+		await advanceTimersByTimeAsync(0);
 		expect(pollTimes).toEqual([new Date("2026-03-09T00:00:00Z").getTime()]);
 
-		await vi.advanceTimersByTimeAsync(1999);
+		await advanceTimersByTimeAsync(1999);
 		expect(pollTimes).toEqual([new Date("2026-03-09T00:00:00Z").getTime()]);
 
-		await vi.advanceTimersByTimeAsync(1);
+		await advanceTimersByTimeAsync(1);
 		await expect(resultPromise).resolves.toBe("token");
 		expect(pollTimes).toEqual([
 			new Date("2026-03-09T00:00:00Z").getTime(),
@@ -42,8 +43,8 @@ describe("OAuth device-code polling", () => {
 	});
 
 	it("can wait before the first poll", async () => {
-		vi.useFakeTimers();
-		vi.setSystemTime(new Date("2026-03-09T00:00:00Z"));
+		useFakeTimers();
+		setSystemTime(new Date("2026-03-09T00:00:00Z"));
 
 		const pollTimes: number[] = [];
 		const resultPromise = pollOAuthDeviceCodeFlow({
@@ -57,17 +58,17 @@ describe("OAuth device-code polling", () => {
 			signal: neverAbortedSignal,
 		});
 
-		await vi.advanceTimersByTimeAsync(1999);
+		await advanceTimersByTimeAsync(1999);
 		expect(pollTimes).toEqual([]);
 
-		await vi.advanceTimersByTimeAsync(1);
+		await advanceTimersByTimeAsync(1);
 		await expect(resultPromise).resolves.toBe("token");
 		expect(pollTimes).toEqual([new Date("2026-03-09T00:00:02Z").getTime()]);
 	});
 
 	it("increases the interval by 5 seconds after slow_down without a server interval", async () => {
-		vi.useFakeTimers();
-		vi.setSystemTime(new Date("2026-03-09T00:00:00Z"));
+		useFakeTimers();
+		setSystemTime(new Date("2026-03-09T00:00:00Z"));
 		const startTime = Date.now();
 
 		const pollTimes: number[] = [];
@@ -84,20 +85,20 @@ describe("OAuth device-code polling", () => {
 			signal: neverAbortedSignal,
 		});
 
-		await vi.advanceTimersByTimeAsync(0);
+		await advanceTimersByTimeAsync(0);
 		expect(pollTimes).toEqual([startTime]);
 
-		await vi.advanceTimersByTimeAsync(6999);
+		await advanceTimersByTimeAsync(6999);
 		expect(pollTimes).toEqual([startTime]);
 
-		await vi.advanceTimersByTimeAsync(1);
+		await advanceTimersByTimeAsync(1);
 		await expect(resultPromise).resolves.toBe("token");
 		expect(pollTimes).toEqual([startTime, startTime + 7000]);
 	});
 
 	it("honors a server-provided slow_down interval", async () => {
-		vi.useFakeTimers();
-		vi.setSystemTime(new Date("2026-03-09T00:00:00Z"));
+		useFakeTimers();
+		setSystemTime(new Date("2026-03-09T00:00:00Z"));
 		const startTime = Date.now();
 
 		const pollTimes: number[] = [];
@@ -117,19 +118,19 @@ describe("OAuth device-code polling", () => {
 			signal: neverAbortedSignal,
 		});
 
-		await vi.advanceTimersByTimeAsync(0);
+		await advanceTimersByTimeAsync(0);
 		expect(pollTimes).toEqual([startTime]);
 
-		await vi.advanceTimersByTimeAsync(29999);
+		await advanceTimersByTimeAsync(29999);
 		expect(pollTimes).toEqual([startTime]);
 
-		await vi.advanceTimersByTimeAsync(1);
+		await advanceTimersByTimeAsync(1);
 		await expect(resultPromise).resolves.toBe("token");
 		expect(pollTimes).toEqual([startTime, startTime + 30000]);
 	});
 
 	it("cancels an in-flight wait", async () => {
-		vi.useFakeTimers();
+		useFakeTimers();
 		const controller = new AbortController();
 
 		const resultPromise = pollOAuthDeviceCodeFlow({

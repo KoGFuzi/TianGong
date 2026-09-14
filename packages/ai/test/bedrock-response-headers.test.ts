@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { afterEach, describe, expect, it } from "./bun-test.ts";
+import { afterEach, describe, expect, it } from "bun:test";
 import { stream as streamBedrock } from "../src/api/bedrock-converse-stream.ts";
 import { getModel } from "../src/compat.ts";
 import type { Model, ProviderResponse } from "../src/types.ts";

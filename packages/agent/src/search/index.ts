@@ -1,38 +1,27 @@
-import type { Entry } from "../harness/session/types.ts";
-import type * as Stream from "effect/Stream";
-
-export type {
-	ScanningReadable,
-	ScanningReadableOptions,
-	ScanningReadableSource,
-	ScanningSearchTextProjector,
-	ScanningSessionSearchHit,
-	ScanningSessionSearchOptions,
-	SessionSearchCandidate,
-} from "./scanning.ts";
-export { createScanningSessionSearch, scanningEntries } from "./scanning.ts";
-
-export interface SessionSearchOptions {
-	/** Restrict results to specific canonical entry types. */
-	readonly entryTypes?: readonly Entry["type"][];
-	/** Maximum number of hits to return. */
-	readonly limit?: number;
-	/** Abort signal for cancellation, e.g. search-as-you-type. */
-	readonly signal?: AbortSignal;
+export interface SearchQuery {
+	text: string;
+	limit?: number;
 }
 
 export interface SessionSearchHit {
-	/** Logical identifier of the session that owns the entry. */
-	readonly sessionId: string;
-	/** Logical identifier of the entry within that session. */
-	readonly entryId: string;
+	sessionId: string;
+	score?: number;
+	top?: { entryId: string; snippet?: string; timestamp: number };
 }
 
-/**
- * Effect-native view of a search. Both `search` and `searchStream` return
- * Effect Streams — there is no async/await boundary in the search pipeline.
- */
-export interface EffectSessionSearch<T extends SessionSearchHit = SessionSearchHit> {
-	search(text: string, options?: SessionSearchOptions): Stream.Stream<T, unknown>;
-	searchStream(text: string, options?: SessionSearchOptions): Stream.Stream<T, unknown>;
+export interface EntrySearchHit {
+	sessionId: string;
+	entryId: string;
+	timestamp: number;
+	snippet?: string;
+	score?: number;
+}
+
+export interface SessionSearchService {
+	searchSessions(query: SearchQuery): Promise<SessionSearchHit[]>;
+	searchEntries?(query: SearchQuery): Promise<EntrySearchHit[]>;
+	sync(): Promise<void>;
+	notify(sessionId: string): void;
+	remove(sessionId: string): Promise<void>;
+	close(): Promise<void>;
 }

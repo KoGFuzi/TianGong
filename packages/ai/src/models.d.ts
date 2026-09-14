@@ -141,6 +141,7 @@ export interface Models {
     complete<TApi extends Api>(model: Model<TApi>, context: AppContext, options?: ModelsApiStreamOptions<TApi>): Promise<AssistantMessage>;
     streamSimple(model: Model<Api>, context: AppContext, options?: ModelsSimpleStreamOptions): AssistantMessageEventStream;
     completeSimple(model: Model<Api>, context: AppContext, options?: ModelsSimpleStreamOptions): Promise<AssistantMessage>;
+    streamDeferred(model: Model<Api>, handle: DeferredHandle, options?: ModelsDeferredFetchOptions): AssistantMessageEventStream;
     fetchDeferred(model: Model<Api>, handle: DeferredHandle, options?: ModelsDeferredFetchOptions): Promise<AssistantMessage>;
     cancelDeferred(model: Model<Api>, handle: DeferredHandle, options?: ModelsDeferredCancelOptions): Promise<void>;
 }

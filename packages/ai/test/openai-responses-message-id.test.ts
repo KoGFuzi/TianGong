@@ -1,5 +1,5 @@
 import type { ResponseOutputMessage } from "openai/resources/responses/responses.js";
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { convertResponsesMessages } from "../src/api/openai-responses-shared.ts";
 import { getModel } from "../src/compat.ts";
 import type { AssistantMessage, Context, Usage } from "../src/types.ts";

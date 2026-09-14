@@ -70,12 +70,26 @@ const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
 // ============================================================================
 
 export interface OpenAICodexResponsesOptions extends StreamOptions {
+	/** Clock and timer implementation used by retries, timeouts, and cached sockets. */
+	clock?: OpenAICodexClock;
 	reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	reasoningSummary?: "auto" | "concise" | "detailed" | "off" | "on" | null;
 	serviceTier?: ResponseCreateParamsStreaming["service_tier"];
 	textVerbosity?: "low" | "medium" | "high";
 	toolChoice?: "auto" | "none" | "required";
 }
+
+export interface OpenAICodexClock {
+	now(): number;
+	setTimeout(callback: () => void, milliseconds: number): ReturnType<typeof setTimeout>;
+	clearTimeout(timeout: ReturnType<typeof setTimeout>): void;
+}
+
+const realClock: OpenAICodexClock = {
+	now: () => Date.now(),
+	setTimeout: (callback, milliseconds) => setTimeout(callback, milliseconds),
+	clearTimeout: (timeout) => clearTimeout(timeout),
+};
 
 type CodexResponseStatus = "completed" | "incomplete" | "failed" | "cancelled" | "queued" | "in_progress";
 
@@ -129,7 +143,7 @@ function isRetryableError(status: number, errorText: string): boolean {
 	return /rate.?limit|overloaded|service.?unavailable|upstream.?connect|connection.?refused/i.test(errorText);
 }
 
-function getRetryAfterDelayMs(headers: Headers): number | undefined {
+function getRetryAfterDelayMs(headers: Headers, now: () => number): number | undefined {
 	const retryAfterMs = headers.get("retry-after-ms");
 	if (retryAfterMs !== null) {
 		const millis = Number(retryAfterMs);
@@ -150,7 +164,7 @@ function getRetryAfterDelayMs(headers: Headers): number | undefined {
 
 	const date = Date.parse(retryAfter);
 	if (!Number.isNaN(date)) {
-		return Math.max(0, date - Date.now());
+		return Math.max(0, date - now());
 	}
 
 	return undefined;
@@ -168,18 +182,33 @@ function validateRetryDelayMs(delayMs: number, options?: StreamOptions): number 
 	return delayMs;
 }
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+function sleep(ms: number, signal: AbortSignal | undefined, clock: OpenAICodexClock): Promise<void> {
 	return new Promise((resolve, reject) => {
 		if (signal?.aborted) {
 			reject(new Error("Request was aborted"));
 			return;
 		}
-		const timeout = setTimeout(resolve, ms);
+		const timeout = clock.setTimeout(resolve, ms);
 		signal?.addEventListener("abort", () => {
-			clearTimeout(timeout);
+			clock.clearTimeout(timeout);
 			reject(new Error("Request was aborted"));
 		});
 	});
+}
+
+function createTimeoutSignal(clock: OpenAICodexClock, milliseconds: number): {
+	signal: AbortSignal;
+	cancel: () => void;
+} {
+	const controller = new AbortController();
+	const timeout = clock.setTimeout(
+		() => controller.abort(new DOMException("The operation timed out", "TimeoutError")),
+		milliseconds,
+	);
+	return {
+		signal: controller.signal,
+		cancel: () => clock.clearTimeout(timeout),
+	};
 }
 
 function normalizeTimeoutMs(value: number | undefined): number | undefined {
@@ -233,6 +262,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 	options?: OpenAICodexResponsesOptions,
 ): AssistantMessageEventStream => {
 	const stream = new AssistantMessageEventStream();
+	const clock = options?.clock ?? realClock;
 
 	(async () => {
 		const output: AssistantMessage = {
@@ -250,7 +280,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			},
 			stopReason: "pending",
-			timestamp: Date.now(),
+			timestamp: clock.now(),
 		};
 
 		try {
@@ -385,9 +415,11 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 				}
 
 				try {
-					const headerTimeoutSignal =
-						httpTimeoutMs !== undefined && httpTimeoutMs > 0 ? AbortSignal.timeout(httpTimeoutMs) : undefined;
-					const combinedSignal = combineAbortSignals([options?.signal, headerTimeoutSignal]);
+					const headerTimeout =
+						httpTimeoutMs !== undefined && httpTimeoutMs > 0
+							? createTimeoutSignal(clock, httpTimeoutMs)
+							: undefined;
+					const combinedSignal = combineAbortSignals([options?.signal, headerTimeout?.signal]);
 					try {
 						response = await (options?.fetch ?? globalThis.fetch)(resolveCodexUrl(model.baseUrl), {
 							method: "POST",
@@ -396,12 +428,13 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 							signal: combinedSignal!.signal,
 						});
 					} catch (error) {
-						if (headerTimeoutSignal?.aborted && !options?.signal?.aborted) {
+						if (headerTimeout?.signal.aborted && !options?.signal?.aborted) {
 							throw new Error(`Codex SSE response headers timed out after ${httpTimeoutMs}ms`);
 						}
 						throw error;
 					} finally {
 						combinedSignal.cleanup();
+						headerTimeout?.cancel();
 					}
 					await options?.onResponse?.(
 						{ status: response.status, headers: headersToRecord(response.headers) },
@@ -414,13 +447,13 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 
 					const errorText = await response.text();
 					if (attempt < maxRetries && isRetryableError(response.status, errorText)) {
-						const retryAfterDelayMs = getRetryAfterDelayMs(response.headers);
+						const retryAfterDelayMs = getRetryAfterDelayMs(response.headers, () => clock.now());
 						const delayMs =
 							retryAfterDelayMs === undefined
 								? BASE_DELAY_MS * 2 ** attempt
 								: validateRetryDelayMs(retryAfterDelayMs, options);
 
-						await sleep(delayMs, options?.signal);
+						await sleep(delayMs, options?.signal, clock);
 						continue;
 					}
 
@@ -429,7 +462,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 						status: response.status,
 						statusText: response.statusText,
 					});
-					const info = await parseErrorResponse(fakeResponse);
+					const info = await parseErrorResponse(fakeResponse, clock);
 					throw new Error(info.friendlyMessage || info.message);
 				} catch (error) {
 					if (error instanceof Error) {
@@ -445,7 +478,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 						!lastError.message.includes("usage limit")
 					) {
 						const delayMs = BASE_DELAY_MS * 2 ** attempt;
-						await sleep(delayMs, options?.signal);
+						await sleep(delayMs, options?.signal, clock);
 						continue;
 					}
 					throw lastError;
@@ -782,8 +815,9 @@ async function* parseSSE(response: Response, signal?: AbortSignal): AsyncGenerat
 			if (signal?.aborted) {
 				throw new Error("Request was aborted");
 			}
-			if (done) break;
-			buffer += decoder.decode(value, { stream: true });
+			buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+			// Treat EOF as terminating the residual SSE frame.
+			if (done && buffer.trim()) buffer += "\n\n";
 
 			let idx = buffer.indexOf("\n\n");
 			while (idx !== -1) {
@@ -809,6 +843,8 @@ async function* parseSSE(response: Response, signal?: AbortSignal): AsyncGenerat
 				}
 				idx = buffer.indexOf("\n\n");
 			}
+
+			if (done) break;
 		}
 	} finally {
 		signal?.removeEventListener("abort", onAbort);
@@ -849,6 +885,7 @@ interface CachedWebSocketConnection {
 	socket: WebSocketLike;
 	busy: boolean;
 	createdAt: number;
+	clock: OpenAICodexClock;
 	idleTimer?: ReturnType<typeof setTimeout>;
 	continuation?: CachedWebSocketContinuationState;
 }
@@ -911,7 +948,7 @@ export function resetOpenAICodexWebSocketDebugStats(sessionId?: string): void {
 
 export function closeOpenAICodexWebSocketSessions(sessionId?: string): void {
 	const closeEntry = (entry: CachedWebSocketConnection) => {
-		if (entry.idleTimer) clearTimeout(entry.idleTimer);
+		if (entry.idleTimer) entry.clock.clearTimeout(entry.idleTimer);
 		closeWebSocketSilently(entry.socket, 1000, "debug_close");
 	};
 	if (sessionId) {
@@ -953,14 +990,16 @@ type WebSocketConstructor = new (
 	protocols?: string | string[] | { headers?: Record<string, string> },
 ) => WebSocketLike;
 
-let _cachedWebsocket: WebSocketConstructor | null = null;
+let _cachedWebsocket: { base: unknown; constructor: WebSocketConstructor } | null = null;
 async function getWebSocketConstructor(env?: ProviderEnv): Promise<WebSocketConstructor | null> {
-	if (!env && _cachedWebsocket) return _cachedWebsocket;
+	const WebSocketBase = (globalThis as { WebSocket?: unknown }).WebSocket;
+	const cachedWebSocket = _cachedWebsocket;
+	if (!env && cachedWebSocket !== null && cachedWebSocket.base === WebSocketBase) return cachedWebSocket.constructor;
 
 	// bun doesn't respect http proxy envs, ref: https://github.com/oven-sh/bun/issues/15489
 	// TODO: remove this when bun supports proxy envs in websocket.
-	if (typeof process !== "undefined" && process.versions?.bun) {
-		const WebSocketWithProxy = class extends WebSocket {
+	if (typeof process !== "undefined" && process.versions?.bun && typeof WebSocketBase === "function") {
+		const WebSocketWithProxy = class extends (WebSocketBase as typeof WebSocket) {
 			constructor(url: string | URL, options?: string | string[] | Record<string, unknown>) {
 				let _opts: Record<string, unknown> = {};
 				if (Array.isArray(options) || typeof options === "string") {
@@ -977,14 +1016,13 @@ async function getWebSocketConstructor(env?: ProviderEnv): Promise<WebSocketCons
 			}
 		};
 		if (!env) {
-			_cachedWebsocket = WebSocketWithProxy;
+			_cachedWebsocket = { base: WebSocketBase, constructor: WebSocketWithProxy };
 		}
 		return WebSocketWithProxy;
 	}
 
-	const ctor = (globalThis as { WebSocket?: unknown }).WebSocket;
-	if (typeof ctor !== "function") return null;
-	return ctor as unknown as WebSocketConstructor;
+	if (typeof WebSocketBase !== "function") return null;
+	return WebSocketBase as unknown as WebSocketConstructor;
 }
 
 class WebSocketCloseError extends Error {
@@ -1013,7 +1051,7 @@ function isWebSocketReusable(socket: WebSocketLike): boolean {
 }
 
 function isWebSocketSessionExpired(entry: CachedWebSocketConnection): boolean {
-	return Date.now() - entry.createdAt >= SESSION_WEBSOCKET_MAX_AGE_MS;
+	return entry.clock.now() - entry.createdAt >= SESSION_WEBSOCKET_MAX_AGE_MS;
 }
 
 function closeWebSocketSilently(socket: WebSocketLike, code = 1000, reason = "done"): void {
@@ -1024,9 +1062,9 @@ function closeWebSocketSilently(socket: WebSocketLike, code = 1000, reason = "do
 
 function scheduleSessionWebSocketExpiry(sessionId: string, accountId: string, entry: CachedWebSocketConnection): void {
 	if (entry.idleTimer) {
-		clearTimeout(entry.idleTimer);
+		entry.clock.clearTimeout(entry.idleTimer);
 	}
-	entry.idleTimer = setTimeout(() => {
+	entry.idleTimer = entry.clock.setTimeout(() => {
 		if (entry.busy) return;
 		closeWebSocketSilently(entry.socket, 1000, "idle_timeout");
 		const accountEntries = websocketSessionCache.get(sessionId);
@@ -1041,6 +1079,7 @@ async function connectWebSocket(
 	signal?: AbortSignal,
 	connectTimeoutMs = DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS,
 	env?: ProviderEnv,
+	clock: OpenAICodexClock = realClock,
 ): Promise<WebSocketLike> {
 	const WebSocketCtor = await getWebSocketConstructor(env);
 	if (!WebSocketCtor) {
@@ -1064,7 +1103,7 @@ async function connectWebSocket(
 
 		const cleanup = () => {
 			if (timeout) {
-				clearTimeout(timeout);
+				clock.clearTimeout(timeout);
 				timeout = undefined;
 			}
 			socket.removeEventListener("open", onOpen);
@@ -1103,7 +1142,7 @@ async function connectWebSocket(
 		signal?.addEventListener("abort", onAbort);
 
 		if (connectTimeoutMs > 0) {
-			timeout = setTimeout(() => {
+			timeout = clock.setTimeout(() => {
 				fail(new Error(`WebSocket connect timeout after ${connectTimeoutMs}ms`), "connect_timeout");
 			}, connectTimeoutMs);
 		}
@@ -1121,6 +1160,7 @@ async function acquireWebSocket(
 	signal?: AbortSignal,
 	connectTimeoutMs?: number,
 	env?: ProviderEnv,
+	clock: OpenAICodexClock = realClock,
 ): Promise<{
 	socket: WebSocketLike;
 	entry?: CachedWebSocketConnection;
@@ -1128,7 +1168,7 @@ async function acquireWebSocket(
 	release: (options?: { keep?: boolean }) => void;
 }> {
 	if (!sessionId) {
-		const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs, env);
+		const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs, env, clock);
 		return {
 			socket,
 			reused: false,
@@ -1140,7 +1180,7 @@ async function acquireWebSocket(
 	const cached = accountEntries?.get(accountId);
 	if (cached) {
 		if (cached.idleTimer) {
-			clearTimeout(cached.idleTimer);
+			clock.clearTimeout(cached.idleTimer);
 			cached.idleTimer = undefined;
 		}
 		if (!cached.busy && isWebSocketSessionExpired(cached)) {
@@ -1162,12 +1202,12 @@ async function acquireWebSocket(
 						return;
 					}
 					cached.busy = false;
-					scheduleSessionWebSocketExpiry(sessionId, accountId, cached);
+						scheduleSessionWebSocketExpiry(sessionId, accountId, cached);
 				},
 			};
 		}
 		if (cached.busy) {
-			const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs, env);
+			const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs, env, clock);
 			return {
 				socket,
 				reused: false,
@@ -1183,8 +1223,8 @@ async function acquireWebSocket(
 		}
 	}
 
-	const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs, env);
-	const entry: CachedWebSocketConnection = { socket, busy: true, createdAt: Date.now() };
+	const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs, env, clock);
+	const entry: CachedWebSocketConnection = { socket, busy: true, createdAt: clock.now(), clock };
 	accountEntries = websocketSessionCache.get(sessionId);
 	if (!accountEntries) {
 		accountEntries = new Map();
@@ -1198,7 +1238,7 @@ async function acquireWebSocket(
 		release: ({ keep } = {}) => {
 			if (!keep || !isWebSocketReusable(entry.socket)) {
 				closeWebSocketSilently(entry.socket);
-				if (entry.idleTimer) clearTimeout(entry.idleTimer);
+				if (entry.idleTimer) clock.clearTimeout(entry.idleTimer);
 				const currentEntries = websocketSessionCache.get(sessionId);
 				if (currentEntries?.get(accountId) === entry) currentEntries.delete(accountId);
 				if (currentEntries?.size === 0) websocketSessionCache.delete(sessionId);
@@ -1271,6 +1311,7 @@ async function* parseWebSocket(
 	socket: WebSocketLike,
 	signal?: AbortSignal,
 	idleTimeoutMs?: number,
+	clock: OpenAICodexClock = realClock,
 ): AsyncGenerator<Record<string, unknown>> {
 	const queue: Record<string, unknown>[] = [];
 	let pending: (() => void) | null = null;
@@ -1355,7 +1396,7 @@ async function* parseWebSocket(
 			await new Promise<void>((resolve, reject) => {
 				pending = resolve;
 				if (idleTimeoutMs !== undefined && idleTimeoutMs > 0) {
-					timeout = setTimeout(() => {
+					timeout = clock.setTimeout(() => {
 						const error = new Error(`WebSocket idle timeout after ${idleTimeoutMs}ms`);
 						failed = error;
 						done = true;
@@ -1366,7 +1407,7 @@ async function* parseWebSocket(
 				}
 			}).finally(() => {
 				if (timeout) {
-					clearTimeout(timeout);
+					clock.clearTimeout(timeout);
 				}
 			});
 		}
@@ -1476,6 +1517,7 @@ async function processWebSocketStream(
 		options?.signal,
 		websocketConnectTimeoutMs,
 		options?.env,
+		options?.clock ?? realClock,
 	);
 	let keepConnection = true;
 	const useCachedContext = options?.transport === "websocket-cached" || options?.transport === "auto";
@@ -1505,7 +1547,7 @@ async function processWebSocketStream(
 		socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
 		await processResponsesStream(
 			startWebSocketOutputOnFirstEvent(
-				mapCodexEvents(parseWebSocket(socket, options?.signal, idleTimeoutMs), output),
+							mapCodexEvents(parseWebSocket(socket, options?.signal, idleTimeoutMs, options?.clock ?? realClock), output),
 				onStart,
 			),
 			output,
@@ -1546,7 +1588,10 @@ async function processWebSocketStream(
 // Error Handling
 // ============================================================================
 
-async function parseErrorResponse(response: Response): Promise<{ message: string; friendlyMessage?: string }> {
+async function parseErrorResponse(
+	response: Response,
+	clock: OpenAICodexClock = realClock,
+): Promise<{ message: string; friendlyMessage?: string }> {
 	const raw = await response.text();
 	let message = raw || response.statusText || "Request failed";
 	let friendlyMessage: string | undefined;
@@ -1561,7 +1606,7 @@ async function parseErrorResponse(response: Response): Promise<{ message: string
 			if (/usage_limit_reached|usage_not_included|rate_limit_exceeded/i.test(code) || response.status === 429) {
 				const plan = err.plan_type ? ` (${err.plan_type.toLowerCase()} plan)` : "";
 				const mins = err.resets_at
-					? Math.max(0, Math.round((err.resets_at * 1000 - Date.now()) / 60000))
+					? Math.max(0, Math.round((err.resets_at * 1000 - clock.now()) / 60000))
 					: undefined;
 				const when = mins !== undefined ? ` Try again in ~${mins} min.` : "";
 				friendlyMessage = `You have hit your ChatGPT usage limit${plan}.${when}`.trim();

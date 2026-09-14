@@ -32,13 +32,13 @@ function parseFile(file: string): ParsedFile {
   const exportRegex = /export\s+(?:abstract\s+)?(?:async\s+)?(?:declare\s+)?(type|interface|const|class|function|enum)\s+([A-Za-z0-9_]+)/g;
   let m: RegExpExecArray | null;
   while ((m = exportRegex.exec(src)) !== null) {
-    exports.push({ name: m[2], kind: m[1] as "type" | "interface" | "const" | "class" | "function" | "enum" });
+		exports.push({ name: m[2]!, kind: m[1] as "type" | "interface" | "const" | "class" | "function" | "enum" });
   }
 
   const importRegex = /import\s+(?:type\s+)?\{([^}]+)\}\s+from\s+["']([^"']+)["']/g;
   while ((m = importRegex.exec(src)) !== null) {
-    const names = m[1].split(",").map((s) => s.trim()).filter(Boolean);
-    imports.push({ specifier: m[2], names });
+		const names = m[1]!.split(",").map((s) => s.trim()).filter(Boolean);
+		imports.push({ specifier: m[2]!, names });
   }
   return { path: file, exports, imports };
 }

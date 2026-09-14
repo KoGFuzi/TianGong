@@ -124,7 +124,7 @@ function createClient(
 		apiKey,
 		baseURL: model.baseUrl,
 		dangerouslyAllowBrowser: true,
-		fetch: fetch as typeof globalThis.fetch | undefined,
+		fetch,
 		defaultHeaders: providerHeadersToRecord({ ...model.headers, ...optionsHeaders }),
 	});
 }

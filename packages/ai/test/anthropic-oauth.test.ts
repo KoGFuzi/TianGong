@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "./bun-test.ts";
+import { afterEach, describe, expect, it, mock } from "bun:test";
+import { stubGlobal, unstubAllGlobals } from "./utils/testing.ts";
 import { anthropicOAuth } from "../src/auth/oauth/anthropic.ts";
 import type { AuthEvent, AuthPrompt } from "../src/auth/types.ts";
 
@@ -33,14 +34,14 @@ function getJsonBody(init?: RequestInit): Record<string, string> {
 	return JSON.parse(init.body) as Record<string, string>;
 }
 
-describe.sequential("Anthropic OAuth", () => {
+describe("Anthropic OAuth", () => {
 	afterEach(() => {
-		vi.unstubAllGlobals();
+		unstubAllGlobals();
 	});
 
 	it("keeps the localhost redirect_uri for manual callback login", async () => {
 		let authUrl = "";
-		const fetchMock = vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+		const fetchMock = mock(async (input: unknown, init?: RequestInit): Promise<Response> => {
 			expect(getUrl(input)).toBe("https://platform.claude.com/v1/oauth/token");
 			expect(init?.method).toBe("POST");
 			const body = getJsonBody(init);
@@ -53,7 +54,7 @@ describe.sequential("Anthropic OAuth", () => {
 				expires_in: 3600,
 			});
 		});
-		vi.stubGlobal("fetch", fetchMock);
+		stubGlobal("fetch", fetchMock);
 
 		const credentials = await anthropicOAuth.login({
 			signal: neverAbortedSignal,
@@ -76,7 +77,7 @@ describe.sequential("Anthropic OAuth", () => {
 	});
 
 	it("omits scope from refresh token requests", async () => {
-		const fetchMock = vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+		const fetchMock = mock(async (input: unknown, init?: RequestInit): Promise<Response> => {
 			expect(getUrl(input)).toBe("https://platform.claude.com/v1/oauth/token");
 			expect(init?.method).toBe("POST");
 			const body = getJsonBody(init);
@@ -90,7 +91,7 @@ describe.sequential("Anthropic OAuth", () => {
 				expires_in: 3600,
 			});
 		});
-		vi.stubGlobal("fetch", fetchMock);
+		stubGlobal("fetch", fetchMock);
 
 		const credentials = await anthropicOAuth.refresh(
 			{
@@ -108,14 +109,14 @@ describe.sequential("Anthropic OAuth", () => {
 	});
 
 	it("anthropicOAuth.login resolves through the manual_code prompt and aborts it after settling", async () => {
-		const fetchMock = vi.fn(async (input: unknown): Promise<Response> => {
+		const fetchMock = mock(async (input: unknown): Promise<Response> => {
 			const url = typeof input === "string" ? input : String(input);
 			if (url.includes("/oauth/token")) {
 				return jsonResponse({ access_token: "access", refresh_token: "refresh", expires_in: 3600 });
 			}
 			throw new Error(`Unexpected fetch: ${url}`);
 		});
-		vi.stubGlobal("fetch", fetchMock);
+		stubGlobal("fetch", fetchMock);
 
 		const events: AuthEvent[] = [];
 		const prompts: AuthPrompt[] = [];

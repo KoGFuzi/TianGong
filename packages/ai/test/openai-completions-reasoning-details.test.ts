@@ -1,14 +1,15 @@
 import { Type } from "typebox";
-import { beforeEach, describe, expect, it, vi } from "./bun-test.ts";
+import { beforeEach, describe, expect, it } from "bun:test";
+import { mockModule, hoisted } from "./utils/testing.ts";
 import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import type { AssistantMessage, Model, Tool } from "../src/types.ts";
 
-const mockState = vi.hoisted(() => ({
+const mockState = hoisted(() => ({
 	chunkSets: [] as unknown[][],
 	payloads: [] as unknown[],
 }));
 
-vi.mock("openai", () => {
+mockModule("openai", () => {
 	class FakeOpenAI {
 		chat = {
 			completions: {
@@ -180,5 +181,72 @@ describe("openai-completions reasoning_details streaming", () => {
 		const payload = getAssistantPayload(mockState.payloads[1]);
 		expect(payload?.reasoning_details).toEqual(expectedReasoningDetails);
 		expect(payload?.reasoning).toBeUndefined();
+	});
+
+	it("merges consecutive text and summary reasoning_details deltas before replay", async () => {
+		const textDelta = { type: "reasoning.text", text: "The", index: 0 };
+		const textDeltaWithSignature = {
+			type: "reasoning.text",
+			text: " user wants the time.",
+			signature: "sha256:text-signature",
+			format: "openai-responses-v1",
+			index: 0,
+		};
+		const summaryDelta = { type: "reasoning.summary", summary: "Looked", index: 0 };
+		const summaryDeltaWithFormat = {
+			type: "reasoning.summary",
+			summary: " up time.",
+			format: "openai-responses-v1",
+			index: 0,
+		};
+		const laterSummaryDelta = {
+			type: "reasoning.summary",
+			summary: "After encrypted block.",
+			format: "openai-responses-v1",
+			index: 0,
+		};
+		const expectedReasoningDetails = [
+			{
+				type: "reasoning.text",
+				text: "The user wants the time.",
+				index: 0,
+				signature: "sha256:text-signature",
+				format: "openai-responses-v1",
+			},
+			{
+				type: "reasoning.summary",
+				summary: "Looked up time.",
+				index: 0,
+				format: "openai-responses-v1",
+			},
+			reasoningDetail,
+			laterSummaryDelta,
+		];
+
+		mockState.chunkSets = [
+			[
+				chunk({ reasoning_details: [textDelta] }),
+				chunk({ reasoning_details: [textDeltaWithSignature] }),
+				chunk({ reasoning_details: [summaryDelta] }),
+				chunk({ reasoning_details: [summaryDeltaWithFormat] }),
+				chunk({ reasoning_details: [reasoningDetail] }),
+				chunk({ reasoning_details: [laterSummaryDelta] }),
+				toolCallChunk(),
+				chunk({}, "tool_calls"),
+			],
+			[chunk({ content: "ok" }), chunk({}, "stop")],
+		];
+
+		const assistantMessage = await runOpenAICompletionsStream();
+		const thinking = assistantMessage.content.find((block) => block.type === "thinking");
+		expect(thinking).toEqual({
+			type: "thinking",
+			thinking: "",
+			thinkingSignature: JSON.stringify(expectedReasoningDetails),
+		});
+
+		await runOpenAICompletionsStream([assistantMessage]);
+
+		expect(getAssistantPayload(mockState.payloads[1])?.reasoning_details).toEqual(expectedReasoningDetails);
 	});
 });

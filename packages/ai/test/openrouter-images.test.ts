@@ -1,13 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "./bun-test.ts";
+import { beforeEach, describe, expect, it } from "bun:test";
+import { mockModule, hoisted } from "./utils/testing.ts";
 import { generateImages } from "../src/images.ts";
 import type { ImagesContext, ImagesModel } from "../src/types.ts";
 
-const mockState = vi.hoisted(() => ({
+const mockState = hoisted(() => ({
 	lastParams: undefined as unknown,
 	lastRequestOptions: undefined as unknown,
 }));
 
-vi.mock("openai", () => {
+mockModule("openai", () => {
 	class FakeOpenAI {
 		chat = {
 			completions: {

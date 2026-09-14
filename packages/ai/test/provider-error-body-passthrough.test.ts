@@ -12,7 +12,8 @@
 // errorMessage contains both the status and the body reason. It is EXPECTED TO
 // FAIL until the provider catch blocks read the SDK error body.
 
-import { describe, expect, it, vi } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
+import { mockModule } from "./utils/testing.ts";
 import { generateImages } from "../src/images.ts";
 import type { ImagesContext, ImagesModel } from "../src/types.ts";
 
@@ -30,7 +31,7 @@ class FakeAPIError extends Error {
 	}
 }
 
-vi.mock("openai", () => {
+mockModule("openai", () => {
 	class FakeOpenAI {
 		chat = {
 			completions: {

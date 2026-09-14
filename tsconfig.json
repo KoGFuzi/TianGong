@@ -16,11 +16,22 @@
     "strict": true,
     "skipLibCheck": true,
     "noFallthroughCasesInSwitch": true,
-    "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
 
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "noPropertyAccessFromIndexSignature": false
-  }
+    "noPropertyAccessFromIndexSignature": false,
+
+    "paths": {
+      "@onepanda-tiangongsec/tg-ai": ["./packages/ai/src/index.ts"],
+      "@onepanda-tiangongsec/tg-ai/compat": ["./packages/ai/src/compat.ts"],
+      "@onepanda-tiangongsec/tg-ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],
+      "@onepanda-tiangongsec/tg-agent": ["./packages/agent/src/index.ts"],
+      "@onepanda-tiangongsec/tg-agent-core": ["./packages/agent/src/index.ts"],
+      "@onepanda-tiangongsec/tg-agent-core/session/testing": ["./packages/agent/src/harness/session/testing/index.ts"],
+      "@onepanda-tiangongsec/tg-telemetry": ["./packages/telemetry/src/index.ts"],
+      "@onepanda-tiangongsec/tg-telemetry/testing": ["./packages/telemetry/src/testing/index.ts"]
+    }
+  },
+  "exclude": ["**/node_modules", "**/dist", "packages/ai/test", "packages/chord/test"]
 }

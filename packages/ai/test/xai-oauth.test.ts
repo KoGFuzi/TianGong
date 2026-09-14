@@ -1,6 +1,66 @@
-import { afterEach, describe, expect, it, vi } from "./bun-test.ts";
+import { afterEach, describe, expect, it, mock } from "bun:test";
 import { xaiOAuth } from "../src/auth/oauth/xai.ts";
 import type { OAuthCredential } from "../src/auth/types.ts";
+import type { ProviderRetryClock } from "../src/utils/provider-retry.ts";
+
+/** Deterministic clock: timers fire only when the test advances them. */
+class TestClock implements ProviderRetryClock {
+	private currentTime: number;
+	private nextTimerId = 1;
+	private readonly timers = new Map<number, { at: number; callback: () => void }>();
+
+	constructor(now = 0) {
+		this.currentTime = now;
+	}
+
+	now(): number {
+		return this.currentTime;
+	}
+
+	setTimeout(callback: () => void, milliseconds: number): ReturnType<typeof setTimeout> {
+		const id = this.nextTimerId++;
+		this.timers.set(id, { at: this.currentTime + milliseconds, callback });
+		return id as unknown as ReturnType<typeof setTimeout>;
+	}
+
+	clearTimeout(timeout: ReturnType<typeof setTimeout>): void {
+		this.timers.delete(timeout as unknown as number);
+	}
+
+	async advance(milliseconds: number): Promise<void> {
+		const target = this.currentTime + milliseconds;
+		for (;;) {
+			const due = [...this.timers.entries()].filter(([, timer]) => timer.at <= target).sort(([, left], [, right]) => left.at - right.at)[0];
+			if (!due) break;
+			this.currentTime = due[1].at;
+			this.timers.delete(due[0]);
+			due[1].callback();
+			await flushMicrotasks();
+		}
+		this.currentTime = target;
+		await flushMicrotasks();
+	}
+}
+
+async function flushMicrotasks(): Promise<void> {
+	for (let i = 0; i < 32; i++) await Promise.resolve();
+}
+
+const realDateNow = Date.now;
+const realFetch = globalThis.fetch;
+let clock: TestClock;
+
+afterEach(() => {
+	Date.now = realDateNow;
+	globalThis.fetch = realFetch;
+});
+
+/** Freeze Date.now onto the test clock so expires timestamps stay deterministic. */
+function useClock(now?: number): TestClock {
+	clock = new TestClock(now);
+	Date.now = () => clock.now();
+	return clock;
+}
 
 const neverAbortedSignal = new AbortController().signal;
 
@@ -53,6 +113,7 @@ type DeviceCodeInfo = {
 function loginXaiForTest(options: {
 	onDeviceCode: (info: DeviceCodeInfo) => void;
 	signal?: AbortSignal;
+	clock?: ProviderRetryClock;
 }): Promise<OAuthCredential> {
 	return xaiOAuth.login({
 		signal: options.signal ?? neverAbortedSignal,
@@ -62,10 +123,10 @@ function loginXaiForTest(options: {
 		notify: (event) => {
 			if (event.type === "device_code") {
 				const { type: _, ...info } = event;
-				options.onDeviceCode(info);
+				options.onDeviceCode(info as unknown as DeviceCodeInfo);
 			}
 		},
-	});
+	}, options.clock !== undefined ? { clock: options.clock } : undefined);
 }
 
 function refreshXaiForTest(refreshToken: string): Promise<OAuthCredential> {
@@ -76,16 +137,9 @@ function refreshXaiForTest(refreshToken: string): Promise<OAuthCredential> {
 }
 
 describe("xAI OAuth device flow", () => {
-	afterEach(() => {
-		vi.restoreAllMocks();
-		vi.unstubAllGlobals();
-		vi.useRealTimers();
-	});
-
 	it("uses the device grant, delays polling, and handles pending and slow_down", async () => {
-		vi.useFakeTimers();
-		const startTime = new Date("2026-07-09T20:00:00Z");
-		vi.setSystemTime(startTime);
+		const startTime = new Date("2026-07-09T20:00:00Z").getTime();
+		const testClock = useClock(startTime);
 		const pollTimes: number[] = [];
 		const tokenReplies = [
 			jsonResponse({ error: "authorization_pending" }, 400),
@@ -93,7 +147,7 @@ describe("xAI OAuth device flow", () => {
 			jsonResponse(tokenResponse()),
 		];
 
-		const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+		globalThis.fetch = async (input: unknown, init?: RequestInit) => {
 			const url = requestUrl(input);
 
 			if (url === "https://auth.x.ai/oauth2/device/code") {
@@ -116,13 +170,12 @@ describe("xAI OAuth device flow", () => {
 			}
 
 			throw new Error(`Unexpected request: ${url}`);
-		});
-		vi.stubGlobal("fetch", fetchMock);
+		};
 
 		const deviceCodes: DeviceCodeInfo[] = [];
-		const loginPromise = loginXaiForTest({ onDeviceCode: (info) => deviceCodes.push(info) });
+		const loginPromise = loginXaiForTest({ onDeviceCode: (info) => deviceCodes.push(info), clock: testClock });
 
-		await vi.advanceTimersByTimeAsync(0);
+		await flushMicrotasks();
 		expect(deviceCodes).toEqual([
 			{
 				userCode: "ABCD-1234",
@@ -133,70 +186,65 @@ describe("xAI OAuth device flow", () => {
 		]);
 		expect(pollTimes).toEqual([]);
 
-		await vi.advanceTimersByTimeAsync(5000);
-		expect(pollTimes).toEqual([startTime.getTime() + 5000]);
+		await testClock.advance(5000);
+		expect(pollTimes).toEqual([startTime + 5000]);
 
 		// slow_down raised the interval to 10 seconds
-		await vi.advanceTimersByTimeAsync(5000);
-		expect(pollTimes).toEqual([startTime.getTime() + 5000, startTime.getTime() + 10_000]);
+		await testClock.advance(5000);
+		expect(pollTimes).toEqual([startTime + 5000, startTime + 10_000]);
 
-		await vi.advanceTimersByTimeAsync(10_000);
+		await testClock.advance(10_000);
 		const credentials = await loginPromise;
 		expect(pollTimes).toEqual([
-			startTime.getTime() + 5000,
-			startTime.getTime() + 10_000,
-			startTime.getTime() + 20_000,
+			startTime + 5000,
+			startTime + 10_000,
+			startTime + 20_000,
 		]);
 		expect(credentials).toEqual({
 			type: "oauth",
 			access: "access-token",
 			refresh: "refresh-token",
-			expires: startTime.getTime() + 20_000 + 21_600_000 - 300_000,
+			expires: startTime + 20_000 + 21_600_000 - 300_000,
 		});
 	});
 
 	it("falls back to the default poll interval when the response reports interval 0", async () => {
-		vi.useFakeTimers();
-		const startTime = new Date("2026-07-09T20:00:00Z");
-		vi.setSystemTime(startTime);
+		const startTime = new Date("2026-07-09T20:00:00Z").getTime();
+		const testClock = useClock(startTime);
 		const pollTimes: number[] = [];
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async (input: unknown) => {
-				if (requestUrl(input) === "https://auth.x.ai/oauth2/device/code") {
-					return jsonResponse(deviceCodeResponse({ interval: 0 }));
-				}
-				pollTimes.push(Date.now());
-				return jsonResponse(tokenResponse());
-			}),
-		);
+		globalThis.fetch = async (input: unknown) => {
+			if (requestUrl(input) === "https://auth.x.ai/oauth2/device/code") {
+				return jsonResponse(deviceCodeResponse({ interval: 0 }));
+			}
+			pollTimes.push(Date.now());
+			return jsonResponse(tokenResponse());
+		};
 
-		const loginPromise = loginXaiForTest({ onDeviceCode: () => {} });
+		const loginPromise = loginXaiForTest({ onDeviceCode: () => {}, clock: testClock });
+		await flushMicrotasks();
 		// RFC 8628 default interval is 5 seconds when the server does not require a wait.
-		await vi.advanceTimersByTimeAsync(5000);
+		await testClock.advance(5000);
 		await loginPromise;
-		expect(pollTimes).toEqual([startTime.getTime() + 5000]);
+		expect(pollTimes).toEqual([startTime + 5000]);
 	});
 
 	it("prefers verification_uri_complete when the server provides it", async () => {
-		vi.useFakeTimers();
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async (input: unknown) => {
-				if (requestUrl(input) === "https://auth.x.ai/oauth2/device/code") {
-					return jsonResponse(
-						deviceCodeResponse({
-							verification_uri_complete: "https://accounts.x.ai/oauth2/device?user_code=ABCD-1234",
-						}),
-					);
-				}
-				return jsonResponse(tokenResponse());
-			}),
-		);
+		const testClock = useClock();
+		globalThis.fetch = async (input: unknown) => {
+			if (requestUrl(input) === "https://auth.x.ai/oauth2/device/code") {
+				return jsonResponse(
+					deviceCodeResponse({
+						verification_uri_complete: "https://accounts.x.ai/oauth2/device?user_code=ABCD-1234",
+					}),
+				);
+			}
+			return jsonResponse(tokenResponse());
+		};
 
 		const deviceCodes: DeviceCodeInfo[] = [];
-		const loginPromise = loginXaiForTest({ onDeviceCode: (info) => deviceCodes.push(info) });
-		await vi.advanceTimersByTimeAsync(5000);
+		const loginPromise = loginXaiForTest({ onDeviceCode: (info) => deviceCodes.push(info), clock: testClock });
+		await flushMicrotasks();
+		await testClock.advance(5000);
 		await loginPromise;
 		expect(deviceCodes).toEqual([
 			{
@@ -209,16 +257,12 @@ describe("xAI OAuth device flow", () => {
 	});
 
 	it("rejects a non-https verification_uri_complete", async () => {
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async () =>
-				jsonResponse(
-					deviceCodeResponse({
-						verification_uri_complete: "http://accounts.x.ai/oauth2/device?user_code=ABCD-1234",
-					}),
-				),
-			),
-		);
+		globalThis.fetch = async () =>
+			jsonResponse(
+				deviceCodeResponse({
+					verification_uri_complete: "http://accounts.x.ai/oauth2/device?user_code=ABCD-1234",
+				}),
+			);
 
 		await expect(loginXaiForTest({ onDeviceCode: () => {} })).rejects.toThrow("Untrusted verification URI");
 	});
@@ -226,10 +270,7 @@ describe("xAI OAuth device flow", () => {
 	it.each(["http://accounts.x.ai/oauth2/device", "file:///etc/passwd", "not a url"])(
 		"rejects a non-https verification URI: %s",
 		async (verificationUri) => {
-			vi.stubGlobal(
-				"fetch",
-				vi.fn(async () => jsonResponse(deviceCodeResponse({ verification_uri: verificationUri }))),
-			);
+			globalThis.fetch = async () => jsonResponse(deviceCodeResponse({ verification_uri: verificationUri }));
 
 			await expect(loginXaiForTest({ onDeviceCode: () => {} })).rejects.toThrow("Untrusted verification URI");
 		},
@@ -238,30 +279,26 @@ describe("xAI OAuth device flow", () => {
 	it.each(["access_denied", "authorization_denied"])(
 		"fails when device authorization is denied: %s",
 		async (error) => {
-			vi.useFakeTimers();
+			const testClock = useClock();
 			let requestCount = 0;
-			vi.stubGlobal(
-				"fetch",
-				vi.fn(async () => {
-					requestCount += 1;
-					return requestCount === 1
-						? jsonResponse(deviceCodeResponse({ interval: 1 }))
-						: jsonResponse({ error }, 400);
-				}),
-			);
+			globalThis.fetch = async () => {
+				requestCount += 1;
+				return requestCount === 1
+					? jsonResponse(deviceCodeResponse({ interval: 1 }))
+					: jsonResponse({ error }, 400);
+			};
 
-			const loginPromise = loginXaiForTest({ onDeviceCode: () => {} });
-			const assertion = expect(loginPromise).rejects.toThrow("xAI device authorization was denied");
-			await vi.advanceTimersByTimeAsync(1000);
-			await assertion;
+			const loginPromise = loginXaiForTest({ onDeviceCode: () => {}, clock: testClock });
+			await flushMicrotasks();
+			await testClock.advance(1000);
+			await expect(loginPromise).rejects.toThrow("xAI device authorization was denied");
 		},
 	);
 
 	it("cancels while waiting for the first token poll", async () => {
-		vi.useFakeTimers();
 		const controller = new AbortController();
-		const fetchMock = vi.fn(async () => jsonResponse(deviceCodeResponse()));
-		vi.stubGlobal("fetch", fetchMock);
+		const fetchMock = mock(async () => jsonResponse(deviceCodeResponse()));
+		globalThis.fetch = fetchMock;
 
 		const loginPromise = loginXaiForTest({
 			onDeviceCode: () => controller.abort(),
@@ -274,7 +311,7 @@ describe("xAI OAuth device flow", () => {
 
 	it("refreshes tokens and preserves an unrotated refresh token", async () => {
 		let requestCount = 0;
-		const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
+		globalThis.fetch = async (input: unknown, init?: RequestInit) => {
 			expect(requestUrl(input)).toBe("https://auth.x.ai/oauth2/token");
 			const form = requestForm(init);
 			expect(form.get("grant_type")).toBe("refresh_token");
@@ -286,8 +323,7 @@ describe("xAI OAuth device flow", () => {
 			}
 			expect(form.get("refresh_token")).toBe("keep-refresh");
 			return jsonResponse(tokenResponse({ access_token: "newer-access", refresh_token: undefined }));
-		});
-		vi.stubGlobal("fetch", fetchMock);
+		};
 
 		const rotated = await refreshXaiForTest("old-refresh");
 		const preserved = await refreshXaiForTest("keep-refresh");
@@ -301,32 +337,22 @@ describe("xAI OAuth device flow", () => {
 	});
 
 	it("assumes a one-hour lifetime when expires_in is missing", async () => {
-		vi.useFakeTimers();
-		const startTime = new Date("2026-07-09T20:00:00Z");
-		vi.setSystemTime(startTime);
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async () => jsonResponse(tokenResponse({ expires_in: undefined }))),
-		);
+		const startTime = new Date("2026-07-09T20:00:00Z").getTime();
+		useClock(startTime);
+		globalThis.fetch = async () => jsonResponse(tokenResponse({ expires_in: undefined }));
 
 		const credentials = await refreshXaiForTest("old-refresh");
-		expect(credentials.expires).toBe(startTime.getTime() + 3_600_000 - 300_000);
+		expect(credentials.expires).toBe(startTime + 3_600_000 - 300_000);
 	});
 
 	it("rejects token responses with missing fields", async () => {
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async () => jsonResponse(tokenResponse({ access_token: undefined }))),
-		);
+		globalThis.fetch = async () => jsonResponse(tokenResponse({ access_token: undefined }));
 
 		await expect(refreshXaiForTest("old-refresh")).rejects.toThrow("Invalid xAI OAuth response field: access_token");
 	});
 
 	it("surfaces the upstream error code and description on refresh failure", async () => {
-		vi.stubGlobal(
-			"fetch",
-			vi.fn(async () => jsonResponse({ error: "invalid_grant", error_description: "refresh token revoked" }, 400)),
-		);
+		globalThis.fetch = async () => jsonResponse({ error: "invalid_grant", error_description: "refresh token revoked" }, 400);
 
 		await expect(refreshXaiForTest("old-refresh")).rejects.toThrow(
 			"xAI OAuth token refresh failed (HTTP 400): invalid_grant: refresh token revoked",

@@ -1,7 +1,6 @@
-// @ts-nocheck - Test file
 import { type AssistantMessage, type AssistantMessageEvent, EventStream, getModel } from "@onepanda-tiangongsec/tg-ai/compat";
 import { Type } from "typebox";
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import {
 	Agent,
 	type AgentEvent,
@@ -472,7 +471,7 @@ describe("Agent", () => {
 		const newMessage = { role: "assistant" as const, content: [{ type: "text" as const, text: "Hi" }] };
 		agent.state.messages.push(newMessage as any);
 		expect(agent.state.messages).toHaveLength(2);
-		expect(agent.state.messages[1]!).toBe(newMessage);
+		expect(agent.state.messages[1] as unknown).toBe(newMessage);
 
 		// Test clearMessages
 		agent.state.messages = [];
@@ -651,7 +650,7 @@ describe("Agent", () => {
 		});
 
 		expect(hasQueuedFollowUp).toBe(true);
-		expect(agent.state.messages[agent.state.messages.length - 1]!.role).toBe("assistant");
+		expect(agent.state.messages[agent.state.messages.length - 1].role).toBe("assistant");
 	});
 
 	it("continue() should keep one-at-a-time steering semantics from assistant tail", async () => {

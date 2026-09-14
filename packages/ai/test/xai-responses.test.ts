@@ -1,5 +1,5 @@
 import { arch, platform, release } from "node:os";
-import { afterEach, describe, expect, it, vi } from "./bun-test.ts";
+import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import type { OpenAIResponsesOptions } from "../src/api/openai-responses.ts";
 import { stream as streamOpenAIResponses } from "../src/api/openai-responses.ts";
@@ -53,7 +53,7 @@ const customCompletionsModel: Model<"openai-completions"> = {
 
 async function captureCompletionsUserAgent(headers?: Record<string, string>): Promise<string | null> {
 	let userAgent: string | null = null;
-	vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+	spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
 		userAgent = new Request(input, init).headers.get("user-agent");
 		const chunks = [
 			{ id: "chatcmpl-ua", choices: [{ delta: { content: "ok" }, finish_reason: null, index: 0 }] },
@@ -91,7 +91,7 @@ async function captureRequest(
 	options: OpenAIResponsesOptions,
 ): Promise<CapturedRequest> {
 	let captured: CapturedRequest | undefined;
-	vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+	spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
 		const request = new Request(input, init);
 		captured = {
 			url: request.url,
@@ -109,7 +109,7 @@ async function captureRequest(
 
 describe("xAI Responses provider", () => {
 	afterEach(() => {
-		vi.restoreAllMocks();
+		mock.restore();
 	});
 
 	it("excludes retired and redundant models from the built-in catalog", () => {
@@ -233,7 +233,7 @@ describe("xAI Responses provider", () => {
 
 	it("uses pi's User-Agent by default for Responses requests", async () => {
 		let userAgent: string | null = null;
-		vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+		spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
 			userAgent = new Request(input, init).headers.get("user-agent");
 			return completedResponse();
 		});

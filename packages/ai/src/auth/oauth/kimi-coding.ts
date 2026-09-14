@@ -7,9 +7,15 @@
  */
 
 import { getProviderEnvValue } from "../../utils/provider-env.ts";
+import type { ProviderRetryClock } from "../../utils/provider-retry.ts";
 import { sleep } from "../../utils/sleep.ts";
 import type { OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../types.ts";
 import { pollOAuthDeviceCodeFlow } from "./device-code.ts";
+
+/** Injectable time source for the poll/refresh backoff; tests advance it manually. */
+type RetryClockOptions = {
+	clock?: ProviderRetryClock;
+};
 
 const CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098";
 const DEFAULT_OAUTH_HOST = "https://auth.kimi.com";
@@ -143,12 +149,14 @@ async function pollForToken(
 	oauthHost: string,
 	device: DeviceAuthorization,
 	signal: AbortSignal,
+	clock: ProviderRetryClock | undefined,
 ): Promise<TokenResponse> {
 	return pollOAuthDeviceCodeFlow<TokenResponse>({
 		intervalSeconds: device.intervalSeconds,
 		expiresInSeconds: device.expiresInSeconds,
 		waitBeforeFirstPoll: true,
 		signal,
+		clock,
 		poll: async () => {
 			const response = await fetch(`${oauthHost}/api/oauth/token`, {
 				method: "POST",
@@ -211,11 +219,16 @@ function isRetryableRefreshFailure(response: Response): boolean {
 	return response.status === 429 || response.status >= 500;
 }
 
-async function refreshToken(oauthHost: string, refreshTokenValue: string, signal: AbortSignal): Promise<TokenResponse> {
+async function refreshToken(
+	oauthHost: string,
+	refreshTokenValue: string,
+	signal: AbortSignal,
+	clock: ProviderRetryClock | undefined,
+): Promise<TokenResponse> {
 	let lastError: Error | undefined;
 	for (let attempt = 0; attempt <= REFRESH_MAX_RETRIES; attempt++) {
 		if (attempt > 0) {
-			await sleep(1000 * 2 ** (attempt - 1), signal);
+			await sleep(1000 * 2 ** (attempt - 1), signal, clock);
 		}
 		if (signal.aborted) {
 			throw new Error("Kimi Code token refresh aborted");
@@ -264,7 +277,7 @@ async function refreshToken(oauthHost: string, refreshTokenValue: string, signal
 	throw lastError ?? new Error("Kimi Code token refresh failed");
 }
 
-async function loginKimiCoding(interaction: ProviderAuthInteraction): Promise<OAuthCredential> {
+async function loginKimiCoding(interaction: ProviderAuthInteraction, options?: RetryClockOptions): Promise<OAuthCredential> {
 	const oauthHost = getOauthHost();
 	const device = await startDeviceAuthorization(oauthHost, interaction.signal);
 	interaction.notify({
@@ -274,19 +287,26 @@ async function loginKimiCoding(interaction: ProviderAuthInteraction): Promise<OA
 		intervalSeconds: device.intervalSeconds,
 		expiresInSeconds: device.expiresInSeconds,
 	});
-	const token = await pollForToken(oauthHost, device, interaction.signal);
+	const token = await pollForToken(oauthHost, device, interaction.signal, options?.clock);
 	return { type: "oauth", access: token.access, refresh: token.refresh, expires: token.expires };
 }
 
-export const kimiCodingOAuth: OAuthAuth = {
+/**
+ * The optional clock parameters keep the public `OAuthAuth` shape while letting
+ * tests drive the poll/backoff timers deterministically.
+ */
+export const kimiCodingOAuth: OAuthAuth & {
+	login(interaction: ProviderAuthInteraction, options?: RetryClockOptions): Promise<OAuthCredential>;
+	refresh(credential: OAuthCredential, signal: AbortSignal, options?: RetryClockOptions): Promise<OAuthCredential>;
+} = {
 	name: "Kimi Code (subscription)",
 	isSubscription: true,
 	loginLabel: "Sign in with Kimi Code",
 
 	login: loginKimiCoding,
 
-	refresh: async (credential, signal) => {
-		const token = await refreshToken(getOauthHost(), credential.refresh, signal);
+	refresh: async (credential: OAuthCredential, signal: AbortSignal, options?: RetryClockOptions) => {
+		const token = await refreshToken(getOauthHost(), credential.refresh, signal, options?.clock);
 		return { type: "oauth", access: token.access, refresh: token.refresh, expires: token.expires };
 	},
 

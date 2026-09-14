@@ -1,4 +1,4 @@
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { parseOpenRouterImageModels } from "../scripts/generate-image-models.ts";
 
 const validImageModel = {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { complete, getModel } from "../src/compat.ts";
 import type { Context } from "../src/types.ts";
 

@@ -1,7 +1,6 @@
 import type {
 	ExactTelemetryAttributes,
 	SchemaTelemetrySpan,
-	TelemetryContext,
 	TelemetrySchemaDefinition,
 	TelemetrySchemaSpanEndAttributes,
 	TelemetrySchemaSpanEventAttributes,
@@ -11,6 +10,7 @@ import type {
 	TelemetrySchemaSpanUnion,
 	TelemetrySpan,
 } from "@onepanda-tiangongsec/tg-telemetry";
+import { type Context, getTelemetryContext, withTelemetryContext } from "./context.ts";
 
 export type {
 	AttributeValue,
@@ -42,71 +42,71 @@ export type {
 export const AI_TELEMETRY_SCHEMA = {
 	version: 1,
 	spans: {
-		"pi.ai.request": {
+		"tg.ai.request": {
 			description: "One logical request to an AI provider",
 			parents: { kind: "any" },
 			startAttributes: {
-				"pi.ai.operation": {
+				"tg.ai.operation": {
 					type: "string",
 					required: true,
 					values: ["stream", "fetch_deferred", "cancel_deferred", "generate_images"],
 					description: "Logical provider operation",
 				},
-				"pi.ai.provider": {
+				"tg.ai.provider": {
 					type: "string",
 					required: true,
 					description: "Selected provider id",
 				},
-				"pi.ai.model": {
+				"tg.ai.model": {
 					type: "string",
 					required: true,
 					description: "Requested model id",
 				},
-				"pi.ai.api": {
+				"tg.ai.api": {
 					type: "string",
 					required: true,
 					description: "Provider API id",
 				},
-				"pi.ai.streaming": {
+				"tg.ai.streaming": {
 					type: "boolean",
 					required: true,
 					description: "Whether this operation returns a stream",
 				},
-				"pi.ai.deferred": {
+				"tg.ai.deferred": {
 					type: "boolean",
 					required: false,
 					description: "Whether the operation requests or participates in deferred execution",
 				},
 			},
 			endAttributes: {
-				"pi.ai.response.model": { type: "string", description: "Concrete response model" },
-				"pi.ai.response.id": {
+				"tg.ai.response.model": { type: "string", description: "Concrete response model" },
+				"tg.ai.response.id": {
 					type: "string",
 					cardinality: "high",
 					description: "Provider response id",
 				},
-				"pi.ai.response.stop_reason": {
+				"tg.ai.response.stop_reason": {
 					type: "string",
 					values: ["stop", "length", "tool_use", "error", "aborted", "deferred"],
 					description: "Normalized terminal response reason",
 				},
-				"pi.ai.http.status_code": { type: "number", description: "Final HTTP status" },
-				"pi.ai.usage.input_tokens": { type: "number", description: "Reported input tokens" },
-				"pi.ai.usage.output_tokens": { type: "number", description: "Reported output tokens" },
-				"pi.ai.usage.cache_read_tokens": { type: "number", description: "Reported cache-read tokens" },
-				"pi.ai.usage.cache_write_tokens": {
+				"tg.ai.http.status_code": { type: "number", description: "Final HTTP status" },
+				"tg.ai.usage.input_tokens": { type: "number", description: "Reported input tokens" },
+				"tg.ai.usage.output_tokens": { type: "number", description: "Reported output tokens" },
+				"tg.ai.usage.cache_read_tokens": { type: "number", description: "Reported cache-read tokens" },
+				"tg.ai.usage.cache_write_tokens": {
 					type: "number",
 					description: "Reported cache-write tokens",
 				},
-				"pi.ai.usage.reasoning_tokens": { type: "number", description: "Reported reasoning tokens" },
-				"pi.ai.usage.total_tokens": { type: "number", description: "Reported total tokens" },
-				"pi.ai.usage.cost": { type: "number", description: "Reported total cost" },
-				"pi.ai.stream.chunk_count": { type: "number", description: "Streamed update chunk count" },
-				"pi.ai.stream.time_to_first_chunk_ms": {
+				"tg.ai.usage.reasoning_tokens": { type: "number", description: "Reported reasoning tokens" },
+				"tg.ai.usage.total_tokens": { type: "number", description: "Reported total tokens" },
+				"tg.ai.usage.cost": { type: "number", description: "Reported total cost" },
+				"tg.ai.stream.chunk_count": { type: "number", description: "Streamed update chunk count" },
+				"tg.ai.stream.time_to_first_chunk_ms": {
 					type: "number",
 					description: "Elapsed milliseconds to first update chunk",
 				},
-				"pi.ai.error.type": {
+				"tg.ai.error.type": {
 					type: "string",
 					cardinality: "low",
 					description: "Provider or transport error class",
@@ -136,17 +136,19 @@ export type AiTelemetrySpan<Name extends AiSpanName> = SchemaTelemetrySpan<typeo
 export type AiSpan = TelemetrySchemaSpanUnion<typeof AI_TELEMETRY_SCHEMA>;
 
 export function startAiSpan<Name extends AiSpanName, const Attributes extends AiSpanStartAttributes<Name>, Result>(
-	telemetryContext: TelemetryContext,
 	name: Name,
 	attributes: ExactTelemetryAttributes<AiSpanStartAttributes<Name>, Attributes>,
-	callback: (span: AiTelemetrySpan<Name>) => Result | Promise<Result>,
+	callback: (span: AiTelemetrySpan<Name>, context: Context) => Result | Promise<Result>,
+	context: Context,
 ): Promise<Result> {
-	return telemetryContext.startSpan({ name, attributes }, (span) => callback(span as AiTelemetrySpan<Name>));
+	return getTelemetryContext(context).startSpan({ name, attributes }, (span) =>
+		callback(span as AiTelemetrySpan<Name>, withTelemetryContext(span, context)),
+	);
 }
 
 const HOOK_NAMES = [
 	"before_run",
-	"before_resume",
+	"before_drive",
 	"before_run_end",
 	"transform_context",
 	"before_request",
@@ -162,7 +164,7 @@ const EVENT_TYPES = [
 	"run_start",
 	"run_resume",
 	"run_suspend",
-	"run_abort",
+	"operation_abort",
 	"run_end",
 	"fault",
 	"handler_error",
@@ -178,9 +180,8 @@ const EVENT_TYPES = [
 	"tool_update",
 	"tool_end",
 	"entry_added",
-	"write_pending",
 	"queue_update",
-	"fact_update",
+	"value_update",
 	"config_update",
 	"compaction_start",
 	"compaction_end",
@@ -191,25 +192,25 @@ const EVENT_TYPES = [
 ] as const;
 
 const operationStartAttributes = {
-	"pi.session.id": {
+	"tg.session.id": {
 		type: "string",
 		required: true,
 		cardinality: "high",
 		description: "Session id",
 	},
-	"pi.lane.name": {
+	"tg.lane.name": {
 		type: "string",
 		required: true,
 		cardinality: "high",
 		description: "Lane name",
 	},
-	"pi.operation.id": {
+	"tg.operation.id": {
 		type: "string",
 		required: true,
 		cardinality: "high",
 		description: "Durable operation id",
 	},
-	"pi.operation.recovery": {
+	"tg.operation.recovery": {
 		type: "boolean",
 		required: true,
 		description: "Whether this invocation resumes durable work",
@@ -217,12 +218,12 @@ const operationStartAttributes = {
 } as const;
 
 const operationErrorAttributes = {
-	"pi.error.code": {
+	"tg.error.code": {
 		type: "string",
 		cardinality: "low",
 		description: "Stable operation error code",
 	},
-	"pi.error.type": {
+	"tg.error.type": {
 		type: "string",
 		cardinality: "low",
 		description: "Low-cardinality operation error class",
@@ -232,12 +233,12 @@ const operationErrorAttributes = {
 export const HARNESS_TELEMETRY_SCHEMA = {
 	version: 1,
 	spans: {
-		"pi.harness.run": {
+		"tg.harness.run": {
 			description: "One admitted in-process run invocation",
 			parents: { kind: "root_or_external" },
 			startAttributes: {
 				...operationStartAttributes,
-				"pi.operation.kind": {
+				"tg.operation.kind": {
 					type: "string",
 					required: true,
 					values: ["run"],
@@ -245,7 +246,7 @@ export const HARNESS_TELEMETRY_SCHEMA = {
 				},
 			},
 			endAttributes: {
-				"pi.operation.outcome": {
+				"tg.operation.outcome": {
 					type: "string",
 					values: ["completed", "aborted", "failed", "suspended"],
 					description: "Run invocation outcome",
@@ -254,12 +255,12 @@ export const HARNESS_TELEMETRY_SCHEMA = {
 			},
 			status: { default: "ok", errorWhen: "The run fails or throws" },
 		},
-		"pi.harness.compaction": {
+		"tg.harness.compaction": {
 			description: "One admitted in-process manual compaction invocation",
 			parents: { kind: "root_or_external" },
 			startAttributes: {
 				...operationStartAttributes,
-				"pi.operation.kind": {
+				"tg.operation.kind": {
 					type: "string",
 					required: true,
 					values: ["compaction"],
@@ -267,7 +268,7 @@ export const HARNESS_TELEMETRY_SCHEMA = {
 				},
 			},
 			endAttributes: {
-				"pi.operation.outcome": {
+				"tg.operation.outcome": {
 					type: "string",
 					values: ["completed", "declined", "aborted", "failed"],
 					description: "Compaction invocation outcome",
@@ -276,12 +277,12 @@ export const HARNESS_TELEMETRY_SCHEMA = {
 			},
 			status: { default: "ok", errorWhen: "The compaction fails or throws" },
 		},
-		"pi.harness.navigation": {
+		"tg.harness.navigation": {
 			description: "One admitted in-process navigation invocation",
 			parents: { kind: "root_or_external" },
 			startAttributes: {
 				...operationStartAttributes,
-				"pi.operation.kind": {
+				"tg.operation.kind": {
 					type: "string",
 					required: true,
 					values: ["navigation"],
@@ -289,7 +290,7 @@ export const HARNESS_TELEMETRY_SCHEMA = {
 				},
 			},
 			endAttributes: {
-				"pi.operation.outcome": {
+				"tg.operation.outcome": {
 					type: "string",
 					values: ["completed", "declined", "aborted", "failed"],
 					description: "Navigation invocation outcome",
@@ -298,49 +299,49 @@ export const HARNESS_TELEMETRY_SCHEMA = {
 			},
 			status: { default: "ok", errorWhen: "The navigation fails or throws" },
 		},
-		"pi.harness.checkpoint": {
+		"tg.harness.checkpoint": {
 			description: "One run checkpoint",
-			parents: { kind: "spans", spans: ["pi.harness.run"] },
+			parents: { kind: "spans", spans: ["tg.harness.run"] },
 			startAttributes: {
-				"pi.lane.name": {
+				"tg.lane.name": {
 					type: "string",
 					required: true,
 					cardinality: "high",
 					description: "Lane name",
 				},
-				"pi.operation.id": {
+				"tg.operation.id": {
 					type: "string",
 					required: true,
 					cardinality: "high",
 					description: "Durable operation id",
 				},
-				"pi.checkpoint.kind": {
+				"tg.checkpoint.kind": {
 					type: "string",
 					required: true,
-					values: ["normal", "failure_drain", "abort_reconcile"],
+					values: ["normal", "abort_reconcile"],
 					description: "Checkpoint purpose",
 				},
 			},
 			endAttributes: {},
 			status: { default: "ok", errorWhen: "Checkpoint work throws" },
 		},
-		"pi.harness.turn": {
+		"tg.harness.turn": {
 			description: "One assistant response and its tool batch",
-			parents: { kind: "spans", spans: ["pi.harness.run"] },
+			parents: { kind: "spans", spans: ["tg.harness.run"] },
 			startAttributes: {
-				"pi.lane.name": {
+				"tg.lane.name": {
 					type: "string",
 					required: true,
 					cardinality: "high",
 					description: "Lane name",
 				},
-				"pi.operation.id": {
+				"tg.operation.id": {
 					type: "string",
 					required: true,
 					cardinality: "high",
 					description: "Durable operation id",
 				},
-				"pi.turn.id": {
+				"tg.turn.id": {
 					type: "string",
 					required: true,
 					cardinality: "high",
@@ -350,37 +351,37 @@ export const HARNESS_TELEMETRY_SCHEMA = {
 			endAttributes: {},
 			status: { default: "ok", errorWhen: "Turn work throws" },
 		},
-		"pi.harness.step": {
+		"tg.harness.step": {
 			description: "One durable retry attempt",
 			parents: {
 				kind: "spans",
-				spans: ["pi.harness.turn", "pi.harness.checkpoint", "pi.harness.compaction", "pi.harness.navigation"],
+				spans: ["tg.harness.turn", "tg.harness.checkpoint", "tg.harness.compaction", "tg.harness.navigation"],
 			},
 			startAttributes: {
-				"pi.lane.name": {
+				"tg.lane.name": {
 					type: "string",
 					required: true,
 					cardinality: "high",
 					description: "Lane name",
 				},
-				"pi.operation.id": {
+				"tg.operation.id": {
 					type: "string",
 					required: true,
 					cardinality: "high",
 					description: "Durable operation id",
 				},
-				"pi.step.kind": {
+				"tg.step.kind": {
 					type: "string",
 					required: true,
 					values: ["assistant", "compaction", "branch_summary"],
 					description: "Retryable step kind",
 				},
-				"pi.step.attempt": {
+				"tg.step.attempt": {
 					type: "number",
 					required: true,
 					description: "One-based durable attempt number",
 				},
-				"pi.compaction.reason": {
+				"tg.compaction.reason": {
 					type: "string",
 					required: false,
 					values: ["manual", "threshold", "overflow"],
@@ -388,7 +389,7 @@ export const HARNESS_TELEMETRY_SCHEMA = {
 				},
 			},
 			endAttributes: {
-				"pi.step.outcome": {
+				"tg.step.outcome": {
 					type: "string",
 					values: ["succeeded", "retry", "failed", "aborted", "deferred", "overflow"],
 					description: "Attempt outcome",
@@ -396,89 +397,89 @@ export const HARNESS_TELEMETRY_SCHEMA = {
 			},
 			status: { default: "ok", errorWhen: "The attempt retries, fails, or throws" },
 		},
-		"pi.harness.tool": {
+		"tg.harness.tool": {
 			description: "One raw phase-2 tool execution",
-			parents: { kind: "spans", spans: ["pi.harness.turn", "pi.harness.run"] },
+			parents: { kind: "spans", spans: ["tg.harness.turn", "tg.harness.run"] },
 			startAttributes: {
-				"pi.lane.name": {
+				"tg.lane.name": {
 					type: "string",
 					required: true,
 					cardinality: "high",
 					description: "Lane name",
 				},
-				"pi.operation.id": {
+				"tg.operation.id": {
 					type: "string",
 					required: true,
 					cardinality: "high",
 					description: "Durable operation id",
 				},
-				"pi.turn.id": {
+				"tg.turn.id": {
 					type: "string",
 					required: false,
 					cardinality: "high",
 					description: "Invocation-local live turn id",
 				},
-				"pi.tool.name": {
+				"tg.tool.name": {
 					type: "string",
 					required: true,
 					description: "Tool name",
 				},
-				"pi.tool.call_id": {
+				"tg.tool.call_id": {
 					type: "string",
 					required: true,
 					cardinality: "high",
 					description: "Tool call id",
 				},
-				"pi.tool.replay": {
+				"tg.tool.replay": {
 					type: "string",
 					required: true,
 					values: ["never", "safe"],
 					description: "Declared replay policy",
 				},
-				"pi.tool.recovery": {
+				"tg.tool.recovery": {
 					type: "boolean",
 					required: true,
 					description: "Whether this is recovery execution",
 				},
 			},
 			endAttributes: {
-				"pi.tool.is_error": {
+				"tg.tool.is_error": {
 					type: "boolean",
 					description: "Whether raw phase-2 execution returned an error",
 				},
 			},
 			status: { default: "ok", errorWhen: "Raw phase-2 execution returns an error" },
 		},
-		"pi.harness.hook": {
+		"tg.harness.hook": {
 			description: "One registered hook handler invocation",
 			parents: { kind: "any" },
 			startAttributes: {
-				"pi.lane.name": {
+				"tg.lane.name": {
 					type: "string",
 					required: true,
 					cardinality: "high",
 					description: "Lane name",
 				},
-				"pi.operation.id": {
+				"tg.operation.id": {
 					type: "string",
 					required: false,
 					cardinality: "high",
 					description: "Durable operation id when accepted",
 				},
-				"pi.hook.name": {
+				"tg.hook.name": {
 					type: "string",
 					required: true,
 					values: HOOK_NAMES,
 					description: "Hook name",
 				},
-				"pi.hook.registration_id": {
+				"tg.hook.registration_id": {
 					type: "string",
 					required: false,
-					description: "Stable hook registration id",
+					description: "Optional hook registration metadata",
 				},
 			},
 			endAttributes: {
-				"pi.hook.outcome": {
+				"tg.hook.outcome": {
 					type: "string",
 					values: ["completed", "skipped", "blocked", "failed"],
 					description: "Handler outcome",
@@ -486,24 +487,33 @@ export const HARNESS_TELEMETRY_SCHEMA = {
 			},
 			status: { default: "ok", errorWhen: "The handler throws" },
 		},
-		"pi.harness.sleep": {
+		"tg.harness.sleep": {
 			description: "One retry delay",
-			parents: { kind: "spans", spans: ["pi.harness.step", "pi.harness.run"] },
+			parents: {
+				kind: "spans",
+				spans: [
+					"tg.harness.run",
+					"tg.harness.compaction",
+					"tg.harness.navigation",
+					"tg.harness.turn",
+					"tg.harness.checkpoint",
+				],
+			},
 			startAttributes: {
-				"pi.operation.id": {
+				"tg.operation.id": {
 					type: "string",
 					required: true,
 					cardinality: "high",
 					description: "Durable operation id",
 				},
-				"pi.sleep.delay_ms": {
+				"tg.sleep.delay_ms": {
 					type: "number",
 					required: true,
 					description: "Requested delay in milliseconds",
 				},
 			},
 			endAttributes: {
-				"pi.sleep.outcome": {
+				"tg.sleep.outcome": {
 					type: "string",
 					values: ["elapsed", "aborted"],
 					description: "Delay outcome",
@@ -511,18 +521,18 @@ export const HARNESS_TELEMETRY_SCHEMA = {
 			},
 			status: { default: "ok", errorWhen: "Sleep work throws" },
 		},
-		"pi.harness.event_handler": {
+		"tg.harness.event_handler": {
 			description: "One passive event listener invocation",
 			parents: { kind: "any" },
 			startAttributes: {
-				"pi.event.type": {
+				"tg.event.type": {
 					type: "string",
 					required: true,
 					cardinality: "low",
 					values: EVENT_TYPES,
 					description: "Delivered harness event type",
 				},
-				"pi.lane.name": {
+				"tg.lane.name": {
 					type: "string",
 					required: false,
 					cardinality: "high",
@@ -532,41 +542,51 @@ export const HARNESS_TELEMETRY_SCHEMA = {
 			endAttributes: {},
 			status: { default: "ok", errorWhen: "The listener throws" },
 		},
-		"pi.session.write": {
-			description: "One committed session mutation",
+		"tg.session.write": {
+			description: "One committed session transaction",
 			parents: { kind: "any" },
 			startAttributes: {
-				"pi.lane.name": {
+				"tg.session.id": {
 					type: "string",
 					required: true,
 					cardinality: "high",
-					description: "Lane name",
+					description: "Session id",
 				},
-				"pi.operation.id": {
+				"tg.lane.name": {
 					type: "string",
 					required: false,
 					cardinality: "high",
-					description: "Durable operation id when accepted",
+					description: "Lane name when supplied by the caller",
 				},
-				"pi.session.mutation": {
-					type: "string",
-					required: true,
-					values: ["entry", "record", "lane", "fact"],
-					description: "Session mutation kind",
-				},
-				"pi.session.item_type": {
+				"tg.operation.id": {
 					type: "string",
 					required: false,
-					description: "Entry, record, lane, or fact subtype",
+					cardinality: "high",
+					description: "Durable operation id when supplied by the caller",
+				},
+				"tg.session.item_count": {
+					type: "number",
+					required: true,
+					description: "Number of writes in the transaction",
+				},
+				"tg.session.item_kinds": {
+					type: "string[]",
+					required: true,
+					elementValues: ["entry", "usage", "value", "list"],
+					description: "Distinct write kinds in the transaction",
 				},
 			},
 			endAttributes: {
-				"pi.session.seq": {
+				"tg.session.first_seq": {
 					type: "number",
-					description: "Committed session sequence when exposed",
+					description: "First committed sequence in the transaction",
+				},
+				"tg.session.last_seq": {
+					type: "number",
+					description: "Last committed sequence in the transaction",
 				},
 			},
-			status: { default: "ok", errorWhen: "Storage rejects the mutation" },
+			status: { default: "ok", errorWhen: "Storage rejects the transaction" },
 		},
 	},
 } as const satisfies TelemetrySchemaDefinition;
@@ -604,12 +624,12 @@ export function startHarnessSpan<
 	const Attributes extends HarnessSpanStartAttributes<Name>,
 	Result,
 >(
-	telemetryContext: TelemetryContext,
 	name: Name,
 	attributes: ExactTelemetryAttributes<HarnessSpanStartAttributes<Name>, Attributes>,
-	callback: (span: HarnessTelemetrySpan<Name>) => Result | Promise<Result>,
+	callback: (span: HarnessTelemetrySpan<Name>, context: Context) => Result | Promise<Result>,
+	context: Context,
 ): Promise<Result> {
-	return telemetryContext.startSpan({ name, attributes }, (span: TelemetrySpan) =>
-		callback(span as HarnessTelemetrySpan<Name>),
+	return getTelemetryContext(context).startSpan({ name, attributes }, (span: TelemetrySpan) =>
+		callback(span as HarnessTelemetrySpan<Name>, withTelemetryContext(span, context)),
 	);
 }

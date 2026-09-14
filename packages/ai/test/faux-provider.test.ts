@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "./bun-test.ts";
+import { afterEach, describe, expect, it } from "bun:test";
 import {
 	complete,
 	fauxAssistantMessage,
@@ -7,8 +7,8 @@ import {
 	fauxToolCall,
 	registerFauxProvider,
 	stream,
-	Type,
 } from "../src/compat.ts";
+import { Type } from "typebox";
 import type { AssistantMessageEvent, Context } from "../src/types.ts";
 
 async function collectEvents(streamResult: ReturnType<typeof stream>): Promise<AssistantMessageEvent[]> {

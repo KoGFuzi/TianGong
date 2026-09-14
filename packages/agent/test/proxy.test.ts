@@ -1,5 +1,6 @@
 import type { AssistantMessage, AssistantMessageEvent, Model } from "@onepanda-tiangongsec/tg-ai";
-import { afterEach, describe, expect, it, vi } from "./bun-test.ts";
+import { afterEach, describe, expect, it, mock } from "bun:test";
+import { stubGlobal, unstubAllGlobals } from "./utils/testing.ts";
 import { type ProxyAssistantMessageEvent, streamProxy } from "../src/proxy.ts";
 
 const model: Model<"openai-responses"> = {
@@ -25,7 +26,7 @@ const usage: AssistantMessage["usage"] = {
 };
 
 afterEach(() => {
-	vi.unstubAllGlobals();
+	unstubAllGlobals();
 });
 
 describe("streamProxy", () => {
@@ -48,9 +49,9 @@ describe("streamProxy", () => {
 			{ type: "done", reason: "toolUse", usage },
 		];
 		const body = proxyEvents.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
-		vi.stubGlobal(
+		stubGlobal(
 			"fetch",
-			vi.fn(async () => new Response(body, { status: 200 })),
+			mock(async () => new Response(body, { status: 200 })),
 		);
 
 		const stream = streamProxy(
@@ -75,5 +76,55 @@ describe("streamProxy", () => {
 			arguments: { value: "hello" },
 			namespace: "dynamic_tools",
 		});
+	});
+
+	// Regression tests for https://github.com/earendil-works/pi/issues/8996
+	it("processes terminal metadata when the event is not newline-terminated", async () => {
+		const start = `data: ${JSON.stringify({ type: "start" })}\n\n`;
+		const done = `data: ${JSON.stringify({ type: "done", reason: "stop", usage, providerThinkingLevel: "high" })}`;
+		stubGlobal(
+			"fetch",
+			mock(async () => new Response(start + done, { status: 200 })),
+		);
+
+		const stream = streamProxy(
+			model,
+			{ systemPrompt: "", messages: [] },
+			{
+				authToken: "test-token",
+				proxyUrl: "https://proxy.example.com",
+			},
+		);
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of stream) events.push(event);
+		const result = await stream.result();
+
+		expect(events.map((event) => event.type)).toEqual(["start", "done"]);
+		expect(result.stopReason).toBe("stop");
+		expect(result.providerThinkingLevel).toBe("high");
+	});
+
+	it("emits an error instead of hanging when the stream ends without a terminal event", async () => {
+		const body = `data: ${JSON.stringify({ type: "start" })}\n\n`;
+		stubGlobal(
+			"fetch",
+			mock(async () => new Response(body, { status: 200 })),
+		);
+
+		const stream = streamProxy(
+			model,
+			{ systemPrompt: "", messages: [] },
+			{
+				authToken: "test-token",
+				proxyUrl: "https://proxy.example.com",
+			},
+		);
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of stream) events.push(event);
+		const result = await stream.result();
+
+		expect(events.map((event) => event.type)).toEqual(["start", "error"]);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("Connection closed by proxy server");
 	});
 });

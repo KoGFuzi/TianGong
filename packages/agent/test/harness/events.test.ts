@@ -1,65 +1,67 @@
-import { describe, expect, it } from "../bun-test.ts";
-import { type HarnessEvent, HarnessEventBus, type RunEndEvent, type RunStartEvent } from "../../src/harness/events.ts";
+import { describe, expect, it } from "bun:test";
+import { HarnessEventBus } from "../../src/harness/events.ts";
+import type { HarnessEvent } from "../../src/harness/agent-harness.ts";
+import { BACKGROUND_CONTEXT } from "../../src/harness/context.ts";
 
-const runStartEvent: RunStartEvent = {
+const runStartEvent: HarnessEvent = {
 	type: "run_start",
 	lane: "main",
 	runId: "run-1",
+	startedAt: 0,
 };
 
-const runEndEvent: RunEndEvent = {
+const runEndEvent: HarnessEvent = {
 	type: "run_end",
 	lane: "main",
 	runId: "run-1",
-	outcome: "completed",
-	leafId: "entry-1",
+	fromTipId: null,
+	tipId: "entry-1",
+	endedAt: 0,
+	status: "completed",
 };
 
 describe("HarnessEventBus", () => {
-	it("delivers matching events to direct listeners and watchers", () => {
+	it("delivers matching events to direct listeners and watchers", async () => {
 		const events = new HarnessEventBus();
-		const direct: RunStartEvent[] = [];
+		const direct: HarnessEvent[] = [];
 		const watchEvents: HarnessEvent[] = [];
 		const off = events.on("run_start", (event) => {
 			direct.push(event);
 		});
-		const watch = events.watch(() => null);
+		const watch = events.watch(null, () => true, BACKGROUND_CONTEXT);
 		watch.start((event) => {
 			watchEvents.push(event);
 		});
 
-		events.emit(runStartEvent);
-		events.emit(runEndEvent);
+		await events.emit(runStartEvent, BACKGROUND_CONTEXT);
+		await events.emit(runEndEvent, BACKGROUND_CONTEXT);
 		off();
-		events.emit(runStartEvent);
+		await events.emit(runStartEvent, BACKGROUND_CONTEXT);
 
 		expect(direct).toEqual([runStartEvent]);
 		expect(watchEvents).toEqual([runStartEvent, runEndEvent, runStartEvent]);
 	});
 
-	it("captures a snapshot without an event gap, then flushes and delivers live events", () => {
+	it("captures a snapshot without an event gap, then flushes buffered events on start", async () => {
 		const events = new HarnessEventBus();
 		const expectedSnapshot = { leafId: null };
-		const watch = events.watch(() => {
-			const snapshot = expectedSnapshot;
-			events.emit(runStartEvent);
-			return snapshot;
-		});
+		// Events emitted while the snapshot is being captured are buffered, never delivered early.
+		const watch = await events.watchFromSnapshot(async () => {
+			await events.emit(runStartEvent, BACKGROUND_CONTEXT);
+			return expectedSnapshot;
+		}, () => true, BACKGROUND_CONTEXT);
 		const received: HarnessEvent[] = [];
 
 		expect(watch.snapshot).toBe(expectedSnapshot);
-		expect(received).toEqual([]);
 
 		watch.start((event) => {
 			received.push(event);
 		});
-		expect(received).toEqual([runStartEvent]);
-
-		events.emit(runEndEvent);
+		await events.emit(runEndEvent, BACKGROUND_CONTEXT);
 		expect(received).toEqual([runStartEvent, runEndEvent]);
 
 		watch.unsubscribe();
-		events.emit(runStartEvent);
+		await events.emit(runStartEvent, BACKGROUND_CONTEXT);
 		expect(received).toEqual([runStartEvent, runEndEvent]);
 	});
 });

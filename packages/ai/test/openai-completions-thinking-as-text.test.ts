@@ -1,7 +1,7 @@
 import { once } from "node:events";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it } from "./bun-test.ts";
+import { afterEach, describe, expect, it } from "bun:test";
 import { convertMessages, stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import type {
 	AssistantMessage,
@@ -48,7 +48,7 @@ const compat = {
 	supportsLongCacheRetention: true,
 } satisfies Omit<
 	Required<OpenAICompletionsCompat>,
-	"cacheControlFormat" | "deferredToolsMode" | "thinkingTokenBudgetField"
+	"cacheControlFormat" | "deferredToolsMode" | "thinkingTokenBudgetField" | "vllmPriority"
 > & {
 	cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
 	deferredToolsMode?: OpenAICompletionsCompat["deferredToolsMode"];

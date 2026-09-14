@@ -1,12 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "./bun-test.ts";
+import { beforeEach, describe, expect, it } from "bun:test";
+import { mockModule, hoisted } from "./utils/testing.ts";
 import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import type { Context, Model } from "../src/types.ts";
 
-const mockState = vi.hoisted(() => ({
+const mockState = hoisted(() => ({
 	chunks: [] as unknown[],
 }));
 
-vi.mock("openai", () => {
+mockModule("openai", () => {
 	class FakeOpenAI {
 		chat = {
 			completions: {

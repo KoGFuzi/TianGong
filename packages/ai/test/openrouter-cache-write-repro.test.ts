@@ -1,4 +1,4 @@
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { completeSimple, getModel } from "../src/compat.ts";
 
 function createLongSystemPrompt(): string {

@@ -70,6 +70,7 @@ function getBaseUrlFromToken(token: string): string | null {
 	const match = token.match(/proxy-ep=([^;]+)/);
 	if (!match) return null;
 	const proxyHost = match[1];
+	if (!proxyHost) return null;
 	// Convert proxy.xxx to api.xxx
 	const apiHost = proxyHost.replace(/^proxy\./, "api.");
 	return `https://${apiHost}`;
@@ -88,6 +89,18 @@ function getGitHubCopilotBaseUrl(token?: string, enterpriseDomain?: string): str
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+}
+
+function createTimeoutSignal(milliseconds: number): { signal: AbortSignal; cancel: () => void } {
+	const controller = new AbortController();
+	const timeout = setTimeout(
+		() => controller.abort(new DOMException("The operation timed out", "TimeoutError")),
+		milliseconds,
+	);
+	return {
+		signal: controller.signal,
+		cancel: () => clearTimeout(timeout),
+	};
 }
 
 function parseGitHubCopilotModelCatalog(raw: unknown, allowPolicyFallback: boolean) {
@@ -138,30 +151,40 @@ async function fetchWithRateLimitRetry(
 	signal: AbortSignal,
 	retryPolicy: { maxRetries: number; maxElapsedMs: number },
 ): Promise<Response> {
-	const retryBudgetSignal =
+	const retryBudget =
 		retryPolicy.maxRetries > 0 && retryPolicy.maxElapsedMs > 0
-			? AbortSignal.timeout(retryPolicy.maxElapsedMs)
+			? createTimeoutSignal(retryPolicy.maxElapsedMs)
 			: undefined;
-	const requestSignal = retryBudgetSignal ? AbortSignal.any([signal, retryBudgetSignal]) : signal;
-	const retryDeadline = retryBudgetSignal ? Date.now() + retryPolicy.maxElapsedMs : undefined;
-	for (let retry = 0; ; retry++) {
-		const response = await fetch(url, {
-			...init,
-			signal: AbortSignal.any([requestSignal, AbortSignal.timeout(5000)]),
-		});
-		if (response.status !== 429 || retry === retryPolicy.maxRetries) return response;
+	const requestSignal = retryBudget ? AbortSignal.any([signal, retryBudget.signal]) : signal;
+	const retryDeadline = retryBudget ? Date.now() + retryPolicy.maxElapsedMs : undefined;
+	try {
+		for (let retry = 0; ; retry++) {
+			const requestTimeout = createTimeoutSignal(5000);
+			let response: Response;
+			try {
+				response = await fetch(url, {
+					...init,
+					signal: AbortSignal.any([requestSignal, requestTimeout.signal]),
+				});
+			} finally {
+				requestTimeout.cancel();
+			}
+			if (response.status !== 429 || retry === retryPolicy.maxRetries) return response;
 
-		const retryAfter = response.headers.get("retry-after");
-		let delayMs = 500 * 2 ** retry;
-		if (retryAfter) {
-			const seconds = Number.parseFloat(retryAfter);
-			delayMs = Number.isNaN(seconds) ? Date.parse(retryAfter) - Date.now() : seconds * 1000;
-			if (!Number.isFinite(delayMs)) return response;
+			const retryAfter = response.headers.get("retry-after");
+			let delayMs = 500 * 2 ** retry;
+			if (retryAfter) {
+				const seconds = Number.parseFloat(retryAfter);
+				delayMs = Number.isNaN(seconds) ? Date.parse(retryAfter) - Date.now() : seconds * 1000;
+				if (!Number.isFinite(delayMs)) return response;
+			}
+			delayMs = Math.max(0, delayMs);
+			if (retryDeadline !== undefined && delayMs >= retryDeadline - Date.now()) return response;
+			await response.body?.cancel();
+			await sleep(delayMs, requestSignal);
 		}
-		delayMs = Math.max(0, delayMs);
-		if (retryDeadline !== undefined && delayMs >= retryDeadline - Date.now()) return response;
-		await response.body?.cancel();
-		await sleep(delayMs, requestSignal);
+	} finally {
+		retryBudget?.cancel();
 	}
 }
 

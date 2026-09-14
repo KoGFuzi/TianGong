@@ -3,7 +3,13 @@
  */
 
 import type { OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../types.ts";
+import type { ProviderRetryClock } from "../../utils/provider-retry.ts";
 import { pollOAuthDeviceCodeFlow } from "./device-code.ts";
+
+/** Injectable time source for the poll backoff; tests advance it manually. */
+type RetryClockOptions = {
+	clock?: ProviderRetryClock;
+};
 
 const XAI_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 const XAI_SCOPE = "openid profile email offline_access grok-cli:access api:access";
@@ -158,12 +164,17 @@ async function requestDeviceCode(signal: AbortSignal): Promise<XaiDeviceCode> {
 	return parseDeviceCode(response.body);
 }
 
-async function pollForTokens(device: XaiDeviceCode, signal: AbortSignal): Promise<OAuthCredential> {
+async function pollForTokens(
+	device: XaiDeviceCode,
+	signal: AbortSignal,
+	clock: ProviderRetryClock | undefined,
+): Promise<OAuthCredential> {
 	return pollOAuthDeviceCodeFlow<OAuthCredential>({
 		intervalSeconds: device.intervalSeconds,
 		expiresInSeconds: device.expiresInSeconds,
 		waitBeforeFirstPoll: true,
 		signal,
+		clock,
 		poll: async () => {
 			const response = await postForm(
 				XAI_TOKEN_URL,
@@ -198,7 +209,7 @@ async function pollForTokens(device: XaiDeviceCode, signal: AbortSignal): Promis
 	});
 }
 
-async function loginXai(interaction: ProviderAuthInteraction): Promise<OAuthCredential> {
+async function loginXai(interaction: ProviderAuthInteraction, options?: RetryClockOptions): Promise<OAuthCredential> {
 	const device = await requestDeviceCode(interaction.signal);
 	interaction.notify({
 		type: "device_code",
@@ -207,7 +218,7 @@ async function loginXai(interaction: ProviderAuthInteraction): Promise<OAuthCred
 		intervalSeconds: device.intervalSeconds,
 		expiresInSeconds: device.expiresInSeconds,
 	});
-	return pollForTokens(device, interaction.signal);
+	return pollForTokens(device, interaction.signal, options?.clock);
 }
 
 async function refreshXaiToken(refreshToken: string, signal: AbortSignal): Promise<OAuthCredential> {
@@ -226,7 +237,10 @@ async function refreshXaiToken(refreshToken: string, signal: AbortSignal): Promi
 	return credentialsFromTokenResponse(response.body, refreshToken);
 }
 
-export const xaiOAuth: OAuthAuth = {
+/** The optional clock parameter keeps the public `OAuthAuth` shape while letting tests drive polling deterministically. */
+export const xaiOAuth: OAuthAuth & {
+	login(interaction: ProviderAuthInteraction, options?: RetryClockOptions): Promise<OAuthCredential>;
+} = {
 	name: "xAI (Grok/X subscription)",
 	isSubscription: true,
 	loginLabel: "Sign in with SuperGrok or X Premium",

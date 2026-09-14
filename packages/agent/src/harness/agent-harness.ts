@@ -1,1088 +1,622 @@
+import type { JsonRepresentation } from "./json-representation.ts";
 import type {
 	Api,
 	AssistantMessage,
+	AssistantMessageEvent,
+	AssistantMessageFrame,
 	DeferredHandle,
 	ImageContent,
 	Message,
 	Model,
 	Models,
 	RetryPolicy,
-	SimpleStreamOptions,
+	ToolResultMessage,
 	Usage,
 } from "@onepanda-tiangongsec/tg-ai";
-import type { AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../types.ts";
-import type { CompactionSettings } from "./compaction/compaction.ts";
-import { type Result as ResultValue, TaggedError } from "./result.ts";
+import type { AgentMessage, AgentToolResult, QueueMode, ThinkingLevel } from "../types.ts";
+import type { BranchPreparation, BranchSummaryResult } from "./compaction/branch-summarization.ts";
+import type { CompactionPreparation, CompactionSettings, CompactResult } from "./compaction/compaction.ts";
+import type { Context } from "./context.ts";
 import type {
-	BranchSummaryEntry,
-	CompactionEntry,
+	Closed,
+	InvalidMessage,
+	InvalidNavigation,
+	LaneBusy,
+	NoActiveOperation,
+	NothingToCompact,
+	NothingToResume,
+	OperationMismatch,
+	Result,
+	UnknownSkill,
+	UnknownTarget,
+	UnknownTemplate,
+} from "./result.ts";
+
+export {
+	Closed,
+	HarnessClosed,
+	HarnessFault,
+	InvalidLane,
+	InvalidMessage,
+	InvalidNavigation,
+	LaneBusy,
+	NoActiveOperation,
+	NoActiveRun,
+	NothingToCompact,
+	NothingToResume,
+	OperationMismatch,
+	UnknownSkill,
+	UnknownTarget,
+	UnknownTemplate,
+} from "./result.ts";
+export { SliceNotImplemented } from "./runtime/types.ts";
+
+import { createAgentHarness } from "./runtime/harness.ts";
+import type {
+	BranchScan,
 	Entry,
+	EntryProjector,
 	JsonValue,
-	ProvisionedEntry,
-	Register,
+	LaneConfiguration,
+	OperationError,
+	OperationResultRecord,
 	Session,
-	SessionError,
-	SessionTree,
-} from "./session/index.ts";
-import { NOOP_TELEMETRY_CONTEXT } from "@onepanda-tiangongsec/tg-telemetry";
-import type { TelemetryContext } from "./telemetry.ts";
-import { startHarnessSpan } from "./telemetry.ts";
-import type { AgentHarnessResources, PromptTemplate, Skill } from "./types.ts";
-import { Effect, Ref } from "effect";
-import { HarnessStateTag, harnessLayerFromOptions, makeHarnessLayer, runHarness } from "./effect.ts";
-import { buildSessionContext } from "./session/context.ts";
-import {
-	InvalidNavigationTarget,
-	OperationBusy,
-	OperationInvariantViolation,
-	OperationKernelTag,
-	OperationNotFound,
-	QueueItemNotFound,
-	effectSessionOperationStore,
-	makeEffectOperationLayer,
-} from "./operation.ts";
-import { HarnessEventBus } from "./events.ts";
-import { HarnessHookRegistry } from "./hooks.ts";
+	SessionStats,
+	SettledAssistantMessage,
+	UsageRow,
+} from "./session/types.ts";
+import type {
+	AgentHarnessResources,
+	AgentHarnessStreamOptions,
+	AgentHarnessStreamOptionsPatch,
+	AgentHarnessTool,
+	PromptTemplate,
+	Skill,
+} from "./types.ts";
 
-/** Type-level: convert a method that returns `Effect<A, E>` into a method that returns `Promise<A>`.
- * Non-Effect-returning methods are left unchanged. Properties are preserved. */
-type EffectToPromise<T> = T extends Effect.Effect<infer A, infer _E, infer _R>
-	? Promise<A>
-	: T extends Effect.Effect<infer A, infer _E>
-	? Promise<A>
-	: T;
-
-/** Mapped type that converts every method's Effect return to a Promise return. */
-type UnwrapEffects<T> = {
-	[K in keyof T]: T[K] extends (...args: infer A) => infer R
-		? (...args: A) => UnwrapEffectsReturn<R>
-		: T[K];
-};
-type UnwrapEffectsReturn<R> = R extends Effect.Effect<infer A, infer _E, infer _R>
-	? Promise<A>
-	: R extends Effect.Effect<infer A, infer _E>
-	? Promise<A>
-	: R;
-
-const promiseSessionCache = new WeakMap<object, object>();
-
-function sessionToPromise<T extends object>(session: T): UnwrapEffects<T> {
-	const cached = promiseSessionCache.get(session);
-	if (cached) return cached as UnwrapEffects<T>;
-	const proxy = new Proxy(session, {
-		get(target, prop, receiver) {
-			const value = Reflect.get(target, prop, receiver);
-			if (typeof value !== "function") return value;
-			return (...args: unknown[]) => {
-				const result = (value as (...a: unknown[]) => unknown).apply(target, args);
-				if (Effect.isEffect(result)) {
-					return Effect.runPromise(result as Effect.Effect<unknown, unknown, never>);
-				}
-				return result;
-			};
-		},
-	});
-	promiseSessionCache.set(session, proxy);
-	return proxy as UnwrapEffects<T>;
-}
-
-export class LaneBusy extends TaggedError("LaneBusy")<{
-	lane: string;
+/** Convenience-only suspended run observation, constructed when M8 exposes public drive. */
+export interface SuspendedRun {
 	operationId: string;
-	operationKind: "run" | "compaction" | "navigation";
-	message: string;
-}> {}
-export class MissingIdentities extends TaggedError("MissingIdentities")<{
-	lane: string;
-	tools: string[];
-	models: string[];
-	message: string;
-}> {}
-export class NoActiveRun extends TaggedError("NoActiveRun")<{ lane: string; message: string }> {}
-export class NoActiveOperation extends TaggedError("NoActiveOperation")<{ lane: string; message: string }> {}
-export class NothingToResume extends TaggedError("NothingToResume")<{ lane: string; message: string }> {}
-export class InvalidMessage extends TaggedError("InvalidMessage")<{ lane: string; reason: string; message: string }> {}
-export class UnknownSkill extends TaggedError("UnknownSkill")<{ name: string; message: string }> {}
-export class UnknownTemplate extends TaggedError("UnknownTemplate")<{ name: string; message: string }> {}
-export class UnknownTarget extends TaggedError("UnknownTarget")<{ targetId: string; message: string }> {}
-export class UnknownQueueItem extends TaggedError("UnknownQueueItem")<{
-	lane: string;
-	entryId: string;
-	message: string;
-}> {}
-export class LaneExists extends TaggedError("LaneExists")<{ lane: string; message: string }> {}
-export class InvalidLane extends TaggedError("InvalidLane")<{ lane: string; reason: string; message: string }> {}
-export class NothingToCompact extends TaggedError("NothingToCompact")<{ lane: string; message: string }> {}
-export class Closed extends TaggedError("Closed")<{ message: string }> {}
-
-export class HarnessFault extends Error {
-	override readonly cause: unknown;
-
-	constructor(message: string, cause: unknown) {
-		super(message);
-		this.name = "HarnessFault";
-		this.cause = cause;
-	}
+	status: "suspended";
+	deferred: DeferredHandle;
 }
 
-export class HarnessClosed extends Error {
-	constructor() {
-		super("AgentHarness was closed while the operation was active");
-		this.name = "HarnessClosed";
-	}
-}
-
-export class HarnessNotImplemented extends Error {
-	readonly operation: string;
-
-	constructor(operation: string) {
-		super(`AgentHarness.${operation} is not implemented yet`);
-		this.name = "HarnessNotImplemented";
-		this.operation = operation;
-	}
-}
-
-export interface OperationError {
-	code: string;
-	message: string;
-}
-
-export type RunOutcome =
-	| { kind: "completed"; leafId: string; finalEntryId: string; finalMessage: AssistantMessage }
-	| { kind: "aborted"; leafId: string; finalEntryId: string; finalMessage: AssistantMessage }
-	| { kind: "failed"; leafId: string; error: OperationError; finalEntryId?: string; finalMessage?: AssistantMessage }
-	| { kind: "suspended"; leafId: string; finalEntryId: string; deferred: DeferredHandle };
-
-export type CompactionOutcome =
-	| { kind: "completed"; leafId: string; entry: CompactionEntry }
-	| { kind: "declined" | "aborted"; leafId: string }
-	| { kind: "failed"; leafId: string; error: OperationError };
-
-export type NavigationOutcome =
-	| { kind: "completed"; newLeafId: string | null; summaryEntry?: BranchSummaryEntry }
-	| { kind: "declined" | "aborted"; leafId: string | null }
-	| { kind: "failed"; leafId: string | null; error: OperationError };
-
-export type RunRejected = LaneBusy | InvalidMessage | UnknownSkill | UnknownTemplate | Closed | HarnessFault;
-export type CompactionRejected = LaneBusy | NothingToCompact | Closed | HarnessFault;
-export type NavigationRejected = LaneBusy | UnknownTarget | Closed | HarnessFault;
-export type ResumeRejected = LaneBusy | NothingToResume | MissingIdentities | Closed | HarnessFault;
-export type QueueRejected = NoActiveRun | InvalidMessage | Closed | HarnessFault | LaneBusy;
-export type CancelQueuedRejected = UnknownQueueItem | Closed | HarnessFault;
-export type AbortRejected = NoActiveOperation | Closed | HarnessFault;
-
-export type RunResult = ResultValue<{ runId: string } & RunOutcome, RunRejected>;
-export type CompactionResult = ResultValue<{ runId: string } & CompactionOutcome, CompactionRejected>;
-export type NavigationResult = ResultValue<{ runId: string } & NavigationOutcome, NavigationRejected>;
-export type QueueResult = ResultValue<{ entryId: string }, QueueRejected>;
-export type CancelQueuedResult = ResultValue<
-	{ outcome: "cancelled" | "already_consumed" | "already_cleared" },
-	CancelQueuedRejected
+export type RunResult = Result<
+	OperationResultRecord | SuspendedRun,
+	LaneBusy | InvalidMessage | UnknownSkill | UnknownTemplate | Closed
 >;
-export type RecordUsageResult = ResultValue<void, Closed>;
-export type AbortResult = ResultValue<
-	{ runId: string; steer: AgentMessage[]; followUp: AgentMessage[] },
-	AbortRejected
+export type CompactionResult = Result<
+	{ compaction: OperationResultRecord; run?: OperationResultRecord | SuspendedRun },
+	LaneBusy | NothingToCompact | Closed
 >;
-
-export type ResumeOutcome =
-	| ({ operation: "run"; runId: string } & RunOutcome)
-	| ({ operation: "compaction"; runId: string } & CompactionOutcome)
-	| ({ operation: "navigation"; runId: string } & NavigationOutcome);
-export type ResumeResult = ResultValue<ResumeOutcome, ResumeRejected>;
-export type CreateLaneResult = ResultValue<AgentLane, LaneExists | InvalidLane | UnknownTarget | Closed>;
+export type NavigationResult = Result<
+	{ navigation: OperationResultRecord; run?: OperationResultRecord | SuspendedRun },
+	LaneBusy | InvalidNavigation | UnknownTarget | Closed
+>;
+export type ResumeResult = Result<OperationResultRecord | SuspendedRun, NothingToResume | Closed>;
+export type QueueResult = Result<{ entryId: string }, InvalidMessage | Closed>;
+export type CancelQueuedResult = Result<{ kind: "cancelled" | "already_consumed" | "not_found" }, Closed>;
+export type AbortResult = Result<
+	{ operationId: string; steer: AgentMessage[]; followUp: AgentMessage[] },
+	NoActiveOperation | Closed
+>;
+export type RecordUsageResult = Result<{ usageId: string }, Closed>;
 
 export interface NavigateOptions {
 	summarize?: boolean;
-	customInstructions?: string;
 	label?: string;
+	customInstructions?: string;
 }
 
-export interface SuspendedOperation {
-	lane: string;
+export type OperationRequest =
+	| { kind: "prompt"; operationId?: string; prompt: string; images?: ImageContent[] }
+	| { kind: "prompt"; operationId?: string; prompt: AgentMessage | AgentMessage[]; images?: never }
+	| { kind: "skill"; operationId?: string; name: string; additionalInstructions?: string }
+	| { kind: "prompt_template"; operationId?: string; name: string; args?: string[] }
+	| { kind: "compaction"; operationId?: string; customInstructions?: string }
+	| { kind: "navigation"; operationId?: string; targetId: string | null; options?: NavigateOptions };
+
+export interface OperationAdmission {
+	operationId: string;
 	kind: "run" | "compaction" | "navigation";
-	id: string;
 	startedAt: number;
-	reason: "crash" | "deferred";
-	prompt?: AgentMessage[];
-	deferred?: DeferredHandle;
-	aborting?: { steer: AgentMessage[]; followUp: AgentMessage[] };
-	missing: { tools: string[]; models: string[] };
+}
+
+export type OperationAdmissionError =
+	| LaneBusy
+	| InvalidMessage
+	| UnknownSkill
+	| UnknownTemplate
+	| NothingToCompact
+	| InvalidNavigation
+	| UnknownTarget
+	| Closed;
+export type OperationAdmissionResult = Result<OperationAdmission, OperationAdmissionError>;
+
+export interface DriveOptions {
+	operationId: string;
+	waitForRetry?: boolean;
+	pollDeferred?: boolean;
+}
+
+export interface ModelIdentity {
+	provider: string;
+	modelId: string;
+}
+
+export type OperationStatus = "running" | "open" | "aborting";
+
+export interface CurrentOperationInfo {
+	id: string;
+	kind: "run" | "compaction" | "navigation";
+	startedAt: number;
+	status: OperationStatus;
+	capturedModel?: ModelIdentity;
+}
+
+export interface LaneExecutionInfo {
+	lane: string;
+	tipId: string | null;
+	configuredModel: ModelIdentity;
+	current: CurrentOperationInfo | null;
+	lastOperationId: string | null;
+}
+
+export type DriveOutcome =
+	| { kind: "settled"; outcome: OperationResultRecord }
+	| { kind: "waiting"; operationId: string; reason: "retry"; notBefore: number }
+	| { kind: "waiting"; operationId: string; reason: "deferred"; deferred: DeferredHandle };
+export type DriveResult = Result<DriveOutcome, OperationMismatch | Closed>;
+
+export type AbortRequestResult = Result<
+	{
+		operationId: string;
+		newlyRequested: boolean;
+		steer: AgentMessage[];
+		followUp: AgentMessage[];
+	},
+	OperationMismatch | Closed
+>;
+
+export interface WatchHandle<T> {
+	snapshot: T;
+	start(listener: EventListener): void;
+	resnapshot(context: Context): Promise<T>;
+	unsubscribe(): void;
 }
 
 export interface LaneInfo {
 	name: string;
-	leafId: string | null;
-	operation: null | {
-		id: string;
-		kind: "run" | "compaction" | "navigation";
-		status: "running" | "suspended" | "aborting";
-	};
+	tipId: string | null;
+	operation: CurrentOperationInfo | null;
 }
 
-export interface QueuedItem {
-	entryId: string;
-	message: AgentMessage;
+export type LaneSnapshotTool =
+	| {
+			status: "running";
+			toolCallId: string;
+			toolName: string;
+			args: unknown;
+			result?: AgentToolResult<unknown>;
+	  }
+	| {
+			status: "settled";
+			toolCallId: string;
+			toolName: string;
+			args: unknown;
+			result: AgentToolResult<unknown>;
+			isError: boolean;
+	  };
+
+export interface OpenOperation {
+	lane: string;
+	operationId: string;
+	kind: "run" | "compaction" | "navigation";
+	startedAt: number;
+	aborting?: true;
 }
+
+export type LaneQueuedItem =
+	| {
+			entryId: string;
+			kind: "steer" | "followUp" | "nextRun" | "write";
+			type: "message";
+			message: AgentMessage;
+	  }
+	| { entryId: string; kind: "write"; type: "custom"; customType: string; data?: JsonValue };
 
 export interface LaneSnapshot {
 	lane: string;
 	transcript: Entry[];
-	leafId: string | null;
-	operation: LaneInfo["operation"];
-	queues: { steer: QueuedItem[]; followUp: QueuedItem[]; nextRun: QueuedItem[] };
-	pendingWrites: { id: string; entry: ProvisionedEntry }[];
+	tipId: string | null;
+	lastResult?: OperationResultRecord;
+	configuration: LaneConfiguration;
+	stats: SessionStats;
+	operation: null | {
+		id: string;
+		kind: "run" | "compaction" | "navigation";
+		startedAt: number;
+		fromTipId: string | null;
+		status: OperationStatus;
+		retry?: { attempt: number; maxAttempts: number; nextAttemptAt: number };
+		deferred?: { handle: DeferredHandle; poll: number };
+		streamingMessage?: AssistantMessage;
+		runningTools: LaneSnapshotTool[];
+	};
+	queues: LaneQueuedItem[];
 	faulted: boolean;
 }
 
 export interface SessionSnapshot {
-	lanes: (LaneInfo & { suspended?: SuspendedOperation })[];
+	lanes: LaneInfo[];
 	faulted: boolean;
 }
 
-export type ActionInfo =
-	| { kind: "append_entry"; entryType: Entry["type"]; entryId: string }
-	| { kind: "append_record"; recordType: string }
-	| { kind: "move_lane"; to: string | null }
-	| { kind: "set_fact"; fact: "name" | "label" }
-	| { kind: "try_finish_run"; outcome: "completed" | "failed" }
-	| { kind: "finish_operation"; outcome: "completed" | "declined" | "failed" | "aborted" }
-	| { kind: "commit_follow_up" }
-	| { kind: "consume_queue_item"; queue: "steer" | "followUp"; entryId: string }
-	| { kind: "apply_pending_write"; entryId: string }
-	| { kind: "stream_assistant"; step: "assistant" | "compaction" | "branch_summary"; attempt: number }
-	| { kind: "execute_tool"; toolCallId: string; toolName: string }
-	| { kind: "fetch_deferred" | "cancel_deferred"; provider: string; id: string }
-	| { kind: "hook"; name: HookName }
-	| { kind: "sleep"; delayMs: number };
+export type HarnessEventPayload =
+	| { type: "run_start"; runId: string; startedAt: number }
+	| { type: "run_resume"; runId: string }
+	| { type: "run_suspend"; runId: string; reason: "deferred"; deferred: DeferredHandle; poll: number }
+	| { type: "operation_abort"; operationId: string; steer: AgentMessage[]; followUp: AgentMessage[] }
+	| ({ type: "run_end"; runId: string; fromTipId: string | null; tipId: string | null; endedAt: number } & (
+			| { status: "completed" | "aborted"; error?: never }
+			| { status: "failed"; error: OperationError }
+	  ))
+	| { type: "fault"; code: string; message: string }
+	| ({ type: "handler_error"; error: string; stack?: string } & (
+			| { kind: "hook"; hook: string }
+			| { kind: "event"; event: string }
+	  ))
+	| { type: "turn_start"; runId: string; turnId: string }
+	| {
+			type: "turn_end";
+			runId: string;
+			turnId: string;
+			message: AssistantMessage;
+			toolResults: ToolResultMessage[];
+	  }
+	| {
+			type: "retry_scheduled";
+			runId: string;
+			step: string;
+			attempt: number;
+			maxAttempts: number;
+			delayMs: number;
+			notBefore: number;
+			errorMessage: string;
+	  }
+	| { type: "retry_start"; runId: string; step: string; attempt: number }
+	| {
+			type: "retry_end";
+			runId: string;
+			step: string;
+			attempt: number;
+			success: boolean;
+			finalError?: string;
+	  }
+	| { type: "message_start"; runId?: string; message: AgentMessage }
+	| {
+			type: "message_update";
+			runId: string;
+			message: AgentMessage;
+			event: AssistantMessageEvent;
+			frame?: AssistantMessageFrame;
+	  }
+	| { type: "message_end"; runId?: string; message: AgentMessage; entryId?: string }
+	| {
+			type: "tool_start";
+			runId: string;
+			turnId: string;
+			toolCallId: string;
+			toolName: string;
+			args: unknown;
+	  }
+	| {
+			type: "tool_update";
+			runId: string;
+			turnId: string;
+			toolCallId: string;
+			toolName: string;
+			partialResult: AgentToolResult<unknown>;
+	  }
+	| {
+			type: "tool_end";
+			runId: string;
+			turnId: string;
+			toolCallId: string;
+			toolName: string;
+			result: AgentToolResult<unknown>;
+			isError: boolean;
+			terminate: boolean;
+	  }
+	| { type: "entry_added"; entry: Entry }
+	| { type: "queue_update"; queues: LaneQueuedItem[] }
+	| ({ type: "value_update" } & (
+			| { value: "session_name"; name: string | undefined }
+			| { value: "entry_label"; targetId: string; label: string | undefined }
+	  ))
+	| ({ type: "config_update" } & (
+			| {
+					property: "model";
+					value: { provider: string; modelId: string };
+					previous: unknown;
+			  }
+			| { property: "thinkingLevel"; value: ThinkingLevel; previous: ThinkingLevel }
+			| { property: "activeTools"; value: string[]; previous: string[] }
+			| { property: "tools" | "resources" }
+			| {
+					property: "streamOptions";
+					value: AgentHarnessStreamOptions;
+					previous: AgentHarnessStreamOptions;
+			  }
+			| { property: "retryPolicy"; value: RetryPolicy; previous: RetryPolicy }
+			| { property: "compactionSettings"; value: CompactionSettings; previous: CompactionSettings }
+			| { property: "steeringMode"; value: QueueMode; previous: QueueMode }
+			| { property: "followUpMode"; value: QueueMode; previous: QueueMode }
+	  ))
+	| {
+			type: "compaction_start";
+			runId: string;
+			reason: "manual" | "threshold" | "overflow";
+			startedAt: number;
+	  }
+	| ({ type: "compaction_end"; runId: string; reason: "manual" | "threshold" | "overflow"; endedAt: number } & (
+			| { status: "completed"; entryId: string; error?: never }
+			| { status: "declined" | "aborted"; entryId?: never; error?: never }
+			| { status: "failed"; entryId?: never; error: OperationError }
+	  ))
+	| { type: "navigation_start"; runId: string; targetId: string | null; startedAt: number }
+	| ({ type: "navigation_end"; runId: string; fromTipId: string | null; tipId: string | null; endedAt: number } & (
+			| { status: "completed" | "declined" | "aborted"; error?: never }
+			| { status: "failed"; error: OperationError }
+	  ))
+	| { type: "lane_created"; at: string | null }
+	| { type: "usage"; lane: string; row: UsageRow; totals: Usage };
 
-export type HookName =
-	| "before_run"
-	| "before_resume"
-	| "before_run_end"
-	| "transform_context"
-	| "before_request"
-	| "before_payload"
-	| "after_response"
-	| "before_tool"
-	| "after_tool"
-	| "before_compaction"
-	| "before_navigation";
+export type SpecialEventPayload = Extract<
+	HarnessEventPayload,
+	{ type: "fault" | "value_update" | "usage" | "config_update" | "handler_error" }
+>;
+export type LaneEventPayload = Exclude<HarnessEventPayload, SpecialEventPayload>;
+export type ConfigEventPayload = Extract<HarnessEventPayload, { type: "config_update" }>;
+export type LaneConfigEventPayload = Extract<
+	ConfigEventPayload,
+	{ property: "model" | "thinkingLevel" | "activeTools" }
+>;
+export type GlobalConfigEventPayload = Exclude<ConfigEventPayload, LaneConfigEventPayload>;
+export type HandlerErrorPayload = Extract<HarnessEventPayload, { type: "handler_error" }>;
 
-export interface Hooks {
-	on(name: HookName, handler: (event: unknown) => unknown | Promise<unknown>, options?: { id?: string }): () => void;
-}
+export type HarnessEvent =
+	| (LaneEventPayload & { lane: string; recovery?: true })
+	| (LaneConfigEventPayload & { lane: string; recovery?: true })
+	| (Extract<HarnessEventPayload, { type: "fault" | "value_update" }> & {
+			lane?: never;
+			recovery?: never;
+	  })
+	| (Extract<HarnessEventPayload, { type: "usage" }> & { recovery?: never })
+	| (GlobalConfigEventPayload & { lane?: never; recovery?: never })
+	| (HandlerErrorPayload & ({ lane: string; recovery?: true } | { lane?: never; recovery?: never }));
+
+type LaneWatchSourceEvent =
+	| Exclude<
+			HarnessEvent,
+			| { type: "handler_error" | "turn_start" | "turn_end" | "value_update" | "lane_created" | "message_update" }
+			| ({ type: "config_update" } & { property: string })
+	  >
+	| Extract<HarnessEvent, { type: "config_update"; property: "model" | "thinkingLevel" | "activeTools" }>
+	| Omit<Extract<HarnessEvent, { type: "message_update" }>, "event">;
+
+/** Strict-JSON snapshot representation published to remote transcript consumers. */
+export type LaneTranscriptSnapshot = JsonRepresentation<LaneSnapshot>;
+/** Reducer-relevant strict-JSON Harness events published to remote transcript consumers. */
+export type LaneWatchEvent = JsonRepresentation<LaneWatchSourceEvent>;
+
+export type HarnessEventType = HarnessEvent["type"];
+export type EventListener<TEvent extends HarnessEvent = HarnessEvent> = (
+	event: TEvent,
+	context: Context,
+) => void | Promise<void>;
 
 export interface Events {
-	on(type: string, listener: (event: unknown) => void | Promise<void>): () => void;
+	on<TType extends HarnessEventType>(
+		type: TType,
+		listener: EventListener<Extract<HarnessEvent, { type: TType }>>,
+	): () => void;
 }
 
-class UnavailableRegistry implements Hooks, Events {
-	private readonly operation: string;
-	private readonly isClosed: () => boolean;
-
-	constructor(operation: string, isClosed: () => boolean) {
-		this.operation = operation;
-		this.isClosed = isClosed;
-	}
-
-	on(
-		_name: HookName | string,
-		_handler: (event: unknown) => unknown | Promise<unknown>,
-		_options?: { id?: string },
-	): () => void {
-		throw this.isClosed() ? new HarnessClosed() : new HarnessNotImplemented(this.operation);
-	}
-}
-
-export type HarnessTool = AgentTool & { replay?: "never" | "safe" };
 export type Resources = AgentHarnessResources<Skill, PromptTemplate>;
-export type StreamOptions = SimpleStreamOptions;
-export type StreamOptionsPatch = Partial<SimpleStreamOptions>;
-export type EntryProjector = (entry: Entry) => AgentMessage[] | Promise<AgentMessage[]>;
 
-export interface AgentHarnessOptions {
+type VoidHookResult = ReturnType<() => void>;
+
+export interface HookMap {
+	before_run: {
+		event: { prompt: AgentMessage[]; resources: Resources };
+		result: { messages?: AgentMessage[] } | undefined;
+	};
+	before_drive: {
+		event: { operation: "run" | "compaction" | "navigation" };
+		result: VoidHookResult;
+	};
+	before_run_end: {
+		event: { runId: string; messages: AgentMessage[] };
+		result: { followUp?: string } | undefined;
+	};
+	transform_context: {
+		event: { messages: AgentMessage[]; systemPrompt: string };
+		result: { messages?: AgentMessage[]; systemPrompt?: string } | undefined;
+	};
+	before_request: {
+		event: {
+			model: Model<Api>;
+			step: "assistant" | "deferred" | "compaction" | "branch_summary";
+			attempt: number;
+			streamOptions: AgentHarnessStreamOptions;
+		};
+		result: { streamOptions?: AgentHarnessStreamOptionsPatch } | undefined;
+	};
+	before_payload: {
+		event: { model: Model<Api>; payload: unknown };
+		result: { payload: unknown } | undefined;
+	};
+	after_response: {
+		event: { status?: number; headers?: Record<string, string>; message: SettledAssistantMessage };
+		result: { message?: SettledAssistantMessage } | undefined;
+	};
+	before_tool: {
+		event: { toolCallId: string; toolName: string; args: Record<string, JsonValue> };
+		result: { args?: Record<string, JsonValue>; block?: { reason: string; terminate?: boolean } } | undefined;
+	};
+	after_tool: {
+		event: {
+			toolCallId: string;
+			toolName: string;
+			args: Record<string, JsonValue>;
+			content: AgentToolResult<unknown>["content"];
+			details?: JsonValue;
+			isError: boolean;
+			usage?: Usage;
+		};
+		result:
+			| {
+					content?: AgentToolResult<unknown>["content"];
+					details?: JsonValue;
+					isError?: boolean;
+					usage?: Usage;
+					terminate?: boolean;
+			  }
+			| undefined;
+	};
+	before_compaction: {
+		event: {
+			reason: "manual" | "threshold" | "overflow";
+			preparation: CompactionPreparation;
+			customInstructions?: string;
+		};
+		result: { decline?: boolean; compaction?: CompactResult } | undefined;
+	};
+	before_navigation: {
+		event: { targetId: string; preparation: BranchPreparation; customInstructions?: string };
+		result: { decline?: boolean; summary?: BranchSummaryResult } | undefined;
+	};
+}
+
+export type HookName = keyof HookMap;
+export type HookInvocation<TName extends HookName> = HookMap[TName]["event"] & {
+	lane: string;
+	runId: string;
+};
+export type HookHandler<TName extends HookName> = (
+	event: HookInvocation<TName>,
+	context: Context,
+) => Promise<HookMap[TName]["result"]> | HookMap[TName]["result"];
+
+export interface Hooks {
+	on<TName extends HookName>(name: TName, handler: HookHandler<TName>, options?: { id?: string }): () => void;
+}
+
+export type { EntryProjector } from "./session/types.ts";
+
+export interface AgentHarnessOptions<TContext extends object | undefined = object | undefined> {
 	session: Session;
 	models: Models;
 	model: Model<Api>;
 	thinkingLevel?: ThinkingLevel;
 	activeToolNames?: string[];
-	tools?: HarnessTool[];
-	toolContext?: object | (() => object | Promise<object>);
-	systemPrompt?: string | (() => string | Promise<string>);
+	tools?: AgentHarnessTool<TContext>[];
+	toolContext?: TContext | ((context: Context) => TContext | Promise<TContext>);
+	systemPrompt?: string | ((toolContext: TContext, context: Context) => string | Promise<string>);
 	resources?: Resources;
-	streamOptions?: StreamOptions;
+	streamOptions?: AgentHarnessStreamOptions;
 	retry?: RetryPolicy;
 	compaction?: CompactionSettings;
 	steeringMode?: QueueMode;
 	followUpMode?: QueueMode;
 	toolExecution?: "sequential" | "parallel";
-	drive?: "automatic" | "manual";
-	toProviderMessages?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
+	toProviderMessages?: (messages: AgentMessage[], context: Context) => Message[] | Promise<Message[]>;
 	entryProjectors?: Record<string, EntryProjector>;
-	context?: TelemetryContext;
-	/** Internal lane selector used by lane-scoped facades. */
-	laneName?: string;
-}
-
-export interface WatchHandle<TSnapshot> {
-	snapshot: TSnapshot;
-	start(listener: (event: unknown) => void): void;
-	unsubscribe(): void;
 }
 
 export interface AgentLane {
 	readonly name: string;
-	getLeafId(): Promise<string | null>;
-	prompt(text: string, images?: ImageContent[]): Promise<RunResult>;
-	prompt(message: AgentMessage | AgentMessage[]): Promise<RunResult>;
-	skill(name: string, additionalInstructions?: string): Promise<RunResult>;
-	promptFromTemplate(name: string, args?: string[]): Promise<RunResult>;
-	compact(options?: { customInstructions?: string }): Promise<CompactionResult>;
-	navigateTree(targetId: string | null, options?: NavigateOptions): Promise<NavigationResult>;
-	resume(): Promise<ResumeResult>;
-	abort(): Promise<AbortResult>;
-	steer(text: string, images?: ImageContent[]): Promise<QueueResult>;
-	steer(message: AgentMessage): Promise<QueueResult>;
-	followUp(text: string, images?: ImageContent[]): Promise<QueueResult>;
-	followUp(message: AgentMessage): Promise<QueueResult>;
-	nextRun(text: string, images?: ImageContent[]): Promise<QueueResult>;
-	nextRun(message: AgentMessage): Promise<QueueResult>;
-	cancelQueued(entryId: string): Promise<CancelQueuedResult>;
-	recordUsage(usage: Usage, options?: { entryId?: string; details?: JsonValue }): Promise<RecordUsageResult>;
-	waitForIdle(): Promise<void>;
-	runWhenIdle(callback: () => void | Promise<void>): Promise<void>;
-	peekAction(): Promise<ActionInfo | undefined>;
-	executeAction(): Promise<ActionInfo | undefined>;
-	runToCompletion(): Promise<void>;
-	getModel(): Promise<Model<Api>>;
-	setModel(model: Model<Api>): Promise<void>;
-	getThinkingLevel(): Promise<ThinkingLevel>;
-	setThinkingLevel(level: ThinkingLevel): Promise<void>;
-	getActiveTools(): Promise<string[]>;
-	setActiveTools(names: string[]): Promise<void>;
-	readonly session: SessionTree;
-	watch(): Promise<WatchHandle<LaneSnapshot>>;
+	getTipId(context: Context): Promise<string | null>;
+	findEntries(query: BranchScan | undefined, context: Context): Promise<Entry[]>;
+	findEntry(query: BranchScan | undefined, context: Context): Promise<Entry | undefined>;
+	appendMessage(message: AgentMessage, context: Context): Promise<string>;
+	appendCustomEntry(customType: string, data: JsonValue | undefined, context: Context): Promise<string>;
+	getResult(operationId: string, context: Context): Promise<OperationResultRecord | undefined>;
+	accept(request: OperationRequest, context: Context): Promise<OperationAdmissionResult>;
+	drive(options: DriveOptions, context: Context): Promise<DriveResult>;
+	requestAbort(operationId: string, context: Context): Promise<AbortRequestResult>;
+	inspectExecution(context: Context): Promise<LaneExecutionInfo>;
+	prompt(text: string, images: ImageContent[] | undefined, context: Context): Promise<RunResult>;
+	prompt(message: AgentMessage | AgentMessage[], context: Context): Promise<RunResult>;
+	skill(name: string, additionalInstructions: string | undefined, context: Context): Promise<RunResult>;
+	promptFromTemplate(name: string, args: string[] | undefined, context: Context): Promise<RunResult>;
+	compact(options: { customInstructions?: string } | undefined, context: Context): Promise<CompactionResult>;
+	navigateTree(
+		targetId: string | null,
+		options: NavigateOptions | undefined,
+		context: Context,
+	): Promise<NavigationResult>;
+	resume(context: Context): Promise<ResumeResult>;
+	abort(context: Context): Promise<AbortResult>;
+	steer(message: string | AgentMessage, images: ImageContent[] | undefined, context: Context): Promise<QueueResult>;
+	followUp(message: string | AgentMessage, images: ImageContent[] | undefined, context: Context): Promise<QueueResult>;
+	nextRun(message: string | AgentMessage, images: ImageContent[] | undefined, context: Context): Promise<QueueResult>;
+	cancelQueued(entryId: string, context: Context): Promise<CancelQueuedResult>;
+	recordUsage(
+		usage: Usage,
+		options: { entryId?: string; details?: JsonValue } | undefined,
+		context: Context,
+	): Promise<RecordUsageResult>;
+	waitForIdle(context: Context): Promise<void>;
+	runWhenIdle(callback: (context: Context) => void | Promise<void>, context: Context): Promise<void>;
+	getModel(context: Context): Promise<Model<Api> | undefined>;
+	setModel(model: ModelIdentity, context: Context): Promise<void>;
+	getThinkingLevel(context: Context): Promise<ThinkingLevel>;
+	setThinkingLevel(level: ThinkingLevel, context: Context): Promise<void>;
+	getActiveTools(context: Context): Promise<string[]>;
+	setActiveTools(names: string[], context: Context): Promise<void>;
+	watch(context: Context): Promise<WatchHandle<LaneSnapshot>>;
 }
 
-export class AgentHarness implements AgentLane {
-	private readonly laneName: string;
-	private readonly constructionOptions: AgentHarnessOptions;
-	get name(): string { return this.laneName; }
-	readonly session: SessionTree;
-	readonly hooks: HarnessHookRegistry;
-	readonly events: HarnessEventBus;
-	private readonly durableSession: UnwrapEffects<Session>;
-	private model: Model<Api>;
-	private thinkingLevel: ThinkingLevel;
-	private activeToolNames: string[];
-	private tools: HarnessTool[];
-	private resources: Resources;
-	private streamOptions: StreamOptions;
-	private retryPolicy: RetryPolicy;
-	private compactionSettings: CompactionSettings;
-	private steeringMode: QueueMode;
-	private followUpMode: QueueMode;
-	private closed = false;
-	private readonly telemetryContext: TelemetryContext;
-	private readonly effectLayer: ReturnType<typeof makeHarnessLayer>;
-	private readonly operationLayer: ReturnType<typeof makeEffectOperationLayer>;
-	private readonly effectOperationStore: import("./operation.ts").EffectOperationStore;
-	private readonly entryProjectors?: Record<string, EntryProjector>;
-
-	private constructor(options: AgentHarnessOptions) {
-		this.constructionOptions = options;
-		this.laneName = options.laneName ?? "main";
-		this.entryProjectors = options.entryProjectors;
-		this.durableSession = sessionToPromise(options.session);
-		const mainView = options.session.view(this.laneName);
-		this.session = mainView === options.session ? options.session : (this.durableSession as unknown as SessionTree);
-		this.telemetryContext = options.context ?? NOOP_TELEMETRY_CONTEXT;
-		this.hooks = new HarnessHookRegistry(() => new HarnessClosed());
-		this.events = new HarnessEventBus(() => new HarnessClosed());
-		this.model = options.model;
-		this.thinkingLevel = options.thinkingLevel ?? "off";
-		this.activeToolNames = [...(options.activeToolNames ?? options.tools?.map((tool) => tool.name) ?? [])];
-		this.tools = [...(options.tools ?? [])];
-		this.resources = {
-			skills: options.resources?.skills ? [...options.resources.skills] : undefined,
-			promptTemplates: options.resources?.promptTemplates ? [...options.resources.promptTemplates] : undefined,
-		};
-		this.streamOptions = { ...(options.streamOptions ?? {}) };
-		this.retryPolicy = options.retry ?? { enabled: false, maxRetries: 0, baseDelayMs: 1000 };
-		this.compactionSettings = options.compaction ?? {
-			enabled: true,
-			reserveTokens: 16384,
-			keepRecentTokens: 20000,
-		};
-		this.steeringMode = options.steeringMode ?? "one-at-a-time";
-		this.followUpMode = options.followUpMode ?? "one-at-a-time";
-		this.effectLayer = makeHarnessLayer({
-			session: options.session,
-			models: options.models,
-			model: options.model,
-			tools: this.tools,
-			resources: this.resources,
-			thinkingLevel: this.thinkingLevel,
-			activeToolNames: this.activeToolNames,
-			streamOptions: this.streamOptions,
-			retryPolicy: this.retryPolicy,
-			compaction: this.compactionSettings,
-			steeringMode: this.steeringMode,
-			followUpMode: this.followUpMode,
-		});
-		const effectSession = options.session;
-		const self = this;
-		this.effectOperationStore = effectSessionOperationStore(effectSession);
-		this.operationLayer = makeEffectOperationLayer(
-			this.effectOperationStore,
-			{
-				prepareMessages: ({ lane, prompt }) =>
-					Effect.tryPromise({
-						try: async () => {
-							const entries = await Effect.runPromise(effectSession.findEntries({ order: "oldestFirst" }));
-							const context = buildSessionContext(entries as never);
-							const projected = self.entryProjectors
-								? await Promise.all(entries.filter((e) => e.type === "custom").map((entry) => self.entryProjectors![entry.customType]?.(entry) ?? []))
-								: [];
-							return [...context.messages, ...projected.flatMap((m) => m ?? []), ...prompt] as readonly AgentMessage[];
-						},
-						catch: (cause) => cause,
-					}),
-				generate: ({ model, messages }) =>
-					Effect.tryPromise({
-						try: async () => {
-							const response = await options.models.completeSimple(
-								model,
-								{ messages: [...messages] as Message[] },
-								this.streamOptions,
-							);
-							return { message: response, usage: response.usage };
-						},
-						catch: (cause) => cause,
-					}),
-				summarize: (preparation, customInstructions) =>
-					Effect.tryPromise({
-						try: async () => {
-							const { compact } = await import("./compaction/compaction.ts");
-							const summary = await compact(
-								preparation,
-								options.models,
-								options.model,
-								customInstructions,
-								undefined,
-								this.thinkingLevel,
-								this.retryPolicy,
-							);
-							if (!summary.ok) {
-								return { ok: false as const, error: { code: "compaction", message: summary.error.message } };
-							}
-							return { ok: true as const, result: summary.value };
-						},
-						catch: (cause) => cause,
-					}),
-				summarizeBranch: (entries, tokenBudget) =>
-					Effect.tryPromise({
-						try: async () => {
-							const { generateBranchSummary } = await import("./compaction/branch-summarization.ts");
-							const arr = [...entries.values()];
-							const out = await generateBranchSummary(arr, {
-								models: options.models,
-								model: options.model,
-								signal: new AbortController().signal,
-								reserveTokens: Math.max(0, (options.model.contextWindow || 128000) - tokenBudget),
-							});
-							if (!out.ok) return { error: { code: "branch_summary", message: out.error.message } };
-							return { summary: out.value.summary };
-						},
-						catch: (cause) => cause,
-					}),
-				executeTool: ({ toolCallId, name, args }) =>
-					Effect.tryPromise({
-						try: async () => {
-							const tool = this.tools.find((t: HarnessTool) => t.name === name);
-							if (!tool) {
-								return { result: { content: [{ type: "text", text: `Tool not registered: ${name}` }], details: {} }, isError: true };
-							}
-							const prepared = tool.prepareArguments ? tool.prepareArguments(args) : args;
-							const result = await tool.execute(toolCallId, prepared as never, undefined, undefined);
-							return { result, isError: false };
-						},
-						catch: (cause) => cause,
-					}),
-				toolReplay: (name) => this.tools.find((tool: HarnessTool) => tool.name === name)?.replay,
-				fetchDeferred: ({ handle }) =>
-					Effect.tryPromise({
-						try: async () => {
-							const message = await options.models.fetchDeferred(options.model, handle as DeferredHandle, { wait: 0 });
-							return { message, pending: message.stopReason === "deferred" };
-						},
-						catch: (cause) => cause,
-					}),
-				cancelDeferred: (handle) =>
-					Effect.tryPromise({
-						try: async () => {
-							await options.models.cancelDeferred(options.model, handle as DeferredHandle);
-						},
-						catch: (cause) => cause,
-					}),
-			},
-			options.model,
-		);
-	}
-
-	static async create(
-		options: AgentHarnessOptions,
-	): Promise<{ harness: AgentHarness; suspended: SuspendedOperation[] }> {
-		return runHarness(AgentHarness.createEffect(options), harnessLayerFromOptions(options));
-	}
-
-	/** Effect v4 entry point. Promise APIs below are compatibility adapters. */
-	static readonly createEffect = (options: AgentHarnessOptions) =>
-		Effect.tryPromise({
-			try: async () => {
-				return { harness: new AgentHarness(options), suspended: [] };
-			},
-			catch: (error) => error,
-		});
-
-	readonly closeEffect = Effect.sync(() => {
-		this.closed = true;
-		this.hooks.close();
-		this.events.close();
-	});
-
-	private unavailable<T>(operation: string): Promise<T> {
-		// skill/promptFromTemplate/watch/watchSession require event-system plumbing
-		// (TypedEmitter/subscribe) that is deferred to a future phase.
-		return Promise.reject(this.closed ? new HarnessClosed() : new HarnessNotImplemented(operation));
-	}
-
-	async getLeafId(): Promise<string | null> {
-		return this.durableSession.getLeafId();
-	}
-
-	async prompt(_text: string, _images?: ImageContent[]): Promise<RunResult>;
-	async prompt(_message: AgentMessage | AgentMessage[]): Promise<RunResult>;
-	async prompt(input: string | AgentMessage | AgentMessage[], images?: ImageContent[]): Promise<RunResult> {
-		if (this.closed) return { ok: false, error: new Closed({ message: "AgentHarness is closed" }) };
-		const prompt = typeof input === "string"
-			? [{ role: "user", content: [{ type: "text", text: input }, ...(images ?? [])], timestamp: Date.now() } satisfies AgentMessage]
-			: Array.isArray(input)
-				? input
-				: [input];
-		if (prompt.length === 0) {
-			return { ok: false, error: new InvalidMessage({ lane: this.name, reason: "prompt must contain at least one message", message: "Invalid prompt" }) };
-		}
-		const operationId = crypto.randomUUID();
-		try {
-			const sessionId = (await this.durableSession.getMetadata()).id;
-			return await startHarnessSpan(this.telemetryContext, "pi.harness.run", {
-				"pi.session.id": sessionId,
-				"pi.lane.name": this.name,
-				"pi.operation.id": operationId,
-				"pi.operation.recovery": false,
-				"pi.operation.kind": "run",
-			}, async (span) => {
-				await this.hooks.run("before_run", { lane: this.name, prompt: structuredClone(prompt) });
-				this.events.emit({ type: "run_start", lane: this.name, runId: operationId });
-				const result = await Effect.runPromise(
-					Effect.provide(Effect.service(OperationKernelTag).pipe(
-						Effect.flatMap((kernel) => Effect.flatMap(kernel.accept(this.name, prompt, { operationId }), () => kernel.resume(this.name))),
-					), this.operationLayer) as Effect.Effect<import("./operation.ts").OperationResult, unknown, never>,
-				);
-				span.setAttributes({ "pi.operation.outcome": result.outcome === "declined" ? "failed" : result.outcome });
-				this.events.emit({
-					type: "run_end",
-					lane: this.name,
-					runId: result.operationId,
-					outcome: result.outcome === "declined" ? "failed" : result.outcome,
-					leafId: result.leafId ?? "",
-				});
-				if (result.outcome === "completed" && result.finalMessage) {
-					return { ok: true, value: { runId: result.operationId, kind: "completed", leafId: result.leafId ?? "", finalEntryId: result.leafId ?? "", finalMessage: result.finalMessage } };
-				}
-				return { ok: true, value: { runId: result.operationId, kind: "failed", leafId: result.leafId ?? "", error: result.error ?? { code: "operation_failed", message: "Operation failed" } } };
-			});
-		} catch (error) {
-			if ((error as Error & { _tag?: string })._tag === "OperationBusy") {
-				const busy = error as unknown as { operationId: string; kind: "run" | "compaction" | "navigation" };
-				return { ok: false, error: new LaneBusy({ lane: this.name, operationId: busy.operationId, operationKind: busy.kind, message: "Lane is busy" }) };
-			}
-			throw error;
-		}
-	}
-	async skill(name: string, additionalInstructions?: string): Promise<RunResult> {
-		if (this.closed) return { ok: false, error: new Closed({ message: "AgentHarness is closed" }) };
-		const skill = this.resources.skills?.find((s) => s.name === name);
-		if (!skill) return { ok: false, error: new UnknownSkill({ name, message: `Skill not found: ${name}` }) };
-		const { formatSkillInvocation } = await import("./skills.ts");
-		const skillText = formatSkillInvocation(skill, additionalInstructions);
-		return this.prompt(skillText);
-	}
-	async promptFromTemplate(name: string, args?: string[]): Promise<RunResult> {
-		if (this.closed) return { ok: false, error: new Closed({ message: "AgentHarness is closed" }) };
-		const template = this.resources.promptTemplates?.find((t) => t.name === name);
-		if (!template) return { ok: false, error: new UnknownTemplate({ name, message: `Template not found: ${name}` }) };
-		const { formatPromptTemplateInvocation } = await import("./prompt-templates.ts");
-		const text = formatPromptTemplateInvocation(template, args);
-		return this.prompt(text);
-	}
-	async compact(_options?: { customInstructions?: string }): Promise<CompactionResult> {
-		if (this.closed) return { ok: false, error: new Closed({ message: "AgentHarness is closed" }) };
-		try {
-			const operationId = crypto.randomUUID();
-			const sessionId = (await this.durableSession.getMetadata()).id;
-			const meta = await startHarnessSpan(this.telemetryContext, "pi.harness.compaction", {
-				"pi.session.id": sessionId,
-				"pi.lane.name": this.name,
-				"pi.operation.id": operationId,
-				"pi.operation.recovery": false,
-				"pi.operation.kind": "compaction",
-			}, async (span) => {
-				await this.hooks.run("before_compaction", { lane: this.name, customInstructions: _options?.customInstructions });
-				this.events.emit({ type: "compaction_start", lane: this.name, runId: operationId, reason: "manual" });
-				const outcome = await Effect.runPromise(
-					Effect.provide(Effect.service(OperationKernelTag).pipe(
-						Effect.flatMap((k) => Effect.flatMap(k.acceptCompaction(this.name, _options?.customInstructions, { operationId }), () => k.resume(this.name))),
-					), this.operationLayer) as Effect.Effect<import("./operation.ts").OperationResult, unknown, never>,
-				);
-				span.setAttributes({ "pi.operation.outcome": outcome.outcome });
-				return outcome;
-			});
-			if (meta.outcome === "completed") {
-				const entry = meta.leafId ? await this.session.getEntry(meta.leafId) : undefined;
-				this.events.emit({ type: "compaction_end", lane: this.name, runId: meta.operationId, reason: "manual", outcome: "completed", entry });
-				return { ok: true, value: { runId: meta.operationId, kind: "completed", leafId: meta.leafId ?? "", entry: entry as unknown as CompactionEntry } };
-			}
-			if (meta.outcome === "declined") {
-				return { ok: true, value: { runId: meta.operationId, kind: "declined", leafId: meta.leafId ?? "" } };
-			}
-			if (meta.outcome === "failed") {
-				return { ok: true, value: { runId: meta.operationId, kind: "failed", leafId: meta.leafId ?? "", error: meta.error ?? { code: "compact_failed", message: "Compaction failed" } } };
-			}
-			return { ok: true, value: { runId: meta.operationId, kind: "aborted", leafId: meta.leafId ?? "" } };
-		} catch (e) {
-			if (e instanceof NothingToCompact) return { ok: false, error: new NothingToCompact({ lane: this.name, message: "Nothing to compact" }) };
-			if (e instanceof OperationBusy) return { ok: false, error: new LaneBusy({ lane: this.name, operationId: e.operationId, operationKind: e.kind, message: "Lane is busy" }) };
-			return { ok: false, error: new HarnessFault((e as Error).message ?? String(e), e) };
-		}
-	}
-	async navigateTree(_targetId: string | null, _options?: NavigateOptions): Promise<NavigationResult> {
-		if (this.closed) return { ok: false, error: new Closed({ message: "AgentHarness is closed" }) };
-		try {
-			const operationId = crypto.randomUUID();
-			const sessionId = (await this.durableSession.getMetadata()).id;
-			const meta = await startHarnessSpan(this.telemetryContext, "pi.harness.navigation", {
-				"pi.session.id": sessionId,
-				"pi.lane.name": this.name,
-				"pi.operation.id": operationId,
-				"pi.operation.recovery": false,
-				"pi.operation.kind": "navigation",
-			}, async (span) => {
-				await this.hooks.run("before_navigation", { lane: this.name, targetId: _targetId, options: _options });
-				this.events.emit({ type: "navigation_start", lane: this.name, runId: operationId, targetId: _targetId });
-				const outcome = await Effect.runPromise(
-					Effect.provide(Effect.service(OperationKernelTag).pipe(
-						Effect.flatMap((k) => Effect.flatMap(k.acceptNavigation(this.name, _targetId, { summarize: _options?.summarize, label: _options?.label, customInstructions: _options?.customInstructions, operationId }), () => k.resume(this.name))),
-					), this.operationLayer) as Effect.Effect<import("./operation.ts").OperationResult, unknown, never>,
-				);
-				span.setAttributes({ "pi.operation.outcome": outcome.outcome });
-				return outcome;
-			});
-			if (meta.outcome === "completed") {
-				const summaryEntry = meta.leafId ? await this.session.getEntry(meta.leafId) : undefined;
-				this.events.emit({ type: "navigation_end", lane: this.name, runId: meta.operationId, targetId: _targetId, outcome: "completed", newLeafId: meta.leafId });
-				return { ok: true, value: { runId: meta.operationId, kind: "completed", newLeafId: meta.leafId ?? null, summaryEntry: summaryEntry as BranchSummaryEntry | undefined } };
-			}
-			if (meta.outcome === "declined") {
-				return { ok: true, value: { runId: meta.operationId, kind: "declined", leafId: meta.leafId ?? null } };
-			}
-			if (meta.outcome === "failed") {
-				return { ok: true, value: { runId: meta.operationId, kind: "failed", leafId: meta.leafId ?? null, error: meta.error ?? { code: "navigation_failed", message: "Navigation failed" } } };
-			}
-			return { ok: true, value: { runId: meta.operationId, kind: "aborted", leafId: meta.leafId ?? null } };
-		} catch (e) {
-			if ((e as Error & { _tag?: string })._tag === "InvalidNavigationTarget") return { ok: false, error: new UnknownTarget({ targetId: _targetId ?? "", message: "Invalid target" }) };
-			if (e instanceof OperationBusy) {
-				const busy = e as unknown as { operationId: string; kind: "run" | "compaction" | "navigation" };
-				return { ok: false, error: new LaneBusy({ lane: this.name, operationId: busy.operationId, operationKind: busy.kind, message: "Lane is busy" }) };
-			}
-			return { ok: false, error: new HarnessFault((e as Error).message ?? String(e), e) };
-		}
-	}
-	async resume(): Promise<ResumeResult> {
-		if (this.closed) return { ok: false, error: new Closed({ message: "AgentHarness is closed" }) };
-		try {
-			const result = await Effect.runPromise(
-				Effect.provide(Effect.service(OperationKernelTag).pipe(
-					Effect.flatMap((k) => k.resume(this.name)),
-				), this.operationLayer) as Effect.Effect<import("./operation.ts").OperationResult, unknown, never>,
-			);
-			const operation = result.kind as "run" | "compaction" | "navigation";
-			return { ok: true, value: { operation, runId: result.operationId, kind: result.outcome as "aborted" | "completed" | "failed" } as ResumeOutcome };
-		} catch (e) {
-			if (e instanceof OperationNotFound) return { ok: false, error: new NothingToResume({ lane: this.name, message: "Nothing to resume" }) };
-			return { ok: false, error: new HarnessFault((e as Error).message ?? String(e), e) };
-		}
-	}
-	async abort(): Promise<AbortResult> {
-		if (this.closed) return { ok: false, error: new Closed({ message: "AgentHarness is closed" }) };
-		try {
-			const result = await Effect.runPromise(
-				Effect.provide(Effect.service(OperationKernelTag).pipe(
-					Effect.flatMap((k) => k.abort(this.name)),
-				), this.operationLayer) as Effect.Effect<import("./operation.ts").AbortResult, unknown, never>,
-			);
-			return { ok: true, value: { runId: result.runId, steer: [...result.steer], followUp: [...result.followUp] } };
-		} catch (e) {
-			if (e instanceof OperationNotFound) return { ok: false, error: new NoActiveOperation({ lane: this.name, message: e.message }) };
-			if (e instanceof OperationInvariantViolation) return { ok: false, error: new HarnessFault(e.message, e) };
-			if (e instanceof HarnessClosed) return { ok: false, error: new Closed({ message: e.message }) };
-			return { ok: false, error: new HarnessFault(String(e), e) };
-		}
-	}
-	async steer(_text: string, _images?: ImageContent[]): Promise<QueueResult>;
-	async steer(_message: AgentMessage): Promise<QueueResult>;
-	async steer(_input: string | AgentMessage, _images?: ImageContent[]): Promise<QueueResult> {
-		if (this.closed) return { ok: false, error: new Closed({ message: "AgentHarness is closed" }) };
-		const message: AgentMessage = typeof _input === "string"
-			? { role: "user", content: [{ type: "text", text: _input }, ...(_images ?? [])], timestamp: Date.now() }
-			: _input;
-		try {
-			const result = await Effect.runPromise(
-				Effect.provide(Effect.service(OperationKernelTag).pipe(
-					Effect.flatMap((k) => k.steer(this.name, message)),
-				), this.operationLayer) as Effect.Effect<import("./operation.ts").QueueAdmitResult, unknown, never>,
-			);
-			return { ok: true, value: { entryId: result.entryId } };
-		} catch (e) {
-			if ((e as Error & { _tag?: string })._tag === "NoActiveRun") return { ok: false, error: new NoActiveRun({ lane: this.name, message: "No active run" }) };
-			if (e instanceof OperationBusy) {
-				const busy = e as unknown as { operationId: string; kind: "run" | "compaction" | "navigation" };
-				return { ok: false, error: new LaneBusy({ lane: this.name, operationId: busy.operationId, operationKind: busy.kind, message: "Lane is busy" }) };
-			}
-			return { ok: false, error: new HarnessFault((e as Error).message ?? String(e), e) };
-		}
-	}
-	async followUp(_text: string, _images?: ImageContent[]): Promise<QueueResult>;
-	async followUp(_message: AgentMessage): Promise<QueueResult>;
-	async followUp(_input: string | AgentMessage, _images?: ImageContent[]): Promise<QueueResult> {
-		if (this.closed) return { ok: false, error: new Closed({ message: "AgentHarness is closed" }) };
-		const message: AgentMessage = typeof _input === "string"
-			? { role: "user", content: [{ type: "text", text: _input }, ...(_images ?? [])], timestamp: Date.now() }
-			: _input;
-		try {
-			const result = await Effect.runPromise(
-				Effect.provide(Effect.service(OperationKernelTag).pipe(
-					Effect.flatMap((k) => k.followUp(this.name, message)),
-				), this.operationLayer) as Effect.Effect<import("./operation.ts").QueueAdmitResult, unknown, never>,
-			);
-			return { ok: true, value: { entryId: result.entryId } };
-		} catch (e) {
-			if ((e as Error & { _tag?: string })._tag === "NoActiveRun") return { ok: false, error: new NoActiveRun({ lane: this.name, message: "No active run" }) };
-			if (e instanceof OperationBusy) {
-				const busy = e as unknown as { operationId: string; kind: "run" | "compaction" | "navigation" };
-				return { ok: false, error: new LaneBusy({ lane: this.name, operationId: busy.operationId, operationKind: busy.kind, message: "Lane is busy" }) };
-			}
-			return { ok: false, error: new HarnessFault((e as Error).message ?? String(e), e) };
-		}
-	}
-	async nextRun(_text: string, _images?: ImageContent[]): Promise<QueueResult>;
-	async nextRun(_message: AgentMessage): Promise<QueueResult>;
-	async nextRun(_input: string | AgentMessage, _images?: ImageContent[]): Promise<QueueResult> {
-		if (this.closed) return { ok: false, error: new Closed({ message: "AgentHarness is closed" }) };
-		const message: AgentMessage = typeof _input === "string"
-			? { role: "user", content: [{ type: "text", text: _input }, ...(_images ?? [])], timestamp: Date.now() }
-			: _input;
-		try {
-			const result = await Effect.runPromise(
-				Effect.provide(Effect.service(OperationKernelTag).pipe(
-					Effect.flatMap((k) => k.nextRun(this.name, message)),
-				), this.operationLayer) as Effect.Effect<import("./operation.ts").QueueAdmitResult, unknown, never>,
-			);
-			return { ok: true, value: { entryId: result.entryId } };
-		} catch (e) {
-			return { ok: false, error: new HarnessFault((e as Error).message ?? String(e), e) };
-		}
-	}
-	async cancelQueued(_entryId: string): Promise<CancelQueuedResult> {
-		if (this.closed) return { ok: false, error: new Closed({ message: "AgentHarness is closed" }) };
-		try {
-			const result = await Effect.runPromise(
-				Effect.provide(Effect.service(OperationKernelTag).pipe(
-					Effect.flatMap((k) => k.cancelQueued(this.name, _entryId)),
-				), this.operationLayer) as Effect.Effect<import("./operation.ts").CancelResult, unknown, never>,
-			);
-			const outcome = result.outcome === "not_found" ? "already_consumed" : result.outcome;
-			return { ok: true, value: { outcome } };
-		} catch (e) {
-			return { ok: false, error: new HarnessFault((e as Error).message ?? String(e), e) };
-		}
-	}
-	async recordUsage(_usage: Usage, _options?: { entryId?: string; details?: JsonValue }): Promise<RecordUsageResult> {
-		if (this.closed) return { ok: false, error: new Closed({ message: "AgentHarness is closed" }) };
-		const entryId = _options?.entryId ?? (await this.getLeafId());
-		if (!entryId) return { ok: false, error: new Closed({ message: "No leaf for usage record" }) };
-		try {
-			await this.durableSession.appendRecord({
-				id: crypto.randomUUID(),
-				lane: this.name,
-				type: "usage",
-				usage: _usage,
-				cause: "adjustment",
-				entryId,
-				details: _options?.details,
-			});
-			return { ok: true, value: undefined };
-		} catch (e) {
-			return { ok: false, error: new Closed({ message: (e as Error).message ?? String(e) }) };
-		}
-	}
-	async waitForIdle(): Promise<void> {
-		if (this.closed) throw new Closed({ message: "AgentHarness is closed" });
-		for (;;) {
-			const ops = await this.durableSession.findOpenOperations(this.name);
-			if (ops.length === 0) return;
-			await new Promise<void>((resolve) => setTimeout(resolve, 10));
-		}
-	}
-	async runWhenIdle(callback: () => void | Promise<void>): Promise<void> {
-		if (this.closed) throw new Closed({ message: "AgentHarness is closed" });
-		await this.waitForIdle();
-		await callback();
-	}
-	async peekAction(): Promise<ActionInfo | undefined> {
-		if (this.closed) return undefined;
-		const ops = await this.durableSession.findOpenOperations(this.name);
-		if (ops.length === 0) return undefined;
-		const kind = ops[0]!.intent.kind;
-		return {
-			kind: "stream_assistant",
-			step: kind === "compaction" ? "compaction" : kind === "navigation" ? "branch_summary" : "assistant",
-			attempt: 1,
-		};
-	}
-	async executeAction(): Promise<ActionInfo | undefined> {
-		if (this.closed) return undefined;
-		try {
-			await this.resume();
-		} catch {
-			// ignore OperationNotFound or other recoverable errors
-		}
-		return undefined;
-	}
-	async runToCompletion(): Promise<void> {
-		if (this.closed) throw new Closed({ message: "AgentHarness is closed" }) ?? undefined;
-		// Manual drive: keep calling resume/abort until the lane is idle.
-		for (let i = 0; i < 1000; i++) {
-			const ops = await this.durableSession.findOpenOperations(this.name);
-			if (ops.length === 0) return;
-			try {
-				await Effect.runPromise(
-					Effect.provide(Effect.service(OperationKernelTag).pipe(
-						Effect.flatMap((k) => k.resume(this.name)),
-					), this.operationLayer) as Effect.Effect<import("./operation.ts").OperationResult, unknown, never>,
-				);
-			} catch (e) {
-				// OperationNotFound means the operation finished and cleared its registers
-				if ((e as Error & { _tag?: string })._tag === "OperationNotFound") continue;
-				throw e;
-			}
-		}
-	}
-	async getModel(): Promise<Model<Api>> {
-		return runHarness(Effect.gen(function* () {
-			const state = yield* Effect.service(HarnessStateTag);
-			return (yield* Ref.get(state)).model;
-		}), this.effectLayer);
-	}
-	async setModel(model: Model<Api>): Promise<void> {
-		this.model = model;
-		await runHarness(Effect.gen(function* () {
-			const state = yield* Effect.service(HarnessStateTag);
-			yield* Ref.update(state, (current) => ({ ...current, model }));
-		}), this.effectLayer);
-	}
-	async getThinkingLevel(): Promise<ThinkingLevel> {
-		return runHarness(Effect.gen(function* () {
-			const state = yield* Effect.service(HarnessStateTag);
-			return (yield* Ref.get(state)).thinkingLevel;
-		}), this.effectLayer);
-	}
-	async setThinkingLevel(level: ThinkingLevel): Promise<void> {
-		this.thinkingLevel = level;
-		await runHarness(Effect.gen(function* () {
-			const state = yield* Effect.service(HarnessStateTag);
-			yield* Ref.update(state, (current) => ({ ...current, thinkingLevel: level }));
-		}), this.effectLayer);
-	}
-	async getActiveTools(): Promise<string[]> {
-		return runHarness(Effect.gen(function* () {
-			const state = yield* Effect.service(HarnessStateTag);
-			return [...(yield* Ref.get(state)).activeToolNames];
-		}), this.effectLayer);
-	}
-	async setActiveTools(names: string[]): Promise<void> {
-		this.activeToolNames = [...names];
-		await runHarness(Effect.gen(function* () {
-			const state = yield* Effect.service(HarnessStateTag);
-			yield* Ref.update(state, (current) => ({ ...current, activeToolNames: [...names] }));
-		}), this.effectLayer);
-	}
-	async watch(): Promise<WatchHandle<LaneSnapshot>> {
-		if (this.closed) throw new HarnessClosed();
-		const watch = this.events.watch(() => this.createLaneSnapshot());
-		const snapshot = await this.createLaneSnapshot();
-		return {
-			get snapshot() { return snapshot; },
-			start: watch.start,
-			unsubscribe: watch.unsubscribe,
-		};
-	}
-
-	async lane(name: string): Promise<AgentLane | undefined> {
-		if (this.closed) throw new HarnessClosed();
-		if (name === "main") return this;
-		const lanes = await this.durableSession.getLanes();
-		if (!lanes.some((lane: { lane: string }) => lane.lane === name)) return undefined;
-		if (name === this.name) return this;
-		return new AgentHarness({ ...this.constructionOptions, laneName: name });
-	}
-	async createLane(name: string, at: string | null): Promise<CreateLaneResult> {
-		if (this.closed) return { ok: false, error: new Closed({ message: "AgentHarness is closed" }) };
-		try {
-			await this.durableSession.createLane(name, at);
-			return { ok: true, value: await this.lane(name) ?? this };
-		} catch (e) {
-			return { ok: false, error: new InvalidLane({ lane: name, reason: String(e), message: "Create lane failed" }) };
-		}
-	}
-	async lanes(): Promise<LaneInfo[]> {
-		if (this.closed) throw new HarnessClosed();
-		const pointers = await this.durableSession.getLanes();
-		const results: LaneInfo[] = [];
-		for (const p of pointers) {
-			const ops = await this.durableSession.findOpenOperations(p.lane);
-			results.push({
-				name: p.lane,
-				leafId: p.leafId,
-				operation:
-					ops.length > 0
-						? (() => {
-								const op = ops[0];
-								if (!op) return null;
-								return {
-									id: op.id,
-									kind: op.intent.kind,
-									status: "running",
-								} as const;
-							})()
-						: null,
-			});
-		}
-		return results;
-	}
-	async getTools(): Promise<HarnessTool[]> {
-		return [...this.tools];
-	}
-	async setTools(tools: HarnessTool[], activeNames?: string[]): Promise<void> {
-		this.tools = [...tools];
-		this.activeToolNames = [...(activeNames ?? tools.map((tool) => tool.name))];
-	}
-	async getResources(): Promise<Resources> {
-		return {
-			skills: this.resources.skills ? [...this.resources.skills] : undefined,
-			promptTemplates: this.resources.promptTemplates ? [...this.resources.promptTemplates] : undefined,
-		};
-	}
-	async setResources(resources: Resources): Promise<void> {
-		this.resources = {
-			skills: resources.skills ? [...resources.skills] : undefined,
-			promptTemplates: resources.promptTemplates ? [...resources.promptTemplates] : undefined,
-		};
-	}
-	async getStreamOptions(): Promise<StreamOptions> {
-		return { ...this.streamOptions };
-	}
-	async setStreamOptions(options: StreamOptions): Promise<void> {
-		this.streamOptions = { ...options };
-	}
-	async getRetryPolicy(): Promise<RetryPolicy> {
-		return { ...this.retryPolicy };
-	}
-	async setRetryPolicy(policy: RetryPolicy): Promise<void> {
-		this.retryPolicy = { ...policy };
-	}
-	async getCompactionSettings(): Promise<CompactionSettings> {
-		return { ...this.compactionSettings };
-	}
-	async setCompactionSettings(settings: CompactionSettings): Promise<void> {
-		this.compactionSettings = { ...settings };
-	}
-	async getSteeringMode(): Promise<QueueMode> {
-		return this.steeringMode;
-	}
-	async setSteeringMode(mode: QueueMode): Promise<void> {
-		this.steeringMode = mode;
-	}
-	async getFollowUpMode(): Promise<QueueMode> {
-		return this.followUpMode;
-	}
-	async setFollowUpMode(mode: QueueMode): Promise<void> {
-		this.followUpMode = mode;
-	}
-	async watchSession(): Promise<WatchHandle<SessionSnapshot>> {
-		if (this.closed) throw new HarnessClosed();
-		const snapshot = { lanes: await this.lanes(), faulted: false } satisfies SessionSnapshot;
-		const watch = this.events.watch(() => ({ lanes: this.lanes(), faulted: false }));
-		return {
-			get snapshot() { return snapshot; },
-			start: watch.start,
-			unsubscribe: watch.unsubscribe,
-		};
-	}
-
-	private async createLaneSnapshot(): Promise<LaneSnapshot> {
-		const current = await Effect.runPromise(this.effectOperationStore.load(this.name));
-		const transcript = current.lane.leafId === null
-			? []
-			: await this.durableSession.findEntriesOnBranch({
-				start: current.lane.leafId,
-				order: "oldestFirst",
-			});
-		const operation = current.meta && current.state
-			? {
-					id: current.meta.id,
-					kind: current.meta.kind,
-					status: current.state.control.status === "cancel_requested" ? "aborting" as const : "running" as const,
-				}
-			: null;
-		const readMessages = async (ids: readonly string[]): Promise<QueuedItem[]> => {
-			const items: QueuedItem[] = [];
-			for (const id of ids) {
-				const register = await this.durableSession.getRegister("pending.entry", id);
-				const message = register?.value as AgentMessage | undefined;
-				if (message) items.push({ entryId: id, message });
-			}
-			return items;
-		};
-		const queues = {
-			steer: await readMessages(current.state?.inbox.steer ?? []),
-			followUp: await readMessages(current.state?.inbox.followUp ?? []),
-			nextRun: await readMessages(current.lane.pendingNextRun),
-		};
-		return {
-			lane: this.name,
-			transcript,
-			leafId: current.lane.leafId,
-			operation,
-			queues,
-			pendingWrites: [],
-			faulted: false,
-		};
-	}
-	async close(): Promise<void> {
-		await runHarness(this.closeEffect, this.effectLayer);
-	}
+export interface AcquireLaneOptions {
+	createAt?: string | null;
 }
+
+export interface AgentHarness<TContext extends object | undefined = object | undefined> {
+	lane(name: string, context: Context): Promise<AgentLane>;
+	lane(name: string, options: AcquireLaneOptions, context: Context): Promise<AgentLane>;
+	lanes(context: Context): Promise<LaneInfo[]>;
+	getName(context: Context): Promise<string | undefined>;
+	setName(name: string | undefined, context: Context): Promise<void>;
+	getLabel(targetId: string, context: Context): Promise<string | undefined>;
+	setLabel(targetId: string, label: string | undefined, context: Context): Promise<void>;
+	getTools(context: Context): Promise<AgentHarnessTool<TContext>[]>;
+	setTools(tools: AgentHarnessTool<TContext>[], context: Context): Promise<void>;
+	getResources(context: Context): Promise<Resources>;
+	setResources(resources: Resources, context: Context): Promise<void>;
+	getStreamOptions(context: Context): Promise<AgentHarnessStreamOptions>;
+	setStreamOptions(options: AgentHarnessStreamOptions, context: Context): Promise<void>;
+	getRetryPolicy(context: Context): Promise<RetryPolicy>;
+	setRetryPolicy(policy: RetryPolicy, context: Context): Promise<void>;
+	getCompactionSettings(context: Context): Promise<CompactionSettings>;
+	setCompactionSettings(settings: CompactionSettings, context: Context): Promise<void>;
+	getSteeringMode(context: Context): Promise<QueueMode>;
+	setSteeringMode(mode: QueueMode, context: Context): Promise<void>;
+	getFollowUpMode(context: Context): Promise<QueueMode>;
+	setFollowUpMode(mode: QueueMode, context: Context): Promise<void>;
+	watchSession(context: Context): Promise<WatchHandle<SessionSnapshot>>;
+	readonly hooks: Hooks;
+	readonly events: Events;
+	close(context: Context): Promise<void>;
+}
+
+export interface AgentHarnessConstructor {
+	create<TContext extends object | undefined = object | undefined>(
+		options: AgentHarnessOptions<TContext>,
+		context: Context,
+	): Promise<{ harness: AgentHarness<TContext>; open: OpenOperation[] }>;
+}
+
+/** Runtime constructor for attaching the durable harness to one open session. */
+export const AgentHarness = { create: createAgentHarness } satisfies AgentHarnessConstructor;

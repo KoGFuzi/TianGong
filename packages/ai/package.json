@@ -12,32 +12,32 @@
   ],
   "exports": {
     ".": {
-      "bun": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+			"types": "./dist/index.d.ts",
+			"bun": "./dist/index.js"
     },
     "./compat": {
-      "bun": "./dist/compat.js",
-      "types": "./dist/compat.d.ts"
+			"types": "./dist/compat.d.ts",
+			"bun": "./dist/compat.js"
     },
     "./providers/*": {
-      "bun": "./dist/providers/*.js",
-      "types": "./dist/providers/*.d.ts"
+			"types": "./dist/providers/*.d.ts",
+			"bun": "./dist/providers/*.js"
     },
     "./api/*": {
-      "bun": "./dist/api/*.js",
-      "types": "./dist/api/*.d.ts"
+			"types": "./dist/api/*.d.ts",
+			"bun": "./dist/api/*.js"
     },
     "./oauth": {
-      "bun": "./dist/oauth.js",
-      "types": "./dist/oauth.d.ts"
+			"types": "./dist/oauth.d.ts",
+			"bun": "./dist/oauth.js"
     },
     "./bedrock-provider": {
-      "bun": "./dist/bedrock-provider.js",
-      "types": "./dist/bedrock-provider.d.ts"
+			"types": "./dist/bedrock-provider.d.ts",
+			"bun": "./dist/bedrock-provider.js"
     },
     "./bun-oauth": {
-      "bun": "./dist/bun-oauth.js",
-      "types": "./dist/bun-oauth.d.ts"
+			"types": "./dist/bun-oauth.d.ts",
+			"bun": "./dist/bun-oauth.js"
     }
   },
   "bin": {
@@ -57,7 +57,8 @@
     "check:model-data": "bun scripts/check-model-data.ts",
     "build": "bun run generate-models && bun run build:bun",
     "build:bun": "bun run check:model-data && bun build src/index.ts --target=bun --outdir=dist --sourcemap --no-splitting",
-    "build:all": "bun run build:bun && bun run copy:data",
+    "build:dts": "bunx tsc -p tsconfig.dist.json",
+    "build:all": "bun run build:bun && bun run build:dts && bun run copy:data",
     "copy:data": "bun -e \"await Bun.$`rm -rf dist/providers/data && mkdir -p dist/providers && cp -r src/providers/data dist/providers/data`\"",
     "build:cli": "bun build src/cli.ts --target=bun --compile --minify --outfile=dist/tiangong-sec",
     "build:cli:all": "bun run build:cli && bun run build:cli:linux && bun run build:cli:darwin && bun run build:cli:win",
@@ -78,7 +79,7 @@
   },
   "dependencies": {
     "effect": "4.0.0-rc.111",
-    "@anthropic-ai/sdk": "0.120.0",
+    "@anthropic-ai/sdk": "0.123.0",
     "@google/genai": "2.18.0",
     "openai": "7.5.0",
     "@aws-sdk/client-bedrock-runtime": "3.1048.0",
@@ -92,7 +93,7 @@
     "@biomejs/biome": "2.0.0",
     "@napi-rs/canvas": "1.0.8",
     "@types/node": "26.3.0",
-    "bun-types": "1.3.14"
+    "@types/bun": "1.3.14"
   },
   "engines": {
     "bun": ">=1.2.0"

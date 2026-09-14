@@ -1,4 +1,4 @@
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { getEffortThinkingLevelMap } from "../scripts/models-dev-reasoning-options.ts";
 
 describe("getEffortThinkingLevelMap", () => {

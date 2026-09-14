@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "./bun-test.ts";
+import { afterEach, describe, expect, it, mock } from "bun:test";
+import { useFakeTimers, useRealTimers, setSystemTime, advanceTimersByTimeAsync, stubGlobal, unstubAllGlobals, poll } from "./utils/testing.ts";
 import { InMemoryCredentialStore } from "../src/auth/credential-store.ts";
 import { githubCopilotOAuth } from "../src/auth/oauth/github-copilot.ts";
 import { createModels } from "../src/models.ts";
@@ -36,7 +37,7 @@ function stubGitHubCopilotLoginFetch(options: {
 	models: () => Response;
 	policy?: (modelId: string) => Response;
 }): void {
-	const fetchMock = vi.fn(async (input: string | URL | Request): Promise<Response> => {
+	const fetchMock = mock(async (input: string | URL | Request): Promise<Response> => {
 		const url = getUrl(input);
 		if (url.endsWith("/login/device/code")) {
 			return jsonResponse({
@@ -60,7 +61,7 @@ function stubGitHubCopilotLoginFetch(options: {
 		}
 		throw new Error(`Unexpected fetch URL: ${url}`);
 	});
-	vi.stubGlobal("fetch", fetchMock);
+	stubGlobal("fetch", fetchMock);
 }
 
 function loginGitHubCopilotForTest(options: {
@@ -96,7 +97,7 @@ async function refreshGitHubCopilotModelsForTest(
 ) {
 	const accessToken = `tid=test;exp=9999999999;proxy-ep=${proxyHost};`;
 	const modelsUrl = `https://${proxyHost.replace(/^proxy\./, "api.")}/models`;
-	const fetchMock = vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+	const fetchMock = mock(async (input: unknown, init?: RequestInit): Promise<Response> => {
 		const url = getUrl(input);
 
 		if (url.includes("/copilot_internal/v2/token")) {
@@ -116,7 +117,7 @@ async function refreshGitHubCopilotModelsForTest(
 		throw new Error(`Unexpected fetch URL: ${url}`);
 	});
 
-	vi.stubGlobal("fetch", fetchMock);
+	stubGlobal("fetch", fetchMock);
 	return githubCopilotOAuth.refresh(
 		{
 			type: "oauth",
@@ -130,14 +131,14 @@ async function refreshGitHubCopilotModelsForTest(
 
 describe("GitHub Copilot OAuth device flow", () => {
 	afterEach(() => {
-		vi.unstubAllGlobals();
-		vi.useRealTimers();
+		unstubAllGlobals();
+		useRealTimers();
 	});
 
 	it("filters models to the authenticated account picker catalog", async () => {
 		const credentials = await refreshGitHubCopilotModelsForTest([
 			{
-				id: "gpt-4.1",
+				id: "gpt-5.4",
 				model_picker_enabled: true,
 				capabilities: { supports: { tool_calls: true } },
 			},
@@ -154,19 +155,19 @@ describe("GitHub Copilot OAuth device flow", () => {
 				capabilities: { supports: { tool_calls: true } },
 			},
 		]);
-		expect(credentials.availableModelIds).toEqual(["gpt-4.1"]);
+		expect(credentials.availableModelIds).toEqual(["gpt-5.4"]);
 
 		const store = new InMemoryCredentialStore();
 		await store.modify("github-copilot", async () => ({ ...credentials, type: "oauth" }));
 		const models = createModels({ credentials: store });
 		models.setProvider(githubCopilotProvider());
-		expect((await models.getAvailable("github-copilot")).map((model) => model.id)).toEqual(["gpt-4.1"]);
+		expect((await models.getAvailable("github-copilot")).map((model) => model.id)).toEqual(["gpt-5.4"]);
 	});
 
 	it("falls back to explicitly enabled policy models when the picker catalog is empty", async () => {
 		const credentials = await refreshGitHubCopilotModelsForTest([
 			{
-				id: "gpt-4.1",
+				id: "gpt-5.4",
 				model_picker_enabled: false,
 				policy: { state: "enabled" },
 				capabilities: { supports: { tool_calls: true } },
@@ -190,20 +191,20 @@ describe("GitHub Copilot OAuth device flow", () => {
 			},
 		]);
 
-		expect(credentials.availableModelIds).toEqual(["gpt-4.1"]);
+		expect(credentials.availableModelIds).toEqual(["gpt-5.4"]);
 
 		const store = new InMemoryCredentialStore();
 		await store.modify("github-copilot", async () => ({ ...credentials, type: "oauth" }));
 		const models = createModels({ credentials: store });
 		models.setProvider(githubCopilotProvider());
-		expect((await models.getAvailable("github-copilot")).map((model) => model.id)).toEqual(["gpt-4.1"]);
+		expect((await models.getAvailable("github-copilot")).map((model) => model.id)).toEqual(["gpt-5.4"]);
 	});
 
 	it("does not fall back to policy models for non-Individual accounts", async () => {
 		const credentials = await refreshGitHubCopilotModelsForTest(
 			[
 				{
-					id: "gpt-4.1",
+					id: "gpt-5.4",
 					model_picker_enabled: false,
 					policy: { state: "enabled" },
 					capabilities: { supports: { tool_calls: true } },
@@ -217,9 +218,9 @@ describe("GitHub Copilot OAuth device flow", () => {
 
 	it("does not retry model catalog throttling during credential refresh", async () => {
 		let catalogRequestCount = 0;
-		vi.stubGlobal(
+		stubGlobal(
 			"fetch",
-			vi.fn(async (input: unknown): Promise<Response> => {
+			mock(async (input: unknown): Promise<Response> => {
 				const url = getUrl(input);
 				if (url.includes("/copilot_internal/v2/token")) {
 					return jsonResponse({ token: testCopilotAccessToken, expires_at: 9999999999 });
@@ -247,10 +248,10 @@ describe("GitHub Copilot OAuth device flow", () => {
 	});
 
 	it("reports device-code details through onDeviceCode", async () => {
-		vi.useFakeTimers();
-		vi.setSystemTime(new Date("2026-03-09T00:00:00Z"));
+		useFakeTimers();
+		setSystemTime(new Date("2026-03-09T00:00:00Z"));
 
-		const fetchMock = vi.fn(async (input: unknown): Promise<Response> => {
+		const fetchMock = mock(async (input: unknown): Promise<Response> => {
 			const url = getUrl(input);
 
 			if (url.endsWith("/login/device/code")) {
@@ -285,15 +286,15 @@ describe("GitHub Copilot OAuth device flow", () => {
 			throw new Error(`Unexpected fetch URL: ${url}`);
 		});
 
-		vi.stubGlobal("fetch", fetchMock);
+		stubGlobal("fetch", fetchMock);
 
-		const onDeviceCode = vi.fn();
+		const onDeviceCode = mock();
 		const loginPromise = loginGitHubCopilotForTest({
 			onDeviceCode,
 			onPrompt: async () => "",
 		});
 
-		await vi.advanceTimersByTimeAsync(0);
+		await advanceTimersByTimeAsync(0);
 
 		expect(onDeviceCode).toHaveBeenCalledWith({
 			userCode: "ABCD-EFGH",
@@ -301,12 +302,12 @@ describe("GitHub Copilot OAuth device flow", () => {
 			intervalSeconds: 1,
 			expiresInSeconds: 900,
 		});
-		await vi.advanceTimersByTimeAsync(1000);
+		await advanceTimersByTimeAsync(1000);
 		await loginPromise;
 	});
 
 	it("updates only known, tool-capable, unconfigured account model policies", async () => {
-		vi.useFakeTimers();
+		useFakeTimers();
 
 		let catalogRequestCount = 0;
 		const policyModelIds: string[] = [];
@@ -316,13 +317,13 @@ describe("GitHub Copilot OAuth device flow", () => {
 				return jsonResponse({
 					data: [
 						{
-							id: "gpt-4.1",
+							id: "gpt-5.4-mini",
 							model_picker_enabled: true,
 							policy: { state: "enabled" },
 							capabilities: { supports: { tool_calls: true } },
 						},
 						{
-							id: "claude-sonnet-4.5",
+							id: "claude-sonnet-4.6",
 							model_picker_enabled: true,
 							policy: { state: "unconfigured" },
 							capabilities: { supports: { tool_calls: true } },
@@ -352,21 +353,22 @@ describe("GitHub Copilot OAuth device flow", () => {
 			onDeviceCode: () => {},
 			onPrompt: async () => "",
 		});
-		await vi.advanceTimersByTimeAsync(1000);
+		await advanceTimersByTimeAsync(0);
+		await advanceTimersByTimeAsync(1000);
 		await loginPromise;
 
 		expect(catalogRequestCount).toBe(1);
-		expect(policyModelIds).toEqual(["claude-sonnet-4.5"]);
+		expect(policyModelIds).toEqual(["claude-sonnet-4.6"]);
 	});
 
 	it("retries a throttled policy update after Retry-After", async () => {
-		vi.useFakeTimers();
+		useFakeTimers();
 
 		let policyRequestCount = 0;
 		stubGitHubCopilotLoginFetch({
 			models: () =>
 				jsonResponse({
-					data: [{ id: "claude-sonnet-4.5", model_picker_enabled: true, policy: { state: "unconfigured" } }],
+					data: [{ id: "claude-sonnet-4.6", model_picker_enabled: true, policy: { state: "unconfigured" } }],
 				}),
 			policy: () => {
 				policyRequestCount += 1;
@@ -380,20 +382,21 @@ describe("GitHub Copilot OAuth device flow", () => {
 			onDeviceCode: () => {},
 			onPrompt: async () => "",
 		});
-		await vi.advanceTimersByTimeAsync(1000);
+		await advanceTimersByTimeAsync(0);
+		await advanceTimersByTimeAsync(1000);
 		expect(policyRequestCount).toBe(1);
-		await vi.advanceTimersByTimeAsync(999);
+		await advanceTimersByTimeAsync(999);
 		expect(policyRequestCount).toBe(1);
-		await vi.advanceTimersByTimeAsync(1);
+		await advanceTimersByTimeAsync(1);
 		await loginPromise;
 
 		expect(policyRequestCount).toBe(2);
 	});
 
 	it("continues policy updates after a transport failure", async () => {
-		vi.useFakeTimers();
+		useFakeTimers();
 
-		const modelIds = ["gpt-4.1", "claude-sonnet-4.5"];
+		const modelIds = ["gpt-5.4", "claude-sonnet-4.6"];
 		const policyModelIds: string[] = [];
 		stubGitHubCopilotLoginFetch({
 			models: () =>
@@ -411,22 +414,23 @@ describe("GitHub Copilot OAuth device flow", () => {
 			onDeviceCode: () => {},
 			onPrompt: async () => "",
 		});
-		await vi.advanceTimersByTimeAsync(1000);
+		await advanceTimersByTimeAsync(0);
+		await advanceTimersByTimeAsync(1000);
 		await loginPromise;
 
 		expect(policyModelIds).toEqual(modelIds);
 	});
 
 	it("stops policy updates and persists authentication when the retry delay exceeds the login budget", async () => {
-		vi.useFakeTimers();
+		useFakeTimers();
 
 		const policyModelIds: string[] = [];
 		stubGitHubCopilotLoginFetch({
 			models: () =>
 				jsonResponse({
 					data: [
-						{ id: "gpt-4.1", model_picker_enabled: true, policy: { state: "unconfigured" } },
-						{ id: "claude-sonnet-4.5", model_picker_enabled: true, policy: { state: "unconfigured" } },
+						{ id: "gpt-5.4", model_picker_enabled: true, policy: { state: "unconfigured" } },
+						{ id: "claude-sonnet-4.6", model_picker_enabled: true, policy: { state: "unconfigured" } },
 					],
 				}),
 			policy: (modelId) => {
@@ -444,10 +448,11 @@ describe("GitHub Copilot OAuth device flow", () => {
 			notify: () => {},
 		});
 
-		await vi.advanceTimersByTimeAsync(1000);
+		await advanceTimersByTimeAsync(0);
+		await advanceTimersByTimeAsync(1000);
 		const credential = await loginPromise;
 		expect(credential).toMatchObject({ type: "oauth", access: testCopilotAccessToken });
-		expect(policyModelIds).toEqual(["gpt-4.1"]);
+		expect(policyModelIds).toEqual(["gpt-5.4"]);
 		expect(await store.read("github-copilot")).toEqual(credential);
 	});
 
@@ -455,7 +460,7 @@ describe("GitHub Copilot OAuth device flow", () => {
 		// A malicious enterprise OAuth server could return a verification_uri that
 		// the browser launcher would otherwise hand to the OS. Ensure such values
 		// are rejected at the deserialization boundary.
-		const fetchMock = vi.fn(async (input: unknown): Promise<Response> => {
+		const fetchMock = mock(async (input: unknown): Promise<Response> => {
 			const url = getUrl(input);
 			if (url.endsWith("/login/device/code")) {
 				return jsonResponse({
@@ -469,9 +474,9 @@ describe("GitHub Copilot OAuth device flow", () => {
 			throw new Error(`Unexpected fetch URL: ${url}`);
 		});
 
-		vi.stubGlobal("fetch", fetchMock);
+		stubGlobal("fetch", fetchMock);
 
-		const onDeviceCode = vi.fn();
+		const onDeviceCode = mock();
 		await expect(
 			loginGitHubCopilotForTest({
 				onDeviceCode,
@@ -482,14 +487,14 @@ describe("GitHub Copilot OAuth device flow", () => {
 	});
 
 	it("normalizes verification_uri before it reaches onDeviceCode", async () => {
-		vi.useFakeTimers();
-		vi.setSystemTime(new Date("2026-03-09T00:00:00Z"));
+		useFakeTimers();
+		setSystemTime(new Date("2026-03-09T00:00:00Z"));
 
 		const rawVerificationUri = "https://github.com/login/\x1b]8;;evil";
 		const normalizedVerificationUri = new URL(rawVerificationUri).href;
 		expect(normalizedVerificationUri).not.toBe(rawVerificationUri);
 
-		const fetchMock = vi.fn(async (input: unknown): Promise<Response> => {
+		const fetchMock = mock(async (input: unknown): Promise<Response> => {
 			const url = getUrl(input);
 
 			if (url.endsWith("/login/device/code")) {
@@ -524,15 +529,15 @@ describe("GitHub Copilot OAuth device flow", () => {
 			throw new Error(`Unexpected fetch URL: ${url}`);
 		});
 
-		vi.stubGlobal("fetch", fetchMock);
+		stubGlobal("fetch", fetchMock);
 
-		const onDeviceCode = vi.fn();
+		const onDeviceCode = mock();
 		const loginPromise = loginGitHubCopilotForTest({
 			onDeviceCode,
 			onPrompt: async () => "",
 		});
 
-		await vi.advanceTimersByTimeAsync(0);
+		await advanceTimersByTimeAsync(0);
 
 		expect(onDeviceCode).toHaveBeenCalledWith({
 			userCode: "ABCD-EFGH",
@@ -542,14 +547,14 @@ describe("GitHub Copilot OAuth device flow", () => {
 		});
 		expect(onDeviceCode).not.toHaveBeenCalledWith(expect.objectContaining({ verificationUri: rawVerificationUri }));
 
-		await vi.advanceTimersByTimeAsync(1000);
+		await advanceTimersByTimeAsync(1000);
 		await loginPromise;
 	});
 
 	it("waits before polling and increases the interval after slow_down", async () => {
-		vi.useFakeTimers();
+		useFakeTimers();
 		const startTime = new Date("2026-03-09T00:00:00Z");
-		vi.setSystemTime(startTime);
+		setSystemTime(startTime);
 
 		const accessTokenPollTimes: number[] = [];
 		const accessTokenResponses = [
@@ -558,7 +563,7 @@ describe("GitHub Copilot OAuth device flow", () => {
 			jsonResponse({ access_token: "ghu_refresh_token" }),
 		];
 
-		const fetchMock = vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+		const fetchMock = mock(async (input: unknown, init?: RequestInit): Promise<Response> => {
 			const url = getUrl(input);
 
 			if (url.endsWith("/login/device/code")) {
@@ -613,7 +618,7 @@ describe("GitHub Copilot OAuth device flow", () => {
 			throw new Error(`Unexpected fetch URL: ${url}`);
 		});
 
-		vi.stubGlobal("fetch", fetchMock);
+		stubGlobal("fetch", fetchMock);
 
 		const loginPromise = loginGitHubCopilotForTest({
 			onDeviceCode: () => {},
@@ -621,26 +626,26 @@ describe("GitHub Copilot OAuth device flow", () => {
 			onProgress: () => {},
 		});
 
-		await vi.advanceTimersByTimeAsync(0);
+		await advanceTimersByTimeAsync(0);
 		expect(accessTokenPollTimes).toHaveLength(0);
 
-		await vi.advanceTimersByTimeAsync(4999);
+		await advanceTimersByTimeAsync(4999);
 		expect(accessTokenPollTimes).toHaveLength(0);
 
-		await vi.advanceTimersByTimeAsync(1);
+		await advanceTimersByTimeAsync(1);
 		expect(accessTokenPollTimes).toHaveLength(1);
 
-		await vi.advanceTimersByTimeAsync(4999);
+		await advanceTimersByTimeAsync(4999);
 		expect(accessTokenPollTimes).toHaveLength(1);
 
-		await vi.advanceTimersByTimeAsync(1);
+		await advanceTimersByTimeAsync(1);
 		expect(accessTokenPollTimes).toHaveLength(2);
 
 		// slow_down carried a server-provided interval of 7 seconds.
-		await vi.advanceTimersByTimeAsync(6999);
+		await advanceTimersByTimeAsync(6999);
 		expect(accessTokenPollTimes).toHaveLength(2);
 
-		await vi.advanceTimersByTimeAsync(1);
+		await advanceTimersByTimeAsync(1);
 		await loginPromise;
 
 		expect(accessTokenPollTimes).toEqual([
@@ -651,9 +656,9 @@ describe("GitHub Copilot OAuth device flow", () => {
 	});
 
 	it("times out after repeated slow_down responses", async () => {
-		vi.useFakeTimers();
+		useFakeTimers();
 		const startTime = new Date("2026-03-09T00:00:00Z");
-		vi.setSystemTime(startTime);
+		setSystemTime(startTime);
 
 		const accessTokenPollTimes: number[] = [];
 		const accessTokenResponses = [
@@ -662,7 +667,7 @@ describe("GitHub Copilot OAuth device flow", () => {
 			jsonResponse({ error: "authorization_pending", error_description: "pending" }),
 		];
 
-		const fetchMock = vi.fn(async (input: unknown): Promise<Response> => {
+		const fetchMock = mock(async (input: unknown): Promise<Response> => {
 			const url = getUrl(input);
 
 			if (url.endsWith("/login/device/code")) {
@@ -687,33 +692,38 @@ describe("GitHub Copilot OAuth device flow", () => {
 			throw new Error(`Unexpected fetch URL: ${url}`);
 		});
 
-		vi.stubGlobal("fetch", fetchMock);
+		stubGlobal("fetch", fetchMock);
 
 		const loginPromise = loginGitHubCopilotForTest({
 			onDeviceCode: () => {},
 			onPrompt: async () => "",
 		});
-		const rejection = expect(loginPromise).rejects.toThrow(
-			/Device flow timed out after one or more slow_down responses/,
+		await advanceTimersByTimeAsync(0);
+		const rejection = loginPromise.then(
+			() => new Error("Expected device flow to fail"),
+			(error: unknown) => error,
 		);
 
-		await vi.advanceTimersByTimeAsync(4999);
+		await advanceTimersByTimeAsync(4999);
 		expect(accessTokenPollTimes).toEqual([]);
 
-		await vi.advanceTimersByTimeAsync(1);
+		await advanceTimersByTimeAsync(1);
 		expect(accessTokenPollTimes).toEqual([startTime.getTime() + 5000]);
 
-		await vi.advanceTimersByTimeAsync(9999);
+		await advanceTimersByTimeAsync(9999);
 		expect(accessTokenPollTimes).toEqual([startTime.getTime() + 5000]);
 
-		await vi.advanceTimersByTimeAsync(1);
+		await advanceTimersByTimeAsync(1);
 		expect(accessTokenPollTimes).toEqual([startTime.getTime() + 5000, startTime.getTime() + 15000]);
 
-		await vi.advanceTimersByTimeAsync(9999);
+		await advanceTimersByTimeAsync(9999);
 		expect(accessTokenPollTimes).toEqual([startTime.getTime() + 5000, startTime.getTime() + 15000]);
 
-		await vi.advanceTimersByTimeAsync(1);
-		await rejection;
+		await advanceTimersByTimeAsync(1);
+		await advanceTimersByTimeAsync(0);
+		const error = await rejection;
+		expect(error).toBeInstanceOf(Error);
+		expect((error as Error).message).toMatch(/Device flow timed out after one or more slow_down responses/);
 
 		expect(accessTokenPollTimes).toEqual([startTime.getTime() + 5000, startTime.getTime() + 15000]);
 	});

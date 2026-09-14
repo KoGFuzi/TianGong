@@ -1,4 +1,3 @@
-// @ts-nocheck - E2E test file with complex async patterns
 import {
 	type AssistantMessage,
 	type FauxProviderRegistration,
@@ -12,7 +11,7 @@ import {
 	type ToolResultMessage,
 	type UserMessage,
 } from "@onepanda-tiangongsec/tg-ai/compat";
-import { afterEach, describe, expect, it } from "./bun-test.ts";
+import { afterEach, describe, expect, it } from "bun:test";
 import { Agent, type AgentEvent } from "../src/index.ts";
 import { calculateTool } from "./utils/calculate.ts";
 

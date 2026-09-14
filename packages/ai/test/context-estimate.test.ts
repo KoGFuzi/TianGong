@@ -1,4 +1,4 @@
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { buildBaseOptions } from "../src/api/simple-options.ts";
 import type { AssistantMessage, Context, Model, Usage } from "../src/types.ts";
 import { estimateContextTokens } from "../src/utils/estimate.ts";

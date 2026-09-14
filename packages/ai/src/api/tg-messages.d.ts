@@ -1,15 +1,15 @@
 /**
- * pi-messages API implementation.
+ * tg-messages API implementation.
  *
  * Streams pi's own message protocol directly to a backend: the request is a
  * single POST of `{ model, context, options }` to `<baseUrl>/messages`, the
  * response is an SSE stream of serialized assistant-message events plus a
  * terminal `done`/`error` event. This is the wire protocol spoken by the
  * Radius gateway, but any backend implementing it can be used, e.g. via a
- * models.json custom provider with `"api": "pi-messages"`.
+ * models.json custom provider with `"api": "tg-messages"`.
  */
 import type { AssistantMessage, SimpleStreamOptions, StreamFunction, StreamOptions, ThinkingLevel, ToolCall } from "../types.ts";
-export interface PiMessagesOptions extends StreamOptions {
+export interface TgMessagesOptions extends StreamOptions {
     reasoning?: ThinkingLevel;
     toolChoice?: "auto" | "none" | "required" | {
         type: "function";
@@ -20,10 +20,10 @@ export interface PiMessagesOptions extends StreamOptions {
     /** Ask the backend for debug metadata (e.g. routing response headers). */
     debug?: boolean;
 }
-type PiMessagesUsage = AssistantMessage["usage"];
-type PiMessagesStopReason = AssistantMessage["stopReason"];
+type TgMessagesUsage = AssistantMessage["usage"];
+type TgMessagesStopReason = AssistantMessage["stopReason"];
 /** Impact summary of a server-side message rewrite (e.g. a gateway policy). */
-export type PiMessagesRewriteImpact = {
+export type TgMessagesRewriteImpact = {
     policyId: string;
     policyVersion: number;
     changed: boolean;
@@ -31,8 +31,8 @@ export type PiMessagesRewriteImpact = {
     messageCountChange: number;
     systemPromptChanged: boolean;
 };
-/** Serialized assistant-message event as sent by a pi-messages backend. */
-export type PiMessagesEvent = {
+/** Serialized assistant-message event as sent by a tg-messages backend. */
+export type TgMessagesEvent = {
     type: "start";
 } | {
     type: "text_start";
@@ -74,23 +74,25 @@ export type PiMessagesEvent = {
     toolCall: ToolCall;
 } | {
     type: "done";
-    reason: Extract<PiMessagesStopReason, "stop" | "length" | "toolUse">;
-    usage: PiMessagesUsage;
+    reason: Extract<TgMessagesStopReason, "stop" | "length" | "toolUse">;
+    usage: TgMessagesUsage;
     responseId?: string;
-    rewrite?: PiMessagesRewriteImpact;
+    providerThinkingLevel?: string;
+    rewrite?: TgMessagesRewriteImpact;
 } | {
     type: "error";
-    reason: Extract<PiMessagesStopReason, "aborted" | "error">;
-    usage: PiMessagesUsage;
+    reason: Extract<TgMessagesStopReason, "aborted" | "error">;
+    usage: TgMessagesUsage;
     errorMessage?: string;
     responseId?: string;
-    rewrite?: PiMessagesRewriteImpact;
+    providerThinkingLevel?: string;
+    rewrite?: TgMessagesRewriteImpact;
 };
-export declare class PiMessagesResponseError extends Error {
+export declare class TgMessagesResponseError extends Error {
     code?: string;
     readonly diagnosticDetails: Record<string, unknown>;
     constructor(message: string, code: string | undefined, diagnosticDetails: Record<string, unknown>);
 }
-export declare const stream: StreamFunction<"pi-messages", PiMessagesOptions>;
-export declare const streamSimple: StreamFunction<"pi-messages", SimpleStreamOptions>;
+export declare const stream: StreamFunction<"tg-messages", TgMessagesOptions>;
+export declare const streamSimple: StreamFunction<"tg-messages", SimpleStreamOptions>;
 export {};

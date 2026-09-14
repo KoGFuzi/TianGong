@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { afterEach, describe, expect, it, vi } from "./bun-test.ts";
+import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { stream as streamOpenAIResponses } from "../src/api/openai-responses.ts";
 import { getModel } from "../src/compat.ts";
 import type { Model } from "../src/types.ts";
@@ -41,7 +41,7 @@ async function captureOpenAIResponseHeaders(
 		clientRequestId: null as string | null,
 		xSessionId: null as string | null,
 	};
-	vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+	spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
 		captured.sessionId = getHeader(init?.headers, "session_id");
 		captured.clientRequestId = getHeader(init?.headers, "x-client-request-id");
 		captured.xSessionId = getHeader(init?.headers, "x-session-id");
@@ -69,14 +69,14 @@ async function captureOpenAIResponseHeaders(
 
 describe("openai-responses provider defaults", () => {
 	afterEach(() => {
-		vi.restoreAllMocks();
+		mock.restore();
 	});
 
 	it("omits reasoning when no reasoning is requested", async () => {
 		const model = getModel("github-copilot", "gpt-5-mini");
 		let capturedPayload: unknown;
 
-		vi.spyOn(globalThis, "fetch").mockResolvedValue(
+		spyOn(globalThis, "fetch").mockResolvedValue(
 			new Response("data: [DONE]\n\n", {
 				status: 200,
 				headers: { "content-type": "text/event-stream" },
@@ -110,7 +110,7 @@ describe("openai-responses provider defaults", () => {
 	it("forwards required tool choice", async () => {
 		let capturedPayload: unknown;
 
-		vi.spyOn(globalThis, "fetch").mockResolvedValue(
+		spyOn(globalThis, "fetch").mockResolvedValue(
 			new Response("data: [DONE]\n\n", {
 				status: 200,
 				headers: { "content-type": "text/event-stream" },
@@ -158,7 +158,7 @@ describe("openai-responses provider defaults", () => {
 		const model = getModel("cloudflare-ai-gateway", "gpt-5.6-sol");
 		let capturedPayload: CapturedResponsesPayload | undefined;
 
-		vi.spyOn(globalThis, "fetch").mockResolvedValue(
+		spyOn(globalThis, "fetch").mockResolvedValue(
 			new Response("data: [DONE]\n\n", {
 				status: 200,
 				headers: { "content-type": "text/event-stream" },
@@ -220,7 +220,7 @@ describe("openai-responses provider defaults", () => {
 		const model = getModel("openai", modelId);
 		let capturedPayload: unknown;
 
-		vi.spyOn(globalThis, "fetch").mockResolvedValue(
+		spyOn(globalThis, "fetch").mockResolvedValue(
 			new Response("data: [DONE]\n\n", {
 				status: 200,
 				headers: { "content-type": "text/event-stream" },
@@ -256,7 +256,7 @@ describe("openai-responses provider defaults", () => {
 			const model = getModel("openai", modelId);
 			let capturedPayload: unknown;
 
-			vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			spyOn(globalThis, "fetch").mockResolvedValue(
 				new Response("data: [DONE]\n\n", {
 					status: 200,
 					headers: { "content-type": "text/event-stream" },
@@ -297,7 +297,7 @@ describe("openai-responses provider defaults", () => {
 	it("clamps prompt_cache_key to OpenAI's 64-character limit", async () => {
 		const sessionId = "x".repeat(67);
 		let capturedPayload: Pick<CapturedResponsesPayload, "prompt_cache_key"> | undefined;
-		vi.spyOn(globalThis, "fetch").mockResolvedValue(
+		spyOn(globalThis, "fetch").mockResolvedValue(
 			new Response("data: [DONE]\n\n", {
 				status: 200,
 				headers: { "content-type": "text/event-stream" },
@@ -499,7 +499,7 @@ describe("openai-responses provider defaults", () => {
 			})}`,
 		].join("\n\n")}\n\n`;
 
-		vi.spyOn(globalThis, "fetch").mockResolvedValue(
+		spyOn(globalThis, "fetch").mockResolvedValue(
 			new Response(sse, {
 				status: 200,
 				headers: { "content-type": "text/event-stream" },
@@ -520,5 +520,80 @@ describe("openai-responses provider defaults", () => {
 		expect(result.usage.cost.input).toBe(model.cost.input * multiplier * tokenScale);
 		expect(result.usage.cost.output).toBe(model.cost.output * multiplier * tokenScale);
 		expect(result.usage.cost.total).toBe((model.cost.input + model.cost.output) * multiplier * tokenScale);
+	});
+});
+
+describe("openai-responses max_output_tokens compat", () => {
+	afterEach(() => {
+		mock.restore();
+	});
+
+	it("sends max_output_tokens by default", async () => {
+		let capturedPayload: { max_output_tokens?: number } | undefined;
+
+		spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response("data: [DONE]\n\n", {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			}),
+		);
+
+		const stream = streamOpenAIResponses(
+			getModel("openai", "gpt-5.4"),
+			{
+				systemPrompt: "sys",
+				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+			},
+			{
+				apiKey: "test-key",
+				maxTokens: 1024,
+				onPayload: (payload) => {
+					capturedPayload = payload as { max_output_tokens?: number };
+				},
+			},
+		);
+
+		for await (const event of stream) {
+			if (event.type === "done" || event.type === "error") break;
+		}
+
+		expect(capturedPayload?.max_output_tokens).toBe(1024);
+	});
+
+	it("omits max_output_tokens when supportsMaxOutputTokens is false", async () => {
+		const baseModel = getModel("openai", "gpt-5.4");
+		const model: Model<"openai-responses"> = {
+			...baseModel,
+			compat: { ...baseModel.compat, supportsMaxOutputTokens: false },
+		};
+		let capturedPayload: { max_output_tokens?: number } | undefined;
+
+		spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response("data: [DONE]\n\n", {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			}),
+		);
+
+		const stream = streamOpenAIResponses(
+			model,
+			{
+				systemPrompt: "sys",
+				messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+			},
+			{
+				apiKey: "test-key",
+				maxTokens: 1024,
+				onPayload: (payload) => {
+					capturedPayload = payload as { max_output_tokens?: number };
+				},
+			},
+		);
+
+		for await (const event of stream) {
+			if (event.type === "done" || event.type === "error") break;
+		}
+
+		expect(capturedPayload?.max_output_tokens).toBeUndefined();
 	});
 });

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "./bun-test.ts";
+import { afterEach, describe, expect, it } from "bun:test";
 import { findEnvKeys, getEnvApiKey } from "../src/env-api-keys.ts";
 
 const originalCopilotGitHubToken = process.env.COPILOT_GITHUB_TOKEN;

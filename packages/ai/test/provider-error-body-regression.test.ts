@@ -9,7 +9,8 @@
 // (no double body / no duplicated status) is asserted via the shared helper in
 // error-body.test.ts.
 
-import { beforeEach, describe, expect, it, vi } from "./bun-test.ts";
+import { beforeEach, describe, expect, it } from "bun:test";
+import { mockModule, hoisted } from "./utils/testing.ts";
 import { streamSimple as streamSimpleBedrock } from "../src/api/bedrock-converse-stream.ts";
 import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import { stream as streamOpenAIResponses } from "../src/api/openai-responses.ts";
@@ -28,16 +29,16 @@ class FakeAPIError extends Error {
 	}
 }
 
-const bedrockMock = vi.hoisted(() => ({
+const bedrockMock = hoisted(() => ({
 	sendError: undefined as unknown,
 }));
 
-const openaiMock = vi.hoisted(() => ({
+const openaiMock = hoisted(() => ({
 	// Default parsed body; individual tests may override before invoking.
 	parsedBody: { error: "blocked by gateway WAF" } as unknown,
 }));
 
-vi.mock("openai", () => {
+mockModule("openai", () => {
 	function throwingCreate() {
 		const promise = Promise.resolve(undefined) as unknown as { withResponse: () => Promise<never> };
 		promise.withResponse = async () => {
@@ -52,7 +53,7 @@ vi.mock("openai", () => {
 	return { default: FakeOpenAI };
 });
 
-vi.mock("@aws-sdk/client-bedrock-runtime", () => {
+mockModule("@aws-sdk/client-bedrock-runtime", () => {
 	class BedrockRuntimeServiceException extends Error {}
 
 	class BedrockRuntimeClient {

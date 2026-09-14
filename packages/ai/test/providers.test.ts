@@ -1,4 +1,5 @@
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
+import { Effect } from "effect";
 import { lazyApi } from "../src/api/lazy.ts";
 import { envApiKeyAuth } from "../src/auth/helpers.ts";
 import type { AuthContext, AuthEvent } from "../src/auth/types.ts";
@@ -346,10 +347,11 @@ describe("createProvider", () => {
 		const streams = recordingStreams("deferred", []);
 		streams.fetchDeferred = (model) => streams.streamSimple(model, context);
 		const api = lazyApi(
-			async () => {
-				loads++;
-				return streams;
-			},
+			() =>
+				Effect.tryPromise(async () => {
+					loads++;
+					return streams;
+				}),
 			{ fetchDeferred: true },
 		);
 		const model = testModel("api-a", "model-a");

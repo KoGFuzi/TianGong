@@ -1,4 +1,4 @@
-import { expect, expectTypeOf, it } from "./bun-test.ts";
+import { expect, expectTypeOf, it } from "bun:test";
 import { GITHUB_COPILOT_MODELS } from "../src/providers/github-copilot.models.ts";
 import { XAI_MODELS } from "../src/providers/xai.models.ts";
 

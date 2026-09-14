@@ -3,7 +3,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "./bun-test.ts";
+import { afterEach, describe, expect, it } from "bun:test";
 
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 const temporaryRoots: string[] = [];
@@ -30,6 +30,7 @@ describe("strict model generation", () => {
 			"qwen3.6-flash",
 			"qwen3.7-max",
 			"qwen3.7-plus",
+			"qwen3.8-flash",
 			"qwen3.8-max",
 			"qwen3.8-max-preview",
 		];

@@ -1,15 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from "./bun-test.ts";
+import { beforeEach, describe, expect, it } from "bun:test";
+import { mockModule, hoisted } from "./utils/testing.ts";
 import { complete } from "../src/compat.ts";
 import type { Model } from "../src/types.ts";
 
 // Router/virtual ids (e.g. OpenRouter `auto`) keep `model` pinned to the
 // requested id and surface the routed concrete id on `responseModel`.
 
-const mockState = vi.hoisted(() => ({
+const mockState = hoisted(() => ({
 	chunks: [] as unknown[],
 }));
 
-vi.mock("openai", () => {
+mockModule("openai", () => {
 	class FakeOpenAI {
 		chat = {
 			completions: {

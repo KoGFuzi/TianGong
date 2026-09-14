@@ -1,10 +1,11 @@
 import { Type } from "typebox";
-import { beforeEach, describe, expect, it, vi } from "./bun-test.ts";
+import { beforeEach, describe, expect, it } from "bun:test";
+import { mockModule, hoisted } from "./utils/testing.ts";
 import { convertMessages } from "../src/api/openai-completions.ts";
 import { getModel, stream, streamSimple } from "../src/compat.ts";
 import type { AssistantMessage, Model, SimpleStreamOptions, Tool, ToolResultMessage } from "../src/types.ts";
 
-const mockState = vi.hoisted(() => ({
+const mockState = hoisted(() => ({
 	lastParams: undefined as unknown,
 	chunks: undefined as
 		| Array<null | {
@@ -20,7 +21,7 @@ const mockState = vi.hoisted(() => ({
 		| undefined,
 }));
 
-vi.mock("openai", () => {
+mockModule("openai", () => {
 	class FakeOpenAI {
 		chat = {
 			completions: {
@@ -148,6 +149,30 @@ describe("openai-completions tool_choice", () => {
 		expect(params.tool_choice).toBe("required");
 		expect(Array.isArray(params.tools)).toBe(true);
 		expect(params.tools?.length ?? 0).toBeGreaterThan(0);
+	});
+
+	it("includes toolChoice when no tools are provided", async () => {
+		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini")!;
+		const model = { ...baseModel, api: "openai-completions" } as const;
+		let payload: unknown;
+
+		await streamSimple(
+			model,
+			{
+				messages: [{ role: "user", content: "Summarize the conversation", timestamp: Date.now() }],
+			},
+			{
+				apiKey: "test",
+				toolChoice: "none",
+				onPayload: (params: unknown) => {
+					payload = params;
+				},
+			},
+		).result();
+
+		const params = (payload ?? mockState.lastParams) as { tool_choice?: string; tools?: unknown[] };
+		expect(params.tool_choice).toBe("none");
+		expect(params).not.toHaveProperty("tools");
 	});
 
 	it("omits strict when compat disables strict mode", async () => {
@@ -1072,10 +1097,10 @@ describe("openai-completions tool_choice", () => {
 		expect(params.messages?.[0]?.role).toBe("system");
 	});
 
-	it("keeps developer messages for OpenAI and Anthropic OpenRouter reasoning model instructions", async () => {
+	it("keeps developer messages for OpenAI and Anthropic OpenRouter batch instructions", async () => {
 		for (const model of [
 			getModel("openrouter", "openai/gpt-5.2-codex"),
-			getModel("openrouter", "anthropic/claude-sonnet-4.5"),
+			getModel("openrouter", "anthropic/claude-fable-5.1:batch"),
 		]) {
 			expect(model).toBeDefined();
 			let payload: unknown;

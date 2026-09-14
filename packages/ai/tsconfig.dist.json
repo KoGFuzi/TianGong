@@ -5,7 +5,8 @@
 		"declaration": true,
 		"emitDeclarationOnly": true,
 		"outDir": "dist",
-		"rootDir": "src"
+		"rootDir": "src",
+		"rewriteRelativeImportExtensions": true
 	},
 	"include": ["src/**/*.ts"],
 	"exclude": ["src/**/*.d.ts", "scripts/**/*", "**/*.test.ts"]

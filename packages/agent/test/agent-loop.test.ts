@@ -7,7 +7,7 @@ import {
 	type UserMessage,
 } from "@onepanda-tiangongsec/tg-ai";
 import { Type } from "typebox";
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { agentLoop, agentLoopContinue } from "../src/agent-loop.ts";
 import { setDefaultStreamFn } from "../src/index.ts";
 import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentTool } from "../src/types.ts";
@@ -150,8 +150,8 @@ describe("agentLoop with AgentMessage", () => {
 
 		// Should have user message and assistant message
 		expect(messages.length).toBe(2);
-		expect(messages[0]!!.role).toBe("user");
-		expect(messages[1]!!.role).toBe("assistant");
+		expect(messages[0].role).toBe("user");
+		expect(messages[1].role).toBe("assistant");
 
 		// Verify event sequence
 		const eventTypes = events.map((e) => e.type);
@@ -215,7 +215,7 @@ describe("agentLoop with AgentMessage", () => {
 
 		// The notification should have been filtered out in convertToLlm
 		expect(convertedMessages.length).toBe(1); // Only user message
-		expect(convertedMessages[0]!.role).toBe("user");
+		expect(convertedMessages[0].role).toBe("user");
 	});
 
 	it("should apply transformContext before convertToLlm", async () => {
@@ -438,7 +438,7 @@ describe("agentLoop with AgentMessage", () => {
 		// The loop continues so the model can re-issue the tool call.
 		expect(callIndex).toBe(2);
 		const messages = await stream.result();
-		expect(messages[messages.length - 1]!.role).toBe("assistant");
+		expect(messages[messages.length - 1].role).toBe("assistant");
 	});
 
 	it("should execute mutated beforeToolCall args without revalidation", async () => {
@@ -764,8 +764,8 @@ describe("agentLoop with AgentMessage", () => {
 			(e): e is Extract<AgentEvent, { type: "tool_execution_end" }> => e.type === "tool_execution_end",
 		);
 		expect(toolEnds.length).toBe(2);
-		expect(toolEnds[0]!.isError).toBe(false);
-		expect(toolEnds[1]!.isError).toBe(false);
+		expect(toolEnds[0].isError).toBe(false);
+		expect(toolEnds[1].isError).toBe(false);
 
 		// Queued message should appear in events after both tool result messages
 		const eventSequence = events.flatMap((event) => {
@@ -1048,11 +1048,13 @@ describe("agentLoop with AgentMessage", () => {
 			tools: [tool],
 		};
 		let convertedSecondTurnSystemPrompt = "";
+		let prepareCalls = 0;
 		let prepared = false;
 		const config: AgentLoopConfig = {
 			model: createModel(),
 			convertToLlm: identityConverter,
 			prepareNextTurn: async ({ context: currentContext }) => {
+				prepareCalls++;
 				if (prepared) return undefined;
 				prepared = true;
 				return {
@@ -1098,6 +1100,7 @@ describe("agentLoop with AgentMessage", () => {
 		}
 
 		expect(llmCalls).toBe(2);
+		expect(prepareCalls).toBe(1);
 		expect(convertedSecondTurnSystemPrompt).toBe("second prompt");
 	});
 
@@ -1536,7 +1539,7 @@ describe("agentLoopContinue with AgentMessage", () => {
 
 		// Should only return the new assistant message (not the existing user message)
 		expect(messages.length).toBe(1);
-		expect(messages[0]!.role).toBe("assistant");
+		expect(messages[0].role).toBe("assistant");
 
 		// Should NOT have user message events (that's the key difference from agentLoop)
 		const messageEndEvents = events.filter((e) => e.type === "message_end");
@@ -1602,6 +1605,6 @@ describe("agentLoopContinue with AgentMessage", () => {
 
 		const messages = await stream.result();
 		expect(messages.length).toBe(1);
-		expect(messages[0]!.role).toBe("assistant");
+		expect(messages[0].role).toBe("assistant");
 	});
 });

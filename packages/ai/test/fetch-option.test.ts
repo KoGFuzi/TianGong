@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "./bun-test.ts";
+import { afterEach, describe, expect, it, mock } from "bun:test";
+import { stubGlobal, unstubAllGlobals } from "./utils/testing.ts";
 import { streamSimple as streamAnthropic } from "../src/api/anthropic-messages.ts";
 import { streamSimple as streamAzureOpenAIResponses } from "../src/api/azure-openai-responses.ts";
 import { streamSimple as streamGoogleGenerativeAI } from "../src/api/google-generative-ai.ts";
@@ -8,7 +9,7 @@ import { streamSimple as streamOpenAICodexResponses } from "../src/api/openai-co
 import { streamSimple as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import { streamSimple as streamOpenAIResponses } from "../src/api/openai-responses.ts";
 import { generateImages } from "../src/api/openrouter-images.ts";
-import { streamSimple as streamPiMessages } from "../src/api/tg-messages.ts";
+import { streamSimple as streamTgMessages } from "../src/api/tg-messages.ts";
 import type { Api, Context, FetchFunction, ImagesModel, Model } from "../src/types.ts";
 
 const context: Context = {
@@ -31,23 +32,23 @@ function createModel<TApi extends Api>(api: TApi): Model<TApi> {
 }
 
 function mockFetches() {
-	const fallback = vi.fn<FetchFunction>(async () => {
+	const fallback = mock<FetchFunction>(async () => {
 		throw new Error("ambient fetch must not be called");
 	});
-	const custom = vi.fn<FetchFunction>(
+	const custom = mock<FetchFunction>(
 		async () =>
 			new Response(JSON.stringify({ error: { message: "upstream rejected request" } }), {
 				status: 401,
 				headers: { "content-type": "application/json" },
 			}),
 	);
-	vi.stubGlobal("fetch", fallback);
+	stubGlobal("fetch", fallback);
 	return { custom, fallback };
 }
 
 function expectOnlyCustomFetch(
-	custom: ReturnType<typeof vi.fn<FetchFunction>>,
-	fallback: ReturnType<typeof vi.fn<FetchFunction>>,
+	custom: ReturnType<typeof mock<FetchFunction>>,
+	fallback: ReturnType<typeof mock<FetchFunction>>,
 ) {
 	expect(custom).toHaveBeenCalled();
 	expect(fallback).not.toHaveBeenCalled();
@@ -55,7 +56,7 @@ function expectOnlyCustomFetch(
 }
 
 afterEach(() => {
-	vi.unstubAllGlobals();
+	unstubAllGlobals();
 });
 
 describe("fetch stream option", () => {
@@ -99,7 +100,7 @@ describe("fetch stream option", () => {
 		expect(globalThis.fetch).toBe(fallback);
 	});
 
-	it("uses fetch for Mistral, Codex SSE, and pi-messages HTTP requests", async () => {
+	it("uses fetch for Mistral, Codex SSE, and tg-messages HTTP requests", async () => {
 		const { custom, fallback } = mockFetches();
 		await streamMistral(createModel("mistral-conversations"), context, {
 			apiKey: "test-key",
@@ -111,7 +112,7 @@ describe("fetch stream option", () => {
 			transport: "sse",
 			maxRetries: 0,
 		}).result();
-		await streamPiMessages(createModel("pi-messages"), context, {
+		await streamTgMessages(createModel("tg-messages"), context, {
 			apiKey: "test-key",
 			fetch: custom,
 		}).result();
@@ -139,14 +140,14 @@ describe("fetch stream option", () => {
 	});
 
 	it("allows Google adapters to receive globalThis.fetch explicitly", async () => {
-		const ambient = vi.fn<FetchFunction>(
+		const ambient = mock<FetchFunction>(
 			async () =>
 				new Response(JSON.stringify({ error: { message: "upstream rejected request" } }), {
 					status: 401,
 					headers: { "content-type": "application/json" },
 				}),
 		);
-		vi.stubGlobal("fetch", ambient);
+		stubGlobal("fetch", ambient);
 		const result = await streamGoogleGenerativeAI(createModel("google-generative-ai"), context, {
 			apiKey: "test-key",
 			fetch: ambient,

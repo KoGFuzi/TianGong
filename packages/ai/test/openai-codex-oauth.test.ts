@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "./bun-test.ts";
+import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { useFakeTimers, useRealTimers, setSystemTime, advanceTimersByTimeAsync, stubGlobal, unstubAllGlobals, poll } from "./utils/testing.ts";
 import { openaiCodexOAuth } from "../src/auth/oauth/openai-codex.ts";
 
 const neverAbortedSignal = new AbortController().signal;
@@ -69,15 +70,15 @@ function loginOpenAICodexDeviceCodeForTest(options: {
 
 describe("OpenAI Codex OAuth", () => {
 	afterEach(() => {
-		vi.restoreAllMocks();
-		vi.unstubAllGlobals();
-		vi.useRealTimers();
+		mock.restore();
+		unstubAllGlobals();
+		useRealTimers();
 	});
 
 	it("logs in with the OpenAI Codex device code flow", async () => {
-		vi.useFakeTimers();
+		useFakeTimers();
 		const startTime = new Date("2026-05-20T00:00:00Z");
-		vi.setSystemTime(startTime);
+		setSystemTime(startTime);
 
 		const accessToken = createAccessToken("account-123");
 		const deviceInfos: Array<{
@@ -97,7 +98,7 @@ describe("OpenAI Codex OAuth", () => {
 			}),
 		];
 
-		const fetchMock = vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+		const fetchMock = mock(async (input: unknown, init?: RequestInit): Promise<Response> => {
 			const url = getUrl(input);
 
 			if (url === "https://auth.openai.com/api/accounts/deviceauth/usercode") {
@@ -145,14 +146,14 @@ describe("OpenAI Codex OAuth", () => {
 			throw new Error(`Unexpected fetch URL: ${url}`);
 		});
 
-		vi.stubGlobal("fetch", fetchMock);
+		stubGlobal("fetch", fetchMock);
 
 		const credentialsPromise = loginOpenAICodexDeviceCodeForTest({
 			onDeviceCode: (info) => deviceInfos.push(info),
 		});
 
 		for (let i = 0; i < 5 && pollTimes.length === 0; i++) {
-			await vi.advanceTimersByTimeAsync(0);
+			await advanceTimersByTimeAsync(0);
 		}
 		expect(deviceInfos).toEqual([
 			{
@@ -164,10 +165,10 @@ describe("OpenAI Codex OAuth", () => {
 		]);
 		expect(pollTimes).toEqual([startTime.getTime()]);
 
-		await vi.advanceTimersByTimeAsync(4999);
+		await advanceTimersByTimeAsync(4999);
 		expect(pollTimes).toEqual([startTime.getTime()]);
 
-		await vi.advanceTimersByTimeAsync(1);
+		await advanceTimersByTimeAsync(1);
 		await expect(credentialsPromise).resolves.toMatchObject({
 			access: accessToken,
 			refresh: "refresh-token",
@@ -180,6 +181,7 @@ describe("OpenAI Codex OAuth", () => {
 	it("offers browser login first and uses the selected OpenAI Codex device code flow", async () => {
 		const accessToken = createAccessToken("account-456");
 		const selectPrompts: Array<{
+			type: "select";
 			message: string;
 			options: readonly { id: string; label: string }[];
 		}> = [];
@@ -190,9 +192,9 @@ describe("OpenAI Codex OAuth", () => {
 			expiresInSeconds?: number;
 		}> = [];
 
-		vi.stubGlobal(
+		stubGlobal(
 			"fetch",
-			vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+			mock(async (input: unknown, init?: RequestInit): Promise<Response> => {
 				const url = getUrl(input);
 				if (url === "https://auth.openai.com/api/accounts/deviceauth/usercode") {
 					expect(JSON.parse(String(init?.body))).toEqual({ client_id: "app_EMoamEEZ73f0CkXaXp7hrann" });
@@ -252,7 +254,7 @@ describe("OpenAI Codex OAuth", () => {
 					{ id: "device_code", label: "Device code login (headless)" },
 				],
 			},
-		]);
+		] satisfies typeof selectPrompts);
 		expect(deviceInfos).toEqual([
 			{
 				userCode: "WXYZ-7890",
@@ -276,13 +278,13 @@ describe("OpenAI Codex OAuth", () => {
 	});
 
 	it("cancels the OpenAI Codex device code flow while waiting", async () => {
-		vi.useFakeTimers();
+		useFakeTimers();
 		const controller = new AbortController();
 		const pollTimes: number[] = [];
 
-		vi.stubGlobal(
+		stubGlobal(
 			"fetch",
-			vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+			mock(async (input: unknown, init?: RequestInit): Promise<Response> => {
 				const url = getUrl(input);
 				if (url === "https://auth.openai.com/api/accounts/deviceauth/usercode") {
 					expect(JSON.parse(String(init?.body))).toEqual({ client_id: "app_EMoamEEZ73f0CkXaXp7hrann" });
@@ -310,7 +312,7 @@ describe("OpenAI Codex OAuth", () => {
 		);
 
 		for (let i = 0; i < 5 && pollTimes.length === 0; i++) {
-			await vi.advanceTimersByTimeAsync(0);
+			await advanceTimersByTimeAsync(0);
 		}
 		expect(pollTimes).toHaveLength(1);
 
@@ -321,12 +323,12 @@ describe("OpenAI Codex OAuth", () => {
 	});
 
 	it("times out the OpenAI Codex device code flow after 15 minutes", async () => {
-		vi.useFakeTimers();
+		useFakeTimers();
 		const pollTimes: number[] = [];
 
-		vi.stubGlobal(
+		stubGlobal(
 			"fetch",
-			vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+			mock(async (input: unknown, init?: RequestInit): Promise<Response> => {
 				const url = getUrl(input);
 				if (url === "https://auth.openai.com/api/accounts/deviceauth/usercode") {
 					expect(JSON.parse(String(init?.body))).toEqual({ client_id: "app_EMoamEEZ73f0CkXaXp7hrann" });
@@ -353,18 +355,18 @@ describe("OpenAI Codex OAuth", () => {
 		);
 
 		for (let i = 0; i < 5 && pollTimes.length === 0; i++) {
-			await vi.advanceTimersByTimeAsync(0);
+			await advanceTimersByTimeAsync(0);
 		}
 		expect(pollTimes).toHaveLength(1);
 
-		await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+		await advanceTimersByTimeAsync(15 * 60 * 1000);
 		const rejection = await rejectionPromise;
 		expect(rejection).toBeInstanceOf(Error);
 		expect((rejection as Error).message).toBe("Device flow timed out");
 	});
 
 	it("treats OpenAI Codex device auth 403 and 404 responses as pending", async () => {
-		vi.useFakeTimers();
+		useFakeTimers();
 		const accessToken = createAccessToken("account-403-404");
 		const pollTimes: number[] = [];
 		const pollResponses = [
@@ -377,9 +379,9 @@ describe("OpenAI Codex OAuth", () => {
 			}),
 		];
 
-		vi.stubGlobal(
+		stubGlobal(
 			"fetch",
-			vi.fn(async (input: unknown): Promise<Response> => {
+			mock(async (input: unknown): Promise<Response> => {
 				const url = getUrl(input);
 				if (url === "https://auth.openai.com/api/accounts/deviceauth/usercode") {
 					return jsonResponse({
@@ -412,10 +414,10 @@ describe("OpenAI Codex OAuth", () => {
 		});
 
 		for (let i = 0; i < 5 && pollTimes.length === 0; i++) {
-			await vi.advanceTimersByTimeAsync(0);
+			await advanceTimersByTimeAsync(0);
 		}
-		await vi.advanceTimersByTimeAsync(1000);
-		await vi.advanceTimersByTimeAsync(1000);
+		await advanceTimersByTimeAsync(1000);
+		await advanceTimersByTimeAsync(1000);
 
 		await expect(credentialsPromise).resolves.toMatchObject({
 			access: accessToken,
@@ -426,9 +428,9 @@ describe("OpenAI Codex OAuth", () => {
 	});
 
 	it("includes the response body in OpenAI Codex device auth poll failures", async () => {
-		vi.stubGlobal(
+		stubGlobal(
 			"fetch",
-			vi.fn(async (input: unknown): Promise<Response> => {
+			mock(async (input: unknown): Promise<Response> => {
 				const url = getUrl(input);
 				if (url === "https://auth.openai.com/api/accounts/deviceauth/usercode") {
 					return jsonResponse({
@@ -454,10 +456,10 @@ describe("OpenAI Codex OAuth", () => {
 	});
 
 	it("does not write token refresh failures to stderr", async () => {
-		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-		vi.stubGlobal(
+		const consoleError = spyOn(console, "error").mockImplementation(() => {});
+		stubGlobal(
 			"fetch",
-			vi.fn(async (): Promise<Response> => {
+			mock(async (): Promise<Response> => {
 				return new Response(
 					JSON.stringify({
 						error: {

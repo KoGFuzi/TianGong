@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { stream, streamSimple } from "../src/api/azure-openai-responses.ts";
 import type { Model } from "../src/types.ts";
 

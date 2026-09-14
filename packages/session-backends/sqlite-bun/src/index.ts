@@ -1,41 +1,16 @@
-import { Database, type SQLQueryBindings } from "bun:sqlite";
+import { Database, type Statement } from "bun:sqlite";
 import { sql } from "./sqlite/sql.ts";
 import type { SqliteDatabase, SqliteDatabaseFactory, SqliteRunResult, SqliteStatement } from "./sqlite/types.ts";
 
-function isNamedParameters(value: unknown): value is Record<string, unknown> {
-	if (value === null || typeof value !== "object") return false;
-	return !Array.isArray(value) && !ArrayBuffer.isView(value);
-}
-
-function isAsyncResult(value: unknown): boolean {
-	return value !== null && (typeof value === "object" || typeof value === "function") && "then" in value;
-}
-
-function toBunNamedParams(params: unknown[]): SQLQueryBindings[] {
-	if (params.length === 1 && isNamedParameters(params[0])) {
-		const named = params[0] as Record<string, unknown>;
-		const converted: Record<string, unknown> = {};
-		for (const key of Object.keys(named)) {
-			converted["$" + key] = named[key];
-		}
-		return [converted];
-	}
-	return params as SQLQueryBindings[];
-}
-
-function normalizeSql(sql: string): string {
-	return sql.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, (_, name) => "$" + name);
-}
-
 class BunSqliteStatement implements SqliteStatement {
-	private readonly statement: ReturnType<Database["query"]>;
+	private readonly statement: Statement;
 
-	constructor(private readonly db: Database, sql: string) {
-		this.statement = db.query(normalizeSql(sql));
+	constructor(statement: Statement) {
+		this.statement = statement;
 	}
 
 	run(...params: unknown[]): SqliteRunResult {
-		const result = this.statement.run(...toBunNamedParams(params));
+		const result = this.statement.run(...(params as never[]));
 		return {
 			changes: Number(result.changes),
 			lastInsertRowid: result.lastInsertRowid === undefined ? undefined : Number(result.lastInsertRowid),
@@ -43,37 +18,53 @@ class BunSqliteStatement implements SqliteStatement {
 	}
 
 	get<TRow extends object>(...params: unknown[]): TRow | undefined {
-		const result = this.statement.get(...toBunNamedParams(params)) as TRow | undefined | null;
-		return result === null ? undefined : result;
+		// bun:sqlite yields null for "no row" where node:sqlite yields undefined;
+		// normalize so the backend code can rely on the node semantics.
+		const row = this.statement.get(...(params as never[])) as TRow | null | undefined;
+		return row === null ? undefined : row;
 	}
 
 	all<TRow extends object>(...params: unknown[]): TRow[] {
-		return this.statement.all(...toBunNamedParams(params)) as TRow[];
+		return this.statement.all(...(params as never[])) as TRow[];
 	}
 
 	iterate<TRow extends object>(...params: unknown[]): Iterable<TRow> {
-		return this.statement.iterate(...toBunNamedParams(params)) as Iterable<TRow>;
+		return this.statement.iterate(...(params as never[])) as Iterable<TRow>;
 	}
 }
 
 class BunSqliteDatabase implements SqliteDatabase {
-	constructor(private readonly db: Database) {}
+	private readonly db: Database;
+
+	constructor(db: Database) {
+		this.db = db;
+	}
 
 	exec(query: string): void {
 		this.db.exec(query);
 	}
 
 	prepare(query: string): SqliteStatement {
-		return new BunSqliteStatement(this.db, query);
+		return new BunSqliteStatement(this.db.query(query));
 	}
 
 	transaction<T>(fn: () => T): T {
-		const result = this.db.transaction(() => {
-			const value = fn();
-			if (isAsyncResult(value)) throw new TypeError("SQLite transaction callbacks must be synchronous");
-			return value;
-		})();
-		return result;
+		sql`BEGIN IMMEDIATE`.exec(this);
+		try {
+			const result = fn();
+			if (result !== null && (typeof result === "object" || typeof result === "function") && "then" in result) {
+				throw new TypeError("SQLite transaction callbacks must be synchronous");
+			}
+			sql`COMMIT`.exec(this);
+			return result;
+		} catch (error) {
+			try {
+				sql`ROLLBACK`.exec(this);
+			} catch {
+				// Ignore rollback errors to rethrow original error.
+			}
+			throw error;
+		}
 	}
 
 	close(): void {
@@ -90,7 +81,16 @@ export function createBunSqliteFactory(): SqliteDatabaseFactory {
 		async open(path: string): Promise<SqliteDatabase> {
 			return new BunSqliteDatabase(new Database(path));
 		},
+		async openExisting(path: string): Promise<SqliteDatabase> {
+			// bun 1.3.14 misuses `{ create: false }` alone (SQLITE_MISUSE); the explicit
+			// readwrite flag is required for "open without creating" semantics.
+			return new BunSqliteDatabase(new Database(path, { readwrite: true, create: false }));
+		},
+		async openReadOnly(path: string): Promise<SqliteDatabase> {
+			return new BunSqliteDatabase(new Database(path, { readonly: true }));
+		},
 	};
 }
 
+// Re-export the SQLite session backend and types so this package is a complete bun-sqlite backend.
 export * from "./sqlite/index.ts";

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { getModels, getProviders } from "../src/compat.ts";
 import type { Api, Model } from "../src/types.ts";
 

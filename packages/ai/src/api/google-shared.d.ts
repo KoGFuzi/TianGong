@@ -3,6 +3,7 @@
  */
 import { type Content, FinishReason, FunctionCallingConfigMode, type Part } from "@google/genai";
 import type { Context, Model, ModelThinkingLevel, StopReason, StreamOptions, ThinkingLevel, Tool } from "../types.ts";
+import { type ProviderRetryClock } from "../utils/provider-retry.ts";
 type GoogleApiType = "google-generative-ai" | "google-vertex";
 /**
  * Thinking level for Gemini 3 models.
@@ -79,5 +80,7 @@ export declare function mapStopReasonString(reason: string): StopReason;
  * both, so normalize the error by adding the missing `headers` before
  * rethrowing.
  */
-export declare function retryGoogleRequest<T>(request: () => Promise<T>, options?: Pick<StreamOptions, "maxRetries" | "maxRetryDelayMs" | "signal">): Promise<T>;
+export declare function retryGoogleRequest<T>(request: () => Promise<T>, options?: Pick<StreamOptions, "maxRetries" | "maxRetryDelayMs" | "signal"> & {
+    clock?: ProviderRetryClock;
+}): Promise<T>;
 export {};

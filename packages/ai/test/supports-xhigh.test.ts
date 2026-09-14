@@ -1,4 +1,4 @@
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { getModel, getSupportedThinkingLevels } from "../src/compat.ts";
 
 describe("getSupportedThinkingLevels", () => {

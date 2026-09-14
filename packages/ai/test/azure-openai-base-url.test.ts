@@ -1,6 +1,7 @@
 import { arch, platform, release } from "node:os";
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it, vi } from "./bun-test.ts";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mockModule, hoisted } from "./utils/testing.ts";
 import { stream as streamAzureOpenAIResponses } from "../src/api/azure-openai-responses.ts";
 import { getModel } from "../src/compat.ts";
 import type { Context, Model } from "../src/types.ts";
@@ -19,12 +20,12 @@ interface CapturedAzureResponsesPayload {
 	tools?: Array<{ strict?: boolean }>;
 }
 
-const azureMock = vi.hoisted(() => ({
+const azureMock = hoisted(() => ({
 	constructorCalls: [] as CapturedAzureClientOptions[],
 	lastParams: undefined as CapturedAzureResponsesPayload | undefined,
 }));
 
-vi.mock("openai", () => {
+mockModule("openai", () => {
 	class AzureOpenAI {
 		responses = {
 			create: (params: CapturedAzureResponsesPayload) => {

@@ -1,7 +1,13 @@
+export interface ProviderRetryClock {
+    now(): number;
+    setTimeout(callback: () => void, milliseconds: number): ReturnType<typeof setTimeout>;
+    clearTimeout(timeout: ReturnType<typeof setTimeout>): void;
+}
 interface ProviderRetryOptions {
     maxRetries?: number;
     maxRetryDelayMs?: number;
     signal?: AbortSignal;
+    clock?: ProviderRetryClock;
 }
 /**
  * Reproduce the retry behavior used by the OpenAI and Anthropic SDKs while making

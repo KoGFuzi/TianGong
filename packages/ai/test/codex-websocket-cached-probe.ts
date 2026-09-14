@@ -9,7 +9,6 @@
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Type } from "typebox";
-import { ModelRuntime } from "../../coding-agent/src/core/model-runtime.ts";
 import {
 	closeOpenAICodexWebSocketSessions,
 	getOpenAICodexWebSocketDebugStats,
@@ -166,11 +165,9 @@ async function main(): Promise<void> {
 	const model = getModel("openai-codex", "gpt-5.5") as Model<"openai-codex-responses"> | undefined;
 	if (!model) throw new Error("Model openai-codex/gpt-5.5 not found");
 	const modelWithMaxTokens = { ...model, maxTokens: args.maxTokens };
-	const modelRuntime = await ModelRuntime.create();
-	const apiKey =
-		(await modelRuntime.getAuth("openai-codex"))?.auth.apiKey ?? (await modelRuntime.getAuth("openai"))?.auth.apiKey;
+	const apiKey = process.env.OPENAI_API_KEY;
 	if (!apiKey) {
-		throw new Error("No OpenAI Codex API key found in coding-agent auth storage.");
+		throw new Error("No OpenAI Codex API key found (set OPENAI_API_KEY).");
 	}
 	const context: Context = {
 		systemPrompt:

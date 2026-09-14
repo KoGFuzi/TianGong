@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { Compile } from "typebox/compile";
-import { describe, expect, it } from "./bun-test.ts";
+import { Settings } from "typebox/system";
+import { describe, expect, it } from "bun:test";
 import type { Tool, ToolCall } from "../src/types.ts";
 import { validateToolArguments } from "../src/utils/validation.ts";
 
@@ -50,6 +51,12 @@ describe("validateToolArguments", () => {
 			arguments: { count: "42" as unknown as number },
 		};
 
+		// TypeBox caches its evaluation probe (`CanEvaluate`) per process and
+		// shares the module instance with sibling suites, so stubbing
+		// `globalThis.Function` alone is not deterministic. Disabling
+		// acceleration forces the non-evaluating check path, modelling an
+		// environment without code generation.
+		Settings.Set({ useAcceleration: false });
 		globalThis.Function = (() => {
 			throw new EvalError("Code generation from strings disallowed for this context");
 		}) as unknown as FunctionConstructor;
@@ -58,6 +65,7 @@ describe("validateToolArguments", () => {
 			expect(validateToolArguments(tool, toolCall)).toEqual({ count: 42 });
 		} finally {
 			globalThis.Function = originalFunction;
+			Settings.Set({ useAcceleration: true });
 		}
 	});
 

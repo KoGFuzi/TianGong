@@ -1,6 +1,6 @@
 import { arch, platform, release } from "node:os";
 import { Type } from "typebox";
-import { describe, expect, it } from "./bun-test.ts";
+import { describe, expect, it } from "bun:test";
 import { stream as streamMistral } from "../src/api/mistral-conversations.ts";
 import { getModel } from "../src/compat.ts";
 import type { Context, FetchFunction, ProviderResponse } from "../src/types.ts";
@@ -235,7 +235,7 @@ describe("Mistral HTTP transport", () => {
 		]);
 	});
 
-	it("parses native thinking, text, tool calls, and cached-token usage", async () => {
+	it("parses native thinking, text, fragmented tool calls, and cached-token usage", async () => {
 		const model = getModel("mistral", "mistral-large-latest");
 		const context: Context = {
 			messages: [{ role: "user", content: "hello", timestamp: 1 }],
@@ -292,9 +292,8 @@ describe("Mistral HTTP transport", () => {
 						delta: {
 							tool_calls: [
 								{
-									id: "abc123456",
 									index: 0,
-									function: { name: "lookup", arguments: '"pi"}' },
+									function: { name: "", arguments: '"pi"}' },
 								},
 							],
 						},

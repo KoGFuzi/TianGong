@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "./bun-test.ts";
+import { afterEach, describe, expect, it, mock } from "bun:test";
+import { stubGlobal, unstubAllGlobals, stubEnv, unstubAllEnvs, waitFor } from "./utils/testing.ts";
 import { InMemoryCredentialStore } from "../src/auth/credential-store.ts";
 import { openRouterOAuth } from "../src/auth/oauth/openrouter.ts";
 import { createImagesModels } from "../src/images-models.ts";
@@ -20,10 +21,10 @@ function base64url(bytes: Uint8Array): string {
 	return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 }
 
-describe.sequential("OpenRouter OAuth", () => {
+describe("OpenRouter OAuth", () => {
 	afterEach(() => {
-		vi.unstubAllGlobals();
-		vi.unstubAllEnvs();
+		unstubAllGlobals();
+		unstubAllEnvs();
 	});
 
 	it("is exposed by both OpenRouter providers alongside API-key auth", () => {
@@ -54,13 +55,13 @@ describe.sequential("OpenRouter OAuth", () => {
 
 	it("runs PKCE on a one-shot loopback callback and exchanges the code for a permanent API key", async () => {
 		let exchangeBody: Record<string, unknown> | undefined;
-		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+		const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit) => {
 			const url = input instanceof Request ? input.url : String(input);
 			if (url !== TOKEN_URL) return nativeFetch(input, init);
 			exchangeBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
 			return jsonResponse({ key: "sk-or-test" });
 		});
-		vi.stubGlobal("fetch", fetchMock);
+		stubGlobal("fetch", fetchMock);
 
 		let authorizeUrl: URL | undefined;
 		let callbackResponse: Promise<Response> | undefined;
@@ -108,9 +109,9 @@ describe.sequential("OpenRouter OAuth", () => {
 	});
 
 	it("reports token exchange failures through both the callback page and login", async () => {
-		vi.stubGlobal(
+		stubGlobal(
 			"fetch",
-			vi.fn(async () => jsonResponse({ error: { message: "invalid code" } }, 403)),
+			mock(async () => jsonResponse({ error: { message: "invalid code" } }, 403)),
 		);
 
 		let callbackResponse: Promise<Response> | undefined;
@@ -133,13 +134,13 @@ describe.sequential("OpenRouter OAuth", () => {
 		let completeExchange = (_response: Response): void => {
 			throw new Error("Token exchange did not start");
 		};
-		const fetchMock = vi.fn(
+		const fetchMock = mock(
 			async () =>
 				new Promise<Response>((resolve) => {
 					completeExchange = resolve;
 				}),
 		);
-		vi.stubGlobal("fetch", fetchMock);
+		stubGlobal("fetch", fetchMock);
 
 		let callbackUrl: URL | undefined;
 		let firstCallback: Promise<Response> | undefined;
@@ -154,7 +155,7 @@ describe.sequential("OpenRouter OAuth", () => {
 			},
 		});
 
-		await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 		if (!callbackUrl) throw new Error("OpenRouter did not provide a callback URL");
 		expect((await nativeFetch(callbackUrl)).status).toBe(409);
 		expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -165,9 +166,9 @@ describe.sequential("OpenRouter OAuth", () => {
 	});
 
 	it("rejects a successful response that does not contain a key", async () => {
-		vi.stubGlobal(
+		stubGlobal(
 			"fetch",
-			vi.fn(async () => jsonResponse({ user_id: "user-1" })),
+			mock(async () => jsonResponse({ user_id: "user-1" })),
 		);
 
 		let callbackResponse: Promise<Response> | undefined;
@@ -188,13 +189,13 @@ describe.sequential("OpenRouter OAuth", () => {
 
 	it("mints a key from a pasted redirect URL when the loopback callback never arrives", async () => {
 		let exchangeBody: Record<string, unknown> | undefined;
-		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+		const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit) => {
 			const url = input instanceof Request ? input.url : String(input);
 			if (url !== TOKEN_URL) return nativeFetch(input, init);
 			exchangeBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
 			return jsonResponse({ key: "sk-or-manual" });
 		});
-		vi.stubGlobal("fetch", fetchMock);
+		stubGlobal("fetch", fetchMock);
 
 		let callbackUrl: string | undefined;
 		const credential = await openRouterOAuth.login({
@@ -221,13 +222,13 @@ describe.sequential("OpenRouter OAuth", () => {
 
 	it("accepts a bare authorization code from the manual prompt", async () => {
 		let exchangeBody: Record<string, unknown> | undefined;
-		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+		const fetchMock = mock(async (input: string | URL | Request, init?: RequestInit) => {
 			const url = input instanceof Request ? input.url : String(input);
 			if (url !== TOKEN_URL) return nativeFetch(input, init);
 			exchangeBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
 			return jsonResponse({ key: "sk-or-manual" });
 		});
-		vi.stubGlobal("fetch", fetchMock);
+		stubGlobal("fetch", fetchMock);
 
 		const credential = await openRouterOAuth.login({
 			signal: neverAbortedSignal,
@@ -240,8 +241,8 @@ describe.sequential("OpenRouter OAuth", () => {
 	});
 
 	it("fails login when the manual prompt is cancelled", async () => {
-		const fetchMock = vi.fn(async () => jsonResponse({ key: "sk-or-unexpected" }));
-		vi.stubGlobal("fetch", fetchMock);
+		const fetchMock = mock(async () => jsonResponse({ key: "sk-or-unexpected" }));
+		stubGlobal("fetch", fetchMock);
 
 		await expect(
 			openRouterOAuth.login({
@@ -256,8 +257,8 @@ describe.sequential("OpenRouter OAuth", () => {
 	});
 
 	it("rejects empty manual input without exchanging a code", async () => {
-		const fetchMock = vi.fn(async () => jsonResponse({ key: "sk-or-unexpected" }));
-		vi.stubGlobal("fetch", fetchMock);
+		const fetchMock = mock(async () => jsonResponse({ key: "sk-or-unexpected" }));
+		stubGlobal("fetch", fetchMock);
 
 		await expect(
 			openRouterOAuth.login({
@@ -303,7 +304,7 @@ describe.sequential("OpenRouter OAuth", () => {
 	});
 
 	it("uses the configured OAuth callback host", async () => {
-		vi.stubEnv("PI_OAUTH_CALLBACK_HOST", "localhost");
+		stubEnv("PI_OAUTH_CALLBACK_HOST", "localhost");
 		const controller = new AbortController();
 		let callbackUrl: URL | undefined;
 		const login = openRouterOAuth.login({

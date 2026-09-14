@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "./bun-test.ts";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mockModule, hoisted } from "./utils/testing.ts";
 import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import { getModel } from "../src/compat.ts";
 import type { Model } from "../src/types.ts";
@@ -16,12 +17,12 @@ interface CapturedCompletionsPayload {
 	session_id?: string;
 }
 
-const mockState = vi.hoisted(() => ({
+const mockState = hoisted(() => ({
 	lastParams: undefined as CapturedCompletionsPayload | undefined,
 	lastClientOptions: undefined as FakeOpenAIClientOptions | undefined,
 }));
 
-vi.mock("openai", () => {
+mockModule("openai", () => {
 	class FakeOpenAI {
 		chat = {
 			completions: {

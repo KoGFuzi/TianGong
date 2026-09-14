@@ -1,13 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "./bun-test.ts";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { useFakeTimers, useRealTimers, advanceTimersByTimeAsync, mockModule, hoisted } from "./utils/testing.ts";
 import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import type { Context, Model } from "../src/types.ts";
 
-const mockState = vi.hoisted(() => ({
+const mockState = hoisted(() => ({
 	requestOptions: [] as unknown[],
 	requestErrors: [] as Error[],
 }));
 
-vi.mock("openai", () => {
+mockModule("openai", () => {
 	class FakeOpenAI {
 		chat = {
 			completions: {
@@ -81,7 +82,7 @@ describe("openai-completions provider retries", () => {
 	});
 
 	afterEach(() => {
-		vi.useRealTimers();
+		useRealTimers();
 	});
 
 	it("disables SDK retries by default", async () => {
@@ -90,7 +91,7 @@ describe("openai-completions provider retries", () => {
 	});
 
 	it("honors provider retries while keeping SDK retries disabled", async () => {
-		vi.useFakeTimers();
+		useFakeTimers();
 		mockState.requestErrors = [
 			Object.assign(new Error("rate limited"), {
 				status: 429,
@@ -103,15 +104,15 @@ describe("openai-completions provider retries", () => {
 		];
 
 		const result = consume({ maxRetries: 2, maxRetryDelayMs: 100 });
-		await vi.advanceTimersByTimeAsync(0);
+		await advanceTimersByTimeAsync(0);
 		expect(mockState.requestOptions).toHaveLength(1);
-		await vi.advanceTimersByTimeAsync(99);
+		await advanceTimersByTimeAsync(99);
 		expect(mockState.requestOptions).toHaveLength(1);
-		await vi.advanceTimersByTimeAsync(1);
+		await advanceTimersByTimeAsync(1);
 		expect(mockState.requestOptions).toHaveLength(2);
-		await vi.advanceTimersByTimeAsync(99);
+		await advanceTimersByTimeAsync(99);
 		expect(mockState.requestOptions).toHaveLength(2);
-		await vi.advanceTimersByTimeAsync(1);
+		await advanceTimersByTimeAsync(1);
 		await result;
 
 		expect(mockState.requestOptions).toEqual([

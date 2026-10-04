@@ -186,6 +186,40 @@ const storage = await openDefaultSqliteStorage(); // ~/.local/share/TianGong/ses
   recovery paths; only one was going to be tuned. Do not reintroduce a second file format without a
   written reason.
 
+## V1 freeze
+
+`v1` is the delivery branch and `v1.0.0` is its tag. The tree is frozen for non-bug-fix work.
+
+**A change may land on `v1` only if it is a bug fix: code that is wrong, is broken, or fails a test.**
+Everything else goes to a branch off the tag and is merged into a development branch, not into `v1`.
+
+| Change | On `v1`? |
+| --- | --- |
+| A test fails, or a runtime error reproduces | Yes |
+| A crash, data loss, or an integrity failure | Yes |
+| A security defect in the auth path or the storage layer | Yes |
+| Documentation that states something the code does not do | Yes |
+| A refactor, a rename, a reformat | No |
+| A new feature, even a small one | No |
+| A new export, a new dependency, a new module | No |
+| Tightening a type that currently compiles | No |
+| A "while I am here" change | No |
+
+Bug fixes on `v1` follow these rules:
+
+1. **The fix is the smallest change that removes the defect.** No drive-by improvements.
+2. **Every fix lands with a regression test** that fails before the fix and passes after it. The test
+   justifies the fix; without it there is no way to tell a fix from a behaviour change.
+3. **The persisted `tg.*` kind strings and the SQLite schema do not change on `v1`.** Both are written
+   to storage. Renaming a kind or adding a migration is a breaking change, not a bug fix.
+4. **`packages/codemode`, `packages/mcp`, and `packages/tui/native` do not change on `v1`** for any
+   reason. The first two are vendored and frozen; the third is compiled by the platform toolchain.
+5. **`packages/ai/src/models.generated.ts` changes only through regeneration**, never by hand.
+6. **`docs/ops-manual.md` is updated in the same commit** when the fix changes any behaviour the manual
+   describes. A manual that lags the code is worse than no manual.
+7. **`bun run check` and `bun run test` must pass before the commit.** No exceptions for urgent fixes;
+   that is when the shortcuts bite.
+
 ## Type programs
 
 There are two, on purpose:

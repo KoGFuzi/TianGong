@@ -131,11 +131,14 @@ export class ApiKeyAuthenticator {
  *  - a `Headers` object directly, matched through its own case-insensitive `get()`. It cannot be
  *    treated as a record: `Object.entries(new Headers())` is empty.
  *  - a plain record at the top level, for a service that has already normalised its headers.
+ *
+ * The record members are read through `Object.entries`, so a type without a string index signature —
+ * node's own `IncomingMessage.headers` is one — still works: the lookup is by value, not by index.
  */
 export type AuthenticatedHeaders =
-	| { headers: { get(name: string): string | null | undefined } | Readonly<Record<string, string | undefined>> }
+	| { headers: { get(name: string): string | null | undefined } | object }
 	| { get(name: string): string | null | undefined }
-	| Readonly<Record<string, string | undefined>>;
+	| object;
 
 /**
  * Reads `Authorization` from whatever shape the caller handed over.
@@ -145,21 +148,23 @@ export type AuthenticatedHeaders =
  */
 function readAuthorization(request: AuthenticatedHeaders): string | undefined {
 	const withHeaders = request as {
-		headers?: { get?(name: string): string | null | undefined } | Readonly<Record<string, string | undefined>>;
+		headers?: { get?(name: string): string | null | undefined } | object;
 	};
 	const headers = withHeaders.headers;
 	if (headers !== undefined) {
-		if (typeof headers.get === "function") return toOptional(headers.get("authorization"));
-		return lookupHeader(headers as Readonly<Record<string, string | undefined>>, "authorization");
+		const withGet = headers as { get?(name: string): string | null | undefined };
+		if (typeof withGet.get === "function") return toOptional(withGet.get("authorization"));
+		return lookupHeader(headers, "authorization");
 	}
 	const withGet = request as { get?(name: string): string | null | undefined };
 	if (typeof withGet.get === "function") return toOptional(withGet.get("authorization"));
-	return lookupHeader(request as Readonly<Record<string, string | undefined>>, "authorization");
+	return lookupHeader(request, "authorization");
 }
 
-/** Finds one header name case-insensitively in a plain record. */
-function lookupHeader(record: Readonly<Record<string, string | undefined>>, name: string): string | undefined {
+/** Reads one header name case-insensitively out of a plain record. */
+function lookupHeader(record: object, name: string): string | undefined {
 	for (const [key, value] of Object.entries(record)) {
+		if (typeof value !== "string" && value !== undefined) continue;
 		if (key.toLowerCase() === name) return toOptional(value);
 	}
 	return undefined;

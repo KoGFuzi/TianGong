@@ -1,0 +1,42 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.3.5/schema.json",
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"style": {
+				"noNonNullAssertion": "off",
+				"useConst": "error",
+				"useNodejsImportProtocol": "off"
+			},
+			"suspicious": {
+				"noExplicitAny": "off",
+				"noControlCharactersInRegex": "off",
+				"noEmptyInterface": "off"
+			}
+		}
+	},
+	"formatter": {
+		"enabled": true,
+		"formatWithErrors": false,
+		"indentStyle": "tab",
+		"indentWidth": 3,
+		"lineWidth": 120
+	},
+	"files": {
+		"includes": [
+			"scripts/**/*.ts",
+			"vitest.base.ts",
+			"packages/*/src/**/*.ts",
+			"packages/*/test/**/*.ts",
+			"packages/agent/examples/**/*.ts",
+			"!**/node_modules/**/*",
+			"!**/dist/**/*",
+			"!packages/*/src/models.generated.ts",
+			"!packages/*/src/**/*.models.ts",
+			"!packages/*/test/**/*.bench.ts",
+			"!packages/tui/native/**/*",
+			"!!**/node_modules"
+		]
+	}
+}

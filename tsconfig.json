@@ -1,0 +1,54 @@
+{
+	"extends": "./tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
+		"paths": {
+			"@OnePanda-TgSec/chord": ["./packages/chord/src/index.ts"],
+			"@OnePanda-TgSec/chord/bundler": ["./packages/chord/src/bundler.ts"],
+			"@OnePanda-TgSec/chord/context": ["./packages/chord/src/context/index.ts"],
+			"@OnePanda-TgSec/chord/delta": ["./packages/chord/src/delta/index.ts"],
+			"@OnePanda-TgSec/chord/node": ["./packages/chord/src/node.ts"],
+			"@OnePanda-TgSec/tg-telemetry": ["./packages/telemetry/src/index.ts"],
+			"@OnePanda-TgSec/tg-telemetry/testing": ["./packages/telemetry/src/testing/index.ts"],
+			"@OnePanda-TgSec/tg-ai": ["./packages/ai/src/index.ts"],
+			"@OnePanda-TgSec/tg-ai/oauth": ["./packages/ai/src/oauth.ts"],
+			"@OnePanda-TgSec/tg-ai/compat": ["./packages/ai/src/compat.ts"],
+			"@OnePanda-TgSec/tg-ai/config-paths": ["./packages/ai/src/config-paths.ts"],
+			"@OnePanda-TgSec/tg-ai/models": ["./packages/ai/src/models.ts"],
+			"@OnePanda-TgSec/tg-ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],
+			"@OnePanda-TgSec/tg-ai/dist/*": ["./packages/ai/src/*"],
+			"@OnePanda-TgSec/tg-gibraltar": ["./packages/gibraltar/src/index.ts"],
+			"@OnePanda-TgSec/tg-gibraltar/testing": ["./packages/gibraltar/src/testing/index.ts"],
+			"@OnePanda-TgSec/tg-gibraltar/*": [
+				"./packages/gibraltar/src/*.ts",
+				"./packages/gibraltar/src/*/index.ts",
+				"./packages/gibraltar/src/*"
+			],
+			"@OnePanda-TgSec/tg-agent-core": ["./packages/agent/src/index.ts"],
+			"@OnePanda-TgSec/tg-tui": ["./packages/tui/src/index.ts"],
+			"@OnePanda-TgSec/tg-tui/*": ["./packages/tui/src/*"],
+			"@earendil-works/pi-codemode": ["./packages/codemode/src/index.ts"],
+			"@earendil-works/pi-codemode/declarations": ["./packages/codemode/src/declarations.ts"],
+			"@earendil-works/pi-codemode/source": ["./packages/codemode/src/source.ts"],
+			"@earendil-works/pi-codemode/worker": ["./packages/codemode/src/runtime/worker.ts"],
+			"@earendil-works/pi-mcp": ["./packages/mcp/src/index.ts"],
+			"@earendil-works/pi-mcp/oauth": ["./packages/mcp/src/oauth/index.ts"],
+			"@earendil-works/pi-mcp/testing": ["./packages/mcp/src/testing/index.ts"],
+			"typebox": ["./node_modules/typebox"]
+		}
+	},
+	"include": [
+		"vitest.base.ts",
+		"packages/*/src/**/*",
+		"packages/*/test/**/*",
+		"packages/agent/examples/**/*"
+	],
+	"exclude": [
+		"**/dist/**",
+		"**/node_modules/**",
+		"packages/*/src/models.generated.ts",
+		"packages/ai/test/codex-websocket-cached-probe.ts"
+	]
+}

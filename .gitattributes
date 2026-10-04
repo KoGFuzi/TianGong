@@ -1,0 +1,24 @@
+# Normalize line endings for text files checked into the repository.
+* text=auto eol=lf
+
+*.ts text eol=lf
+*.tsx text eol=lf
+*.mts text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+
+# Native TUI addons are binaries: never touch line endings or filters.
+*.node binary
+*.c text eol=lf
+*.h text eol=lf
+*.m text eol=lf
+
+# Lockfile is text and must be diffable.
+bun.lock text eol=lf

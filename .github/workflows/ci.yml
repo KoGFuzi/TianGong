@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: "1.4.2"
+  NODE_VERSION: "22.19.0"
+
+jobs:
+  check:
+    name: House standard, types, format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install
+        run: bun install --ignore-scripts --frozen-lockfile
+
+      - name: Generate model data
+        run: bun run generate:models
+
+      - name: House standard
+        run: bun run check:house-standard
+
+      - name: Relative imports
+        run: bun run check:relative-imports
+
+      - name: Format
+        run: bun run check:format
+
+      - name: Types
+        run: bun run check:types
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install
+        run: bun install --ignore-scripts --frozen-lockfile
+
+      - name: Generate model data
+        run: bun run generate:models
+
+      - name: Build
+        run: bun run build
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install
+        run: bun install --ignore-scripts --frozen-lockfile
+
+      - name: Generate model data
+        run: bun run generate:models
+
+      # No provider keys are configured here, so the e2e tests stay inert.
+      - name: Test
+        run: bun run test
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install
+        run: bun install --ignore-scripts --frozen-lockfile
+
+      - name: Audit
+        run: bun audit --audit-level=high

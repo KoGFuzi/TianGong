@@ -1,0 +1,46 @@
+# Dependencies and build output
+node_modules/
+dist/
+dist-chrome/
+dist-firefox/
+.artifacts/
+*.log
+*.tsbuildinfo
+.DS_Store
+
+# Generated model catalog (reproduce with `bun run generate:models`)
+packages/ai/src/providers/data/
+packages/ai/src/providers/.model-*/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Editors
+.vscode/
+.zed/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+
+# Test and profiling output
+coverage/
+.nyc_output/
+*.cpuprofile
+tui-debug.log
+
+# Package specific
+.npm/
+out.jsonl
+out.html
+syntax.jsonl
+todo.md
+plans/
+collect.sh
+
+# Local agent state
+.tiangong/
+.opencode/

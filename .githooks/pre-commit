@@ -1,0 +1,40 @@
+#!/usr/bin/env sh
+# TianGong pre-commit gate. Installed by `bun run scripts/install-hooks.ts` (root `prepare`).
+#
+# Scope: staged files only, fast checks only. Formatting and type errors belong to
+# `bun run check`, which is the full pre-push gate.
+set -eu
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+failed=0
+
+echo "==> house standard"
+if ! bun run scripts/check-house-standard.ts; then
+	failed=1
+fi
+
+echo "==> relative imports"
+if ! bun run scripts/check-relative-imports.ts; then
+	failed=1
+fi
+
+echo "==> formatting (staged files)"
+if command -v biome >/dev/null 2>&1; then
+	# shellcheck disable=SC2086
+	if ! biome check --no-errors-on-unmatched $staged; then
+		echo "    run 'bun run check:format:write' and stage the result"
+		failed=1
+	fi
+fi
+
+if [ "$failed" -ne 0 ]; then
+	echo "pre-commit: refusing the commit" >&2
+	exit 1
+fi
+
+exit 0

@@ -1,0 +1,61 @@
+{
+	"name": "tiangong",
+	"version": "2.0.1",
+	"private": true,
+	"description": "TianGong (天工): all-in-Bun monorepo for the OnePanda-TgSec agent, model, and terminal stack",
+	"type": "module",
+	"packageManager": "bun@1.4.2",
+	"workspaces": [
+		"packages/*"
+	],
+	"scripts": {
+		"clean": "bun run scripts/clean.ts",
+		"build": "bun run scripts/build.ts",
+		"build:offline": "bun run scripts/build.ts --offline",
+		"build:native:darwin": "bun run --cwd packages/tui build:native:darwin",
+		"build:native:linux": "bun run --cwd packages/tui build:native:linux",
+		"build:native:win32": "bun run --cwd packages/tui build:native:win32",
+		"check": "bun run check:house-standard && bun run check:format && bun run check:types && bun run check:relative-imports",
+		"check:format": "biome check .",
+		"check:format:write": "biome check --write --error-on-warnings .",
+		"check:types": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
+		"check:house-standard": "bun run scripts/check-house-standard.ts",
+		"check:relative-imports": "bun run scripts/check-relative-imports.ts",
+		"check:model-data": "bun run --cwd packages/ai check:model-data",
+		"generate:models": "bun run --cwd packages/ai generate-models",
+		"hydrate:model-data": "bun run --cwd packages/ai hydrate-model-data",
+		"generate:model-catalog": "bun run --cwd packages/ai generate-model-catalog",
+		"test": "bun run scripts/test.ts",
+		"test:watch": "bun run scripts/test.ts --watch",
+		"version:patch": "bun run scripts/version.ts patch",
+		"version:minor": "bun run scripts/version.ts minor",
+		"version:major": "bun run scripts/version.ts major",
+		"version:set": "bun run scripts/version.ts set",
+		"prepare": "bun run scripts/install-hooks.ts"
+	},
+	"keywords": [
+		"tiangong",
+		"agent",
+		"llm",
+		"bun",
+		"monorepo"
+	],
+	"author": "KoGFuzi",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/KoGFuzi/TianGong.git"
+	},
+	"engines": {
+		"bun": ">=1.4.0",
+		"node": ">=22.19.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.3.5",
+		"@types/bun": "1.4.2",
+		"@types/node": "22.19.19",
+		"shx": "0.4.0",
+		"typescript": "7.0.2",
+		"vitest": "4.1.11"
+	}
+}

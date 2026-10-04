@@ -1,0 +1,8 @@
+[install]
+# House rule: direct dependencies are pinned to exact versions and hoisted into a single
+# node_modules tree, so `tsc`, `vitest`, and `biome` resolve the same way Bun resolves them.
+exact = true
+linker = "hoisted"
+
+[test]
+# `bun test` is not the runner of record; vitest and node:test are, per package.

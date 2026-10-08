@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- `projectUsage(storage, context)` sums every conversation's `tg.usage` ledger in the storage's
+  project and returns `{ conversations, usage }`. The fold happens at read time on purpose: the
+  per-conversation ledger stays the only write path, so no second ledger can drift from it. A storage
+  instance is one project's view (`scanConversations` filters on its `project_id`), so the project is
+  not a parameter. `conversations` counts only conversations that recorded spend, because
+  `createConversation` materializes an empty ledger.
+
 ### Changed
 
 - Rebranded from `@earendil-works/pi-durable` to `@OnePanda-TgSec/tg-gibraltar`. The package was

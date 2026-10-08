@@ -25,6 +25,12 @@
 
 ### Added
 
+- `test/usage-accounting.test.ts` pins the token accounting every adapter owes a caller: cached and
+  cache-write tokens are deducted from the reported prompt/input count in the openai-completions
+  family (including the DeepSeek `prompt_cache_hit_tokens` and top-level `cached_tokens` dialects),
+  the openai-responses shared adapter, and mistral-conversations; Anthropic's own non-inclusive
+  `input_tokens` is carried through as-is. Also pins `calculateCost`: per-class rates, the 1h
+  cache-write multiplier, and tier selection over `input + cacheRead + cacheWrite`.
 - README documenting entry points, the model registry, streaming, provider registration,
   authentication, model-data generation, and the shared utilities.
 - `src/config-paths.ts` and the `./config-paths` export subpath: one XDG root resolver for the whole

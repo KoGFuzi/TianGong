@@ -1,7 +1,7 @@
-import { copyJson, type Draft, type JsonRepresentation } from "@OnePanda-TgSec/chord";
+import { type Context, copyJson, type Draft, type JsonRepresentation } from "@OnePanda-TgSec/chord";
 import type { Usage } from "@OnePanda-TgSec/tg-ai";
-import { defineDoc } from "../documents.ts";
-import type { ConversationId, Tx } from "../types.ts";
+import { defineDoc, materializeDocument } from "../documents.ts";
+import type { ConversationId, Cursor, Storage, Tx } from "../types.ts";
 
 /** Ledger of one conversation's own spend: its entries, and compaction summarization attempts, which have none. */
 export type UsageState = {
@@ -69,4 +69,56 @@ export function addUsageState(sum: UsageState, state: Readonly<UsageState>): voi
 				});
 		}
 	}
+}
+
+/** One storage's whole-project spend: every conversation's `tg.usage`, folded at read time. */
+export type ProjectUsage = {
+	/**
+	 * Conversations that contributed spend.
+	 *
+	 * Not every conversation counts: `createConversation` materializes an empty `tg.usage`, so a
+	 * conversation that never ran a model reads back as a ledger with no buckets.
+	 */
+	readonly conversations: number;
+	readonly usage: UsageState;
+};
+
+/** Conversations per read while folding a project. Bounds the rows held at once, nothing else. */
+const PROJECT_USAGE_PAGE = 200;
+
+/**
+ * Sum every conversation's usage ledger in the storage's project.
+ *
+ * A storage instance is one project's view: `scanConversations` filters on its `project_id`, so the
+ * project is not a parameter here. The fold is deliberately read-time only, keeping `tg.usage` the
+ * single write path; a second project-level ledger would have to be kept in step with every commit
+ * that spends tokens, and two ledgers drift.
+ */
+export async function projectUsage(storage: Storage, context: Context): Promise<ProjectUsage> {
+	const sum: UsageState = { models: {}, tools: {} };
+	let conversations = 0;
+	let cursor: Cursor | undefined;
+	do {
+		const page = await storage.scanConversations({}, PROJECT_USAGE_PAGE, cursor, context);
+		for (const conversation of page.items) {
+			const record = await storage.findDocument(
+				{ kind: UsageDoc.definition.kind, scope: { kind: "conversation", conversationId: conversation.id } },
+				"current",
+				context,
+			);
+			// A conversation that has not run a model has no ledger yet.
+			if (record === undefined) continue;
+			const stored = await storage.document(record.id, "current", context);
+			// The incarnation was replaced or removed between the two reads: skip rather than fail.
+			if (stored === undefined) continue;
+			// `recordUsage` wrote this shape inside this package, so the cast needs no validation.
+			const state = materializeDocument(UsageDoc.definition, stored) as unknown as UsageState;
+			// An untouched ledger is materialized on creation and holds no buckets; only real spend counts.
+			if (Object.keys(state.models).length === 0 && Object.keys(state.tools).length === 0) continue;
+			addUsageState(sum, state);
+			conversations++;
+		}
+		cursor = page.next;
+	} while (cursor !== undefined);
+	return { conversations, usage: sum };
 }

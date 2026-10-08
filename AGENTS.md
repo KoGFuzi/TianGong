@@ -44,6 +44,7 @@ of aliases:
 | --- | --- | --- |
 | Package name | `@OnePanda-TgSec/tg-*` | `@OnePanda-TgSec/tg-ai` |
 | Persisted kind string | `tg.*` | `tg.user`, `tg.generation` |
+| Telemetry span name | `tg.span.*` | `tg.span.provider.request` |
 | Exported type | `Tg*` | `TgMessagesOptions` |
 | Environment variable | `TG_*` | `TG_CACHE_RETENTION` |
 | API id | `tg-*` | `tg-messages` |

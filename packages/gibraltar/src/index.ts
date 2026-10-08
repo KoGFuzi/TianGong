@@ -93,7 +93,12 @@ export type {
 	UserInput,
 	Wrap,
 } from "./harness/types.ts";
-export { UsageDoc, type UsageState } from "./harness/usage.ts";
+export {
+	type ProjectUsage,
+	projectUsage,
+	UsageDoc,
+	type UsageState,
+} from "./harness/usage.ts";
 export type { ConversationView } from "./harness/view.ts";
 export { createSession } from "./session/session.ts";
 export { MemoryStorage } from "./storage/memory.ts";

@@ -1,5 +1,15 @@
 const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
 
+/**
+ * Retries for a transient provider failure when the caller sets none.
+ *
+ * Two matches the default the pinned OpenAI and Anthropic SDKs apply on their own, which is what
+ * `ProviderRequestOptions.maxRetries` documents. Without this default a caller who left
+ * `maxRetries` unset got exactly one attempt: the adapters pass the option straight through with
+ * no fallback, so the SDK default never applied because the SDKs are invoked with `maxRetries: 0`.
+ */
+export const DEFAULT_MAX_RETRIES = 2;
+
 interface ProviderRetryOptions {
 	maxRetries?: number;
 	maxRetryDelayMs?: number;
@@ -106,7 +116,7 @@ export async function retryProviderRequest<T>(
 	request: () => Promise<T>,
 	options: ProviderRetryOptions = {},
 ): Promise<T> {
-	const maxRetries = options.maxRetries ?? 0;
+	const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
 	let retriesRemaining = maxRetries;
 
 	for (;;) {

@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
 import { createInterface } from "node:readline";
-import { tiangongDataPath } from "./config-paths.ts";
-import type { AuthPrompt, OAuthCredential, Provider } from "./index.ts";
+import { FileCredentialStore } from "./auth-node.ts";
+import { tiangongAuthFilePath } from "./config-paths.ts";
+import type { AuthPrompt, Provider } from "./index.ts";
 import { builtinProviders } from "./providers/all.ts";
 
 /** `~/.local/share/TianGong/auth.json`, or `$XDG_DATA_HOME/TianGong/auth.json`.
@@ -13,7 +12,8 @@ import { builtinProviders } from "./providers/all.ts";
  * Credentials are machine-generated runtime state, not user-authored configuration, so they live
  * under the data root the way `opencode` places its own `auth.json`.
  */
-const AUTH_FILE = tiangongDataPath("auth.json");
+const AUTH_FILE = tiangongAuthFilePath();
+const CREDENTIALS = new FileCredentialStore();
 const PROVIDERS = builtinProviders().filter(
 	(provider): provider is Provider & { auth: { oauth: NonNullable<Provider["auth"]["oauth"]> } } =>
 		provider.auth.oauth !== undefined,
@@ -21,19 +21,6 @@ const PROVIDERS = builtinProviders().filter(
 
 function prompt(rl: ReturnType<typeof createInterface>, question: string): Promise<string> {
 	return new Promise((resolve) => rl.question(question, resolve));
-}
-
-function loadAuth(): Record<string, OAuthCredential> {
-	try {
-		return JSON.parse(readFileSync(AUTH_FILE, "utf-8")) as Record<string, OAuthCredential>;
-	} catch {
-		return {};
-	}
-}
-
-function saveAuth(auth: Record<string, OAuthCredential>): void {
-	mkdirSync(dirname(AUTH_FILE), { recursive: true });
-	writeFileSync(AUTH_FILE, JSON.stringify(auth, null, 2), "utf-8");
 }
 
 async function answerPrompt(rl: ReturnType<typeof createInterface>, authPrompt: AuthPrompt): Promise<string> {
@@ -79,9 +66,9 @@ async function login(providerId: string): Promise<void> {
 			},
 			{ getDeviceId: randomUUID },
 		);
-		const auth = loadAuth();
-		auth[providerId] = credential;
-		saveAuth(auth);
+		// `modify` is the store's only write path, so the login lands through the same
+		// cross-process exclusion every later refresh depends on.
+		await CREDENTIALS.modify(providerId, async () => credential);
 		console.log(`\nCredentials saved to ${AUTH_FILE}`);
 	} finally {
 		rl.close();

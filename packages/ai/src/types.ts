@@ -170,8 +170,8 @@ export interface ProviderRequestOptions<TModel = Model<Api>> {
 	 */
 	timeoutMs?: number;
 	/**
-	 * Maximum retry attempts for providers/SDKs that support client-side retries.
-	 * For example, OpenAI and Anthropic SDK clients default to 2.
+	 * Maximum retry attempts for a transient provider failure. Defaults to 2, matching the pinned
+	 * OpenAI and Anthropic SDKs. Set to 0 to disable retries.
 	 */
 	maxRetries?: number;
 	/**

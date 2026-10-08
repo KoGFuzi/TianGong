@@ -27,10 +27,15 @@ const context = normalizeContext({
 	tools: [],
 });
 
-async function getErrorMessage(response: Response): Promise<string | undefined> {
+/**
+ * A 429 usage-limit response is retryable, so the adapter retries it by default. Each attempt needs
+ * its own `Response`: reusing one would fail on the second read with "Body has already been read"
+ * rather than the usage-limit body the assertions are about.
+ */
+async function getErrorMessage(makeResponse: () => Response): Promise<string | undefined> {
 	const result = await streamOpenAIResponses(model, context, {
 		apiKey: "test",
-		fetch: async () => response,
+		fetch: async () => makeResponse(),
 	}).result();
 	expect(result.stopReason).toBe("error");
 	return result.errorMessage;
@@ -38,12 +43,13 @@ async function getErrorMessage(response: Response): Promise<string | undefined> 
 
 describe("OpenAI Responses ChatGPT usage limit", () => {
 	it("links to ChatGPT usage when the request is rejected", async () => {
-		const response = new Response(JSON.stringify({ error: { ...usageLimitError, type: "rate_limit_error" } }), {
-			status: 429,
-			headers: { "content-type": "application/json" },
-		});
-
-		const errorMessage = await getErrorMessage(response);
+		const errorMessage = await getErrorMessage(
+			() =>
+				new Response(JSON.stringify({ error: { ...usageLimitError, type: "rate_limit_error" } }), {
+					status: 429,
+					headers: { "content-type": "application/json" },
+				}),
+		);
 
 		expect(errorMessage).toContain("subscription_sharing_usage_limit_exceeded");
 		expect(errorMessage).toContain("Check your ChatGPT usage: https://chatgpt.com/settings/usage");
@@ -55,12 +61,13 @@ describe("OpenAI Responses ChatGPT usage limit", () => {
 			sequence_number: 0,
 			response: { id: "resp_failed", status: "failed", error: usageLimitError },
 		};
-		const response = new Response(`event: response.failed\ndata: ${JSON.stringify(event)}\n\n`, {
-			status: 200,
-			headers: { "content-type": "text/event-stream" },
-		});
-
-		const errorMessage = await getErrorMessage(response);
+		const errorMessage = await getErrorMessage(
+			() =>
+				new Response(`event: response.failed\ndata: ${JSON.stringify(event)}\n\n`, {
+					status: 200,
+					headers: { "content-type": "text/event-stream" },
+				}),
+		);
 
 		expect(errorMessage).toContain("subscription_sharing_usage_limit_exceeded: Usage limit reached.");
 		expect(errorMessage).toContain("Check your ChatGPT usage: https://chatgpt.com/settings/usage");

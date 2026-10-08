@@ -50,6 +50,7 @@ import type {
 	Usage,
 } from "./types.ts";
 import { operationSignal, raceWithAbortSignal } from "./utils/abort.ts";
+import { ConcurrencyLimiter, DEFAULT_PROVIDER_CONCURRENCY } from "./utils/concurrency-limit.ts";
 import {
 	assertChatModel,
 	assertClassifierModel,
@@ -363,6 +364,12 @@ export interface CreateModelsOptions {
 	credentials?: CredentialStore;
 	modelsStore?: ModelsStore;
 	authContext?: AuthContext;
+	/**
+	 * Maximum outbound provider requests in flight per provider id. Defaults to
+	 * {@link DEFAULT_PROVIDER_CONCURRENCY}. Lower it when many sessions share one provider's quota;
+	 * set it to 0 to disable admission control.
+	 */
+	providerConcurrency?: number;
 }
 
 function mergeHeaders(
@@ -386,6 +393,7 @@ class ModelsImpl implements MutableModels {
 	private credentials: CredentialStore;
 	private modelsStore: ModelsStore;
 	private authContext: AuthContext;
+	private limiter: ConcurrencyLimiter;
 	private refreshGenerations = new Map<string, number>();
 	private refreshControllers = new Map<string, AbortController>();
 	private publicationChains = new Map<string, Promise<unknown>>();
@@ -394,6 +402,7 @@ class ModelsImpl implements MutableModels {
 		this.credentials = options?.credentials ?? new InMemoryCredentialStore();
 		this.modelsStore = options?.modelsStore ?? new InMemoryModelsStore();
 		this.authContext = options?.authContext ?? defaultAuthContext();
+		this.limiter = new ConcurrencyLimiter({ limit: options?.providerConcurrency ?? DEFAULT_PROVIDER_CONCURRENCY });
 	}
 
 	setProvider(provider: Provider): void {
@@ -868,6 +877,31 @@ class ModelsImpl implements MutableModels {
 		return { requestModel, requestOptions };
 	}
 
+	/**
+	 * Take a provider slot, open `stream`, and release the slot when the stream settles.
+	 *
+	 * A streaming response occupies its upstream slot until the stream ends, which is later than the
+	 * moment the adapter returns, so the slot cannot be scoped to the call that opened it.
+	 * `EventStream.settled()` resolves on both a terminal event and `end()`, so the slot returns on
+	 * every path except an abandoned stream the consumer never drains.
+	 */
+	private async holdSlot(
+		bucket: string,
+		open: () => AssistantMessageEventStream,
+		signal?: AbortSignal,
+	): Promise<AssistantMessageEventStream> {
+		await this.limiter.acquire(bucket, signal);
+		let stream: AssistantMessageEventStream;
+		try {
+			stream = open();
+		} catch (error) {
+			this.limiter.release(bucket);
+			throw error;
+		}
+		void stream.settled().then(() => this.limiter.release(bucket));
+		return stream;
+	}
+
 	stream<TApi extends Api>(
 		model: Model<TApi>,
 		context: Context,
@@ -876,11 +910,21 @@ class ModelsImpl implements MutableModels {
 		const transcript = normalizeContext(context);
 		return lazyStream(model, async () => {
 			const provider = this.requireChatProvider(model);
+			// Auth resolves before admission: an OAuth refresh can take seconds and has its own
+			// cross-process exclusion, so holding a request slot across it would throttle unrelated
+			// traffic behind one provider's refresh.
 			const { requestModel, requestOptions } = await this.applyAuth(
 				model,
 				options as ModelsApiStreamOptions<Api> | undefined,
 			);
-			return provider.stream(requestModel, transcript, requestOptions as ApiStreamOptions<TApi>);
+			// The slot is held for the life of the stream, not just its opening request: the upstream
+			// slot stays occupied until the last byte arrives. `stream()` returns synchronously, so the
+			// slot cannot be scoped to a promise here; it is released when the stream settles.
+			return await this.holdSlot(
+				model.provider,
+				() => provider.stream(requestModel, transcript, requestOptions as ApiStreamOptions<TApi>),
+				options?.signal,
+			);
 		});
 	}
 
@@ -896,8 +940,13 @@ class ModelsImpl implements MutableModels {
 		const transcript = normalizeContext(context);
 		return lazyStream(model, async () => {
 			const provider = this.requireChatProvider(model);
+			// See `stream`: auth resolves outside the limiter so a slow refresh does not hold a slot.
 			const { requestModel, requestOptions } = await this.applyAuth(model, options);
-			return provider.streamSimple(requestModel, transcript, requestOptions as SimpleStreamOptions);
+			return await this.holdSlot(
+				model.provider,
+				() => provider.streamSimple(requestModel, transcript, requestOptions as SimpleStreamOptions),
+				options?.signal,
+			);
 		});
 	}
 

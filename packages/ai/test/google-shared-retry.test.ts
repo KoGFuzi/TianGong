@@ -22,11 +22,30 @@ describe("google request retries", () => {
 		expect(request).toHaveBeenCalledTimes(2);
 	});
 
-	it("does not retry when maxRetries is unset", async () => {
+	it("retries twice by default when maxRetries is unset", async () => {
+		vi.useFakeTimers();
+		// Reject each attempt with a distinct error and keep the final one, so the rejection the
+		// test observes is the one the loop ends on rather than an unrelated early attempt.
+		const errors = [googleApiError(429), googleApiError(429), googleApiError(429)];
+		const request = vi
+			.fn<() => Promise<string>>()
+			.mockRejectedValueOnce(errors[0])
+			.mockRejectedValueOnce(errors[1])
+			.mockRejectedValueOnce(errors[2]);
+
+		const result = retryGoogleRequest(request).catch((error: unknown) => error);
+		// The default budget is two retries, so three attempts in total.
+		await vi.advanceTimersByTimeAsync(10_000);
+
+		await expect(result).resolves.toBe(errors[2]);
+		expect(request).toHaveBeenCalledTimes(3);
+	});
+
+	it("does not retry when maxRetries is 0", async () => {
 		const error = googleApiError(429);
 		const request = vi.fn<() => Promise<string>>().mockRejectedValue(error);
 
-		await expect(retryGoogleRequest(request)).rejects.toBe(error);
+		await expect(retryGoogleRequest(request, { maxRetries: 0 })).rejects.toBe(error);
 		expect(request).toHaveBeenCalledTimes(1);
 	});
 

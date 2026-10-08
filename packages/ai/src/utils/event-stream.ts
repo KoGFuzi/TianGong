@@ -29,6 +29,8 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 	private done = false;
 	private finalResultPromise: Promise<R>;
 	private resolveFinalResult!: (result: R) => void;
+	private settlePromise: Promise<void>;
+	private resolveSettled!: () => void;
 	private isComplete: (event: T) => boolean;
 	private extractResult: (event: T) => R;
 
@@ -38,6 +40,9 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 		this.finalResultPromise = new Promise((resolve) => {
 			this.resolveFinalResult = resolve;
 		});
+		this.settlePromise = new Promise((resolve) => {
+			this.resolveSettled = resolve;
+		});
 	}
 
 	push(event: T): void {
@@ -46,6 +51,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 		if (this.isComplete(event)) {
 			this.done = true;
 			this.resolveFinalResult(this.extractResult(event));
+			this.resolveSettled();
 		}
 
 		// Deliver to waiting consumer or queue it
@@ -58,15 +64,29 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 	}
 
 	end(result?: R): void {
+		const wasDone = this.done;
 		this.done = true;
 		if (result !== undefined) {
 			this.resolveFinalResult(result);
 		}
+		this.resolveSettled();
+		if (wasDone) return;
 		// Notify all waiting consumers that we're done
 		while (this.waiting.length > 0) {
 			const waiter = this.waiting.dequeue()!;
 			waiter({ value: undefined as any, done: true });
 		}
+	}
+
+	/**
+	 * Resolves once the stream can produce no further events, whether that happened through a
+	 * terminal event or `end()`.
+	 *
+	 * Unlike {@link result}, this settles even when the stream ends without a final value, so a
+	 * resource held for the stream's lifetime can be released on that path too.
+	 */
+	settled(): Promise<void> {
+		return this.settlePromise;
 	}
 
 	async *[Symbol.asyncIterator](): AsyncIterator<T> {

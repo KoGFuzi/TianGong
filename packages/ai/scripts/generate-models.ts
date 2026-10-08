@@ -332,11 +332,16 @@ const QWEN_TOKEN_PLAN_INDIVIDUAL_MODEL_IDS = new Set<string>([
 ]);
 
 const KIMI_K3_MAX_TOKENS = 131072;
+// Kimi K3 bills context-cache writes as their own line item, priced at the
+// uncached input rate for the default 5-minute TTL and twice that for the 1-hour
+// TTL. `calculateCost` already applies the 2x multiplier to `cacheWrite1h`, so
+// only the 5-minute rate belongs here.
+// https://platform.moonshot.ai/docs/pricing/chat
 const KIMI_K3_COST = {
 	input: 3,
 	output: 15,
 	cacheRead: 0.3,
-	cacheWrite: 0,
+	cacheWrite: 3,
 } as const;
 // Kimi Coding is subscription-backed, so models.dev reports zero cost. Use the
 // equivalent Moonshot API rates to estimate the value of subscription usage.

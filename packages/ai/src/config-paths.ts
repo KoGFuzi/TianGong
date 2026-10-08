@@ -105,6 +105,20 @@ export function tiangongCachePath(...segments: string[]): string {
 /** File name of the default session database inside the data directory. */
 export const TIANGONG_SESSION_DB = "session.sqlite";
 
+/** File name of the credential store inside the data directory. */
+export const TIANGONG_AUTH_FILE = "auth.json";
+
+/**
+ * Credential store: `~/.local/share/TianGong/auth.json`, or
+ * `$XDG_DATA_HOME/TianGong/auth.json`.
+ *
+ * Holds provider API keys and OAuth refresh tokens, so it lives under the data root as
+ * machine-generated state and is created mode `0600` inside a `0700` directory.
+ */
+export function tiangongAuthFilePath(): string {
+	return tiangongDataPath(TIANGONG_AUTH_FILE);
+}
+
 /**
  * Default session database: `~/.local/share/TianGong/session.sqlite`.
  *

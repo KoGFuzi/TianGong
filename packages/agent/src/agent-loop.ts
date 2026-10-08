@@ -15,6 +15,7 @@ import {
 	toToolDeclaration,
 	validateToolArguments,
 } from "@OnePanda-TgSec/tg-ai";
+import { evaluatePermission, permissionGrantKey, toolResource } from "./permission.ts";
 import { getDefaultStreamFn } from "./stream-fn.ts";
 import type {
 	AgentContext,
@@ -680,7 +681,10 @@ type ExecutedToolCallOutcome = {
 type FinalizedToolCallOutcome = AgentToolCallOutcome;
 
 /** The `beforeToolCall` and `afterToolCall` hooks of {@link AgentLoopConfig}. */
-export type ToolCallHooks = Pick<AgentLoopConfig, "beforeToolCall" | "afterToolCall">;
+export type ToolCallHooks = Pick<
+	AgentLoopConfig,
+	"beforeToolCall" | "afterToolCall" | "permissionRules" | "onPermissionAsk" | "permissionGrants"
+>;
 
 type ToolUpdateSink = (partialResult: AgentToolResult<any>) => Promise<void> | void;
 
@@ -702,6 +706,61 @@ function prepareToolCallArguments(tool: AgentTool<any>, toolCall: AgentToolCall)
 		...toolCall,
 		arguments: preparedArguments as Record<string, any>,
 	};
+}
+
+/**
+ * Evaluate the declarative permission policy for one tool call, after `beforeToolCall` abstained.
+ *
+ * Returns an error result when the call must not run, or `undefined` when it may proceed. Deny and
+ * ask-denied outcomes reuse {@link createErrorToolResult}, the exact path a `{ block: true }` hook
+ * return takes, so the model sees the same refusal semantics regardless of who refused.
+ *
+ * Failure mode: an `ask` hit with no `onPermissionAsk` handler configured is blocked. That is the
+ * one fail-closed point in the design — an explicit ask rule with nobody listening must not be
+ * silently downgraded to allow.
+ */
+async function evaluateToolPermission(
+	tool: AgentTool<any>,
+	args: unknown,
+	config: ToolCallHooks,
+	signal: AbortSignal | undefined,
+): Promise<AgentToolResult<any> | undefined> {
+	const rules = config.permissionRules;
+	if (!rules || rules.length === 0) return undefined;
+
+	const resource = toolResource(tool.name);
+	// A session-scoped "always" grant outranks the rule list: explicit human approval beats
+	// declared rules, including deny.
+	if (config.permissionGrants?.has(permissionGrantKey("execute", resource))) return undefined;
+	const decision = evaluatePermission(rules, resource);
+	if (decision === "allow") return undefined;
+
+	if (decision === "deny") {
+		return createErrorToolResult(`Permission denied: ${resource} is blocked by a permission rule`);
+	}
+
+	if (!config.onPermissionAsk) {
+		return createErrorToolResult(
+			`Permission denied: ${resource} requires approval but no onPermissionAsk handler is configured`,
+		);
+	}
+	let reply: "allow" | "deny" | "always";
+	try {
+		reply = await config.onPermissionAsk({ action: "execute", resource, toolName: tool.name, args }, signal);
+	} catch (error) {
+		return createErrorToolResult(
+			`Permission denied: approval for ${resource} failed: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+	if (reply === "deny") {
+		return createErrorToolResult(`Permission denied: approval for ${resource} was declined`);
+	}
+	if (reply === "always") {
+		// Keyed on the exact resource of this call, not the rule's pattern: "always" for one tool
+		// must not widen to every tool a wildcard would match.
+		config.permissionGrants?.add(permissionGrantKey("execute", resource));
+	}
+	return undefined;
 }
 
 async function prepareToolCall(
@@ -752,6 +811,16 @@ async function prepareToolCall(
 					isError: true,
 				};
 			}
+		}
+		// The hook abstained (undefined, {}, or { block: false }), so the declarative policy
+		// decides. Deny and ask-denied outcomes reuse the same error result as a hook block.
+		const permissionBlocked = await evaluateToolPermission(tool, validatedArgs, config, signal);
+		if (permissionBlocked) {
+			return {
+				kind: "immediate",
+				result: permissionBlocked,
+				isError: true,
+			};
 		}
 		if (signal?.aborted) {
 			return {

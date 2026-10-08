@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+
+- Declarative permission policy evaluated before every tool dispatch. `AgentOptions` and
+  `AgentLoopConfig` gain `permissionRules` (first match wins, `"*"` wildcards, resource derived as
+  `tool:<toolName>`) and `onPermissionAsk` (async human-approval channel consulted on `effect: "ask"`
+  hits). The default is fail-open: no matching rule means allow, matching the pre-permission
+  behavior. Deny and declined approvals reuse the exact blocked-result path as a `{ block: true }`
+  `beforeToolCall` return, so the model sees identical refusal semantics. The one fail-closed point
+  is an `ask` hit with no `onPermissionAsk` handler configured, which is blocked rather than
+  silently allowed. A user `beforeToolCall` that blocks still wins over any rule; any non-blocking
+  hook return abstains and defers to the policy. `onPermissionAsk` may reply `"always"` to record a
+  session-scoped grant in `permissionGrants` (keyed `execute:<resource>`; human approval outranks
+  declared rules, grants never widen to a wildcard's full span). `Agent` owns one grants set for its
+  lifetime, and nested tool calls via `runToolCall` inherit rules, ask channel, and grants when the
+  caller forwards them (`examples/mcp-codemode` does). New module `src/permission.ts` exports
+  `PermissionRule`, `PermissionRequest`, `PermissionAskReply`, `evaluatePermission`,
+  `permissionGrantKey`, and `toolResource`. Design rationale: `docs/permission-model.md`.
+
 ### Changed
 
 - Rebranded from `@earendil-works/pi-agent-core` to `@OnePanda-TgSec/tg-agent-core`. The package was

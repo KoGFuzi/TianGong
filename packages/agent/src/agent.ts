@@ -12,6 +12,7 @@ import {
 	toToolDeclaration,
 } from "@OnePanda-TgSec/tg-ai";
 import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.ts";
+import type { PermissionAskReply, PermissionRequest, PermissionRule } from "./permission.ts";
 import { getDefaultStreamFn } from "./stream-fn.ts";
 import type {
 	AfterToolCallContext,
@@ -122,6 +123,8 @@ export interface AgentOptions {
 	onProviderStreamEvent?: SimpleStreamOptions["onProviderStreamEvent"];
 	beforeToolCall?: (context: BeforeToolCallContext, signal?: AbortSignal) => Promise<BeforeToolCallResult | undefined>;
 	afterToolCall?: (context: AfterToolCallContext, signal?: AbortSignal) => Promise<AfterToolCallResult | undefined>;
+	permissionRules?: PermissionRule[];
+	onPermissionAsk?: (request: PermissionRequest, signal?: AbortSignal) => Promise<PermissionAskReply>;
 	finishTurn?: FinishTurn;
 	prepareRequest?: PrepareRequest;
 	prepareNextTurn?: (
@@ -206,6 +209,14 @@ export class Agent {
 		context: AfterToolCallContext,
 		signal?: AbortSignal,
 	) => Promise<AfterToolCallResult | undefined>;
+	public permissionRules?: PermissionRule[];
+	public onPermissionAsk?: (request: PermissionRequest, signal?: AbortSignal) => Promise<PermissionAskReply>;
+	/**
+	 * Session-scoped cache of "always" approvals, keyed by `permissionGrantKey(action, resource)`.
+	 * Shared by every run of this agent, so an approval granted in one run is honored in the next.
+	 * The loop adds entries when `onPermissionAsk` replies "always".
+	 */
+	public permissionGrants = new Set<string>();
 	public finishTurn?: FinishTurn;
 	public prepareRequest?: PrepareRequest;
 	public prepareNextTurn?: (
@@ -240,6 +251,8 @@ export class Agent {
 		this.onProviderStreamEvent = runtimeOptions.onProviderStreamEvent;
 		this.beforeToolCall = runtimeOptions.beforeToolCall;
 		this.afterToolCall = runtimeOptions.afterToolCall;
+		this.permissionRules = runtimeOptions.permissionRules;
+		this.onPermissionAsk = runtimeOptions.onPermissionAsk;
 		this.finishTurn = runtimeOptions.finishTurn;
 		this.prepareRequest = runtimeOptions.prepareRequest;
 		this.prepareNextTurn = runtimeOptions.prepareNextTurn;
@@ -479,6 +492,9 @@ export class Agent {
 			toolExecution: this.toolExecution,
 			beforeToolCall: this.beforeToolCall,
 			afterToolCall: this.afterToolCall,
+			permissionRules: this.permissionRules,
+			onPermissionAsk: this.onPermissionAsk,
+			permissionGrants: this.permissionGrants,
 			finishTurn: this.finishTurn,
 			prepareRequest: this.prepareRequest,
 			prepareNextTurn:

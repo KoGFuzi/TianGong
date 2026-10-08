@@ -77,8 +77,8 @@ export async function createMcpTools(client: McpClient, prefix: string): Promise
 
 /**
  * Run a tool call on behalf of another tool through the agent's pipeline: argument validation and
- * the agent's `beforeToolCall`/`afterToolCall` hooks apply as for calls the model makes. Calling
- * `tool.execute()` directly also works when the agent has no hooks.
+ * the agent's `beforeToolCall`/`afterToolCall` hooks and permission policy apply as for calls the
+ * model makes. Calling `tool.execute()` directly also works when the agent has no hooks.
  */
 export function createNestedToolRunner(
 	agent: Agent,
@@ -96,6 +96,11 @@ export function createNestedToolRunner(
 				context: { messages: agent.state.messages, tools },
 				beforeToolCall: agent.beforeToolCall,
 				afterToolCall: agent.afterToolCall,
+				// Nested calls must inherit the permission policy as well, or they would silently
+				// bypass the rules and the "always" grant cache that gate model-issued calls.
+				permissionRules: agent.permissionRules,
+				onPermissionAsk: agent.onPermissionAsk,
+				permissionGrants: agent.permissionGrants,
 				signal,
 			},
 		);

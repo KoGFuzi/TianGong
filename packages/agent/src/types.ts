@@ -15,6 +15,7 @@ import type {
 	Usage,
 } from "@OnePanda-TgSec/tg-ai";
 import type { Static, TSchema } from "typebox";
+import type { PermissionAskReply, PermissionRequest, PermissionRule } from "./permission.ts";
 
 /**
  * Stream function used by the agent loop. `Models.streamSimple` satisfies
@@ -322,8 +323,44 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * Return `{ block: true }` to prevent execution. The loop emits an error tool result instead.
 	 * A blocked result can also set `terminate: true` to participate in the batch early-termination rule.
 	 * The hook receives the agent abort signal and is responsible for honoring it.
+	 *
+	 * The hook runs before the permission policy: a `{ block: true }` here takes effect even when
+	 * the policy would allow. Any non-blocking return (including `undefined`) abstains and defers
+	 * to {@link AgentLoopConfig.permissionRules}.
 	 */
 	beforeToolCall?: (context: BeforeToolCallContext, signal?: AbortSignal) => Promise<BeforeToolCallResult | undefined>;
+
+	/**
+	 * Declarative permission rules evaluated when `beforeToolCall` abstains.
+	 *
+	 * Rules are evaluated in declaration order, first match wins. The resource is derived as
+	 * `tool:<toolName>` and supports "*" wildcards. No matching rule (or no rules) means allow:
+	 * the default is fail-open, matching the behavior before permissions existed.
+	 *
+	 * A "deny" hit blocks the call through the same error-result path as `{ block: true }`. An "ask"
+	 * hit pauses dispatch until {@link AgentLoopConfig.onPermissionAsk} replies; without that
+	 * callback an "ask" hit is blocked, which is the one fail-closed point in the design.
+	 */
+	permissionRules?: PermissionRule[];
+
+	/**
+	 * Human approval channel consulted when a permission rule hits with `effect: "ask"`.
+	 *
+	 * Receives the abort signal and is responsible for honoring it; an abort while waiting is
+	 * reported as the standard "Operation aborted" tool error. A thrown error or a "deny" reply
+	 * blocks the call. An "always" reply also records the grant in {@link AgentLoopConfig.permissionGrants}.
+	 */
+	onPermissionAsk?: (request: PermissionRequest, signal?: AbortSignal) => Promise<PermissionAskReply>;
+
+	/**
+	 * Session-scoped cache of "always" approvals, keyed by `permissionGrantKey(action, resource)`.
+	 *
+	 * A grant short-circuits rule evaluation: a resource a human approved "always" is allowed even
+	 * when a later rule would deny it, because explicit human approval outranks declared rules. The
+	 * loop adds entries when `onPermissionAsk` replies "always"; pass the same set across runs of
+	 * one agent session to make approvals durable for the session's lifetime.
+	 */
+	permissionGrants?: Set<string>;
 
 	/**
 	 * Called after a tool finishes executing, before `tool_execution_end` and tool-result message events are emitted.

@@ -3,6 +3,7 @@ import { apply, type Op } from "@OnePanda-TgSec/chord/delta";
 import { StorageRejected } from "../../errors.ts";
 import { idFromNumber, seqFromNumber } from "../../ids.ts";
 import type {
+	ConversationDeletion,
 	ConversationId,
 	ConversationQuery,
 	ConversationRecord,
@@ -31,6 +32,7 @@ import type {
 	TaskQuery,
 	TaskRecord,
 } from "../../types.ts";
+import { ROOT_CONVERSATION_ID } from "../../types.ts";
 import type { SqliteDatabase, SqliteExecutor, SqliteHealthReport, SqliteValue } from "./database.ts";
 import { applySqliteMigrations, DEFAULT_PROJECT_ID, type SqliteStorageOptions } from "./migrations.ts";
 
@@ -109,6 +111,12 @@ const isAliveAt = (record: DocumentRecord, at: DocumentPoint): boolean => {
 
 const isCurrentOnly = (record: DocumentRecord): boolean =>
 	record.scope.kind !== "conversation" || record.history === "latest";
+
+// Every document incarnation scoped to one conversation: its own documents and the documents of its
+// tasks. Both `deleteConversation` (all incarnations) and `exportConversation` (live incarnations only)
+// select through this predicate; the parameters are [project, conversationId, project, conversationId].
+const SCOPED_DOCUMENTS = `project_id = ? AND ((scope_kind = 'conversation' AND owner_id = ?)
+	OR (scope_kind = 'task' AND owner_id IN (SELECT id FROM tasks WHERE project_id = ? AND conversation_id = ?)))`;
 
 const writeId = (write: StorageWrite): Id<string> | undefined => {
 	switch (write.type) {
@@ -323,7 +331,10 @@ export class SqliteStorage implements Storage {
 			while (conversation.id !== entry.conversationId) {
 				if (conversation.parent === undefined) return undefined;
 				upperEntryId = Math.min(upperEntryId, conversation.parent.at);
-				conversation = (await this.readConversation(conversation.parent.conversationId))!;
+				// A missing ancestor ends the visible history: its rows were deleted after this conversation forked.
+				const parent = await this.readConversation(conversation.parent.conversationId);
+				if (parent === undefined) return undefined;
+				conversation = parent;
 			}
 			if (entry.id > upperEntryId) return undefined;
 		}
@@ -354,7 +365,10 @@ export class SqliteStorage implements Storage {
 			if (row !== undefined) return parseJson<EntryRecord & { readonly head: EntryId }>(row.record);
 			if (conversation.parent === undefined) return undefined;
 			upper = upper === undefined ? conversation.parent.at : Math.min(upper, conversation.parent.at);
-			conversation = (await this.readConversation(conversation.parent.conversationId))!;
+			// A missing ancestor ends the visible history: its rows were deleted after this conversation forked.
+			const parent = await this.readConversation(conversation.parent.conversationId);
+			if (parent === undefined) return undefined;
+			conversation = parent;
 		}
 	}
 
@@ -389,7 +403,10 @@ export class SqliteStorage implements Storage {
 			if (values.length > limit || conversation.parent === undefined) break;
 			upper = upper === undefined ? conversation.parent.at : Math.min(upper, conversation.parent.at);
 			if (query.minEntryId !== undefined && upper < query.minEntryId) break;
-			conversation = (await this.readConversation(conversation.parent.conversationId))!;
+			// A missing ancestor ends the visible history: its rows were deleted after this conversation forked.
+			const parent = await this.readConversation(conversation.parent.conversationId);
+			if (parent === undefined) break;
+			conversation = parent;
 		}
 		return page(values, limit);
 	}
@@ -561,6 +578,186 @@ export class SqliteStorage implements Storage {
 			rows.map((row) => parseJson<DocumentRecord>(row.record)),
 			limit,
 		);
+	}
+
+	/**
+	 * Permanently remove one conversation and every row scoped to it in this storage's project: its
+	 * conversation record, entries, tasks, submissions, and conversation- and task-scoped document
+	 * incarnations with their revisions. Then records an audit event in durable metadata and returns it.
+	 * Returns undefined when the conversation is absent; nothing is deleted or audited. The reserved root
+	 * conversation is rejected. IDs are never reclaimed, so recreating a deleted conversation's ID is
+	 * rejected by commit. The caller owns liveness: no live task may still write the conversation, and no
+	 * Session may hold its documents loaded.
+	 */
+	async deleteConversation(id: ConversationId, _context: Context): Promise<ConversationDeletion | undefined> {
+		this.assertOpen();
+		if (id === ROOT_CONVERSATION_ID) throw new Error("The root conversation is reserved and cannot be deleted");
+		const documentParams: readonly SqliteValue[] = [this.project, id, this.project, id];
+		return this.db.transaction(async (transaction) => {
+			const conversationRow = await transaction.get<IdRow>(
+				"SELECT id FROM conversations WHERE id = ? AND project_id = ?",
+				id,
+				this.project,
+			);
+			if (conversationRow === undefined) return undefined;
+			const counts = {
+				entries: await this.countConversationRows(transaction, "entries", id),
+				tasks: await this.countConversationRows(transaction, "tasks", id),
+				submissions: await this.countConversationRows(transaction, "submissions", id),
+				documents:
+					(
+						await transaction.get<{ readonly count: number }>(
+							`SELECT count(*) AS count FROM documents WHERE ${SCOPED_DOCUMENTS}`,
+							...documentParams,
+						)
+					)?.count ?? 0,
+			};
+			// Revisions first: their predicate reads the documents and tasks rows the later statements remove.
+			await transaction.run(
+				`DELETE FROM document_revisions WHERE document_id IN (SELECT id FROM documents WHERE ${SCOPED_DOCUMENTS})`,
+				...documentParams,
+			);
+			await transaction.run(`DELETE FROM documents WHERE ${SCOPED_DOCUMENTS}`, ...documentParams);
+			await transaction.run("DELETE FROM entries WHERE project_id = ? AND conversation_id = ?", this.project, id);
+			await transaction.run(
+				"DELETE FROM submissions WHERE project_id = ? AND conversation_id = ?",
+				this.project,
+				id,
+			);
+			await transaction.run("DELETE FROM tasks WHERE project_id = ? AND conversation_id = ?", this.project, id);
+			await transaction.run("DELETE FROM conversations WHERE project_id = ? AND id = ?", this.project, id);
+			const metadata = await transaction.get<{ readonly deleted_conversations: string }>(
+				"SELECT deleted_conversations FROM durable_metadata WHERE singleton = 1",
+			);
+			if (metadata === undefined) throw new Error("Durable SQLite metadata is missing");
+			const deletion: ConversationDeletion = {
+				conversationId: id,
+				projectId: this.project,
+				deletedAt: Date.now(),
+				counts,
+			};
+			const audit = parseJson<readonly ConversationDeletion[]>(metadata.deleted_conversations);
+			await transaction.run(
+				"UPDATE durable_metadata SET deleted_conversations = ? WHERE singleton = 1",
+				encodeJson([...audit, { v: 1, ...deletion }]),
+			);
+			return deletion;
+		});
+	}
+
+	private async countConversationRows(
+		executor: SqliteExecutor,
+		table: "entries" | "tasks" | "submissions",
+		conversationId: ConversationId,
+	): Promise<number> {
+		return (
+			(
+				await executor.get<{ readonly count: number }>(
+					`SELECT count(*) AS count FROM ${table} WHERE project_id = ? AND conversation_id = ?`,
+					this.project,
+					conversationId,
+				)
+			)?.count ?? 0
+		);
+	}
+
+	/**
+	 * Serialize one conversation's own rows as JSONL lines, read from one consistent snapshot: a header
+	 * line carrying the conversation record, then entry, task, submission, and document lines in ascending
+	 * ID order. Returns undefined when the conversation is absent. The payload covers exactly what
+	 * deleteConversation removes, so export-before-delete loses nothing. Session-scoped documents and other
+	 * conversations' rows (including fork parents') never appear.
+	 */
+	async exportConversation(id: ConversationId, _context: Context): Promise<readonly string[] | undefined> {
+		this.assertOpen();
+		return this.db.transaction(async (transaction) => {
+			const conversationRow = await transaction.get<JsonRow>(
+				"SELECT record FROM conversations WHERE id = ? AND project_id = ?",
+				id,
+				this.project,
+			);
+			if (conversationRow === undefined) return undefined;
+			const schemaRow = await transaction.get<{ readonly version: number }>(
+				"SELECT version FROM durable_schema WHERE singleton = 1",
+			);
+			const lines: string[] = [
+				encodeJson({
+					v: 1,
+					kind: "tg.export.header",
+					projectId: this.project,
+					conversationId: id,
+					exportedAt: Date.now(),
+					schemaVersion: schemaRow?.version ?? 0,
+					conversation: parseJson<ConversationRecord>(conversationRow.record),
+				}),
+			];
+			const entries = await transaction.all<EntryJsonRow>(
+				"SELECT record, commit_seq FROM entries WHERE project_id = ? AND conversation_id = ? ORDER BY id",
+				this.project,
+				id,
+			);
+			for (const row of entries) {
+				lines.push(
+					encodeJson({
+						kind: "tg.export.entry",
+						seq: row.commit_seq,
+						entry: parseJson<EntryRecord>(row.record),
+					}),
+				);
+			}
+			const tasks = await transaction.all<JsonRow>(
+				"SELECT record FROM tasks WHERE project_id = ? AND conversation_id = ? ORDER BY id",
+				this.project,
+				id,
+			);
+			for (const row of tasks) {
+				lines.push(encodeJson({ kind: "tg.export.task", task: parseJson<StoredTask>(row.record) }));
+			}
+			const submissions = await transaction.all<JsonRow>(
+				"SELECT record FROM submissions WHERE project_id = ? AND conversation_id = ? ORDER BY id",
+				this.project,
+				id,
+			);
+			for (const row of submissions) {
+				lines.push(
+					encodeJson({ kind: "tg.export.submission", submission: parseJson<SubmissionRecord>(row.record) }),
+				);
+			}
+			const documents = await transaction.all<IdRow>(
+				`SELECT id FROM documents WHERE ${SCOPED_DOCUMENTS} AND retired_at IS NULL ORDER BY id`,
+				this.project,
+				id,
+				this.project,
+				id,
+			);
+			for (const row of documents) {
+				const stored = await this.materializeDocument(transaction, idFromNumber<DocumentId>(row.id), "current");
+				if (stored === undefined) throw new Error(`Exported document ${row.id} cannot be read`);
+				lines.push(
+					encodeJson({
+						kind: "tg.export.doc",
+						doc: stored.record.kind,
+						...(stored.record.scope.kind === "task" ? { taskId: stored.record.scope.taskId } : {}),
+						key: stored.record.key ?? null,
+						version: stored.version,
+						state: stored.value,
+					}),
+				);
+			}
+			return lines;
+		});
+	}
+
+	/**
+	 * Write a consistent snapshot of the whole database file to a new file at path (SQLite `VACUUM INTO`).
+	 * VACUUM cannot run inside a transaction, so this never wraps one; the single statement is serialized
+	 * with commits and close by the connection queue. The target must not exist; that error is passed
+	 * through. The snapshot covers every project in the file. The caller owns the target path: parent
+	 * directories are not created.
+	 */
+	async backup(path: string, _context: Context): Promise<void> {
+		this.assertOpen();
+		await this.db.run("VACUUM INTO ?", path);
 	}
 
 	close(_context: Context): Promise<void> {

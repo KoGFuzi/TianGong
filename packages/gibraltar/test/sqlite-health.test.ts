@@ -182,14 +182,14 @@ describe("project isolation", () => {
 
 describe("version 2 migration", () => {
 	it("keeps the schema history contiguous and ordered", () => {
-		expect(SQLITE_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2]);
-		expect(CURRENT_SQLITE_SCHEMA_VERSION).toBe(2);
+		expect(SQLITE_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3]);
+		expect(CURRENT_SQLITE_SCHEMA_VERSION).toBe(3);
 	});
 
 	it("assigns rows written before isolation to the default project", async () => {
 		const path = await tempFile("pre-v2.sqlite");
 
-		// Seed a version-1 database, then reopen it so the pending migration runs.
+		// Seed a version-1 database, then reopen it so the pending migrations run.
 		const database = await openNodeSqliteDatabase(path);
 		await applySqliteMigrations(database, SQLITE_MIGRATIONS.slice(0, 1));
 		const seeded = await SqliteStorage.open(database);
@@ -200,7 +200,7 @@ describe("version 2 migration", () => {
 		try {
 			const facade = await openNodeSqliteDatabase(path);
 			const health = await facade.health();
-			expect(health.schemaVersion).toBe(2);
+			expect(health.schemaVersion).toBe(CURRENT_SQLITE_SCHEMA_VERSION);
 			await facade.close();
 			expect(await migrated.conversation(ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT)).toBeDefined();
 		} finally {

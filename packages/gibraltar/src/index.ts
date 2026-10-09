@@ -109,6 +109,7 @@ export type {
 	CommitPublication,
 	CommonDocDefinition,
 	ContextEdit,
+	ConversationDeletion,
 	ConversationDocFamilyToken,
 	ConversationDocToken,
 	ConversationId,

@@ -982,6 +982,22 @@ export interface Session extends DocumentObserver {
 	): Promise<Readonly<T> | undefined>;
 }
 
+/** Durable summary of one completed conversation deletion; the persisted audit event's in-memory shape. */
+export type ConversationDeletion = {
+	readonly conversationId: ConversationId;
+	/** Project the deletion ran in; absent when the backend has no project notion. */
+	readonly projectId?: string;
+	/** Wall-clock milliseconds when the deletion committed. */
+	readonly deletedAt: number;
+	/** Rows removed per table; documents counts conversation- and task-scoped incarnations. */
+	readonly counts: {
+		readonly entries: number;
+		readonly tasks: number;
+		readonly submissions: number;
+		readonly documents: number;
+	};
+};
+
 /**
  * Atomic persistence boundary for Session records.
  *
@@ -1079,6 +1095,35 @@ export interface Storage {
 		cursor: Cursor | undefined,
 		context: Context,
 	): Promise<Page<DocumentRecord, Cursor>>;
+
+	/**
+	 * Permanently remove one conversation and every row scoped to it in this storage's project: its
+	 * conversation record, entries, tasks, submissions, and conversation- and task-scoped document
+	 * incarnations with their revisions. Then records an audit event in durable metadata and returns it.
+	 * Returns undefined when the conversation is absent; nothing is deleted or audited. The reserved root
+	 * conversation is rejected. IDs are never reclaimed, so recreating a deleted conversation's ID is
+	 * rejected by commit. The caller owns liveness: no live task may still write the conversation, and no
+	 * Session may hold its documents loaded.
+	 */
+	deleteConversation(id: ConversationId, context: Context): Promise<ConversationDeletion | undefined>;
+
+	/**
+	 * Serialize one conversation's own rows as JSONL lines, read from one consistent snapshot: a header
+	 * line carrying the conversation record, then entry, task, submission, and document lines in ascending
+	 * ID order. Returns undefined when the conversation is absent. The payload covers exactly what
+	 * deleteConversation removes, so export-before-delete loses nothing. Session-scoped documents and other
+	 * conversations' rows (including fork parents') never appear.
+	 */
+	exportConversation(id: ConversationId, context: Context): Promise<readonly string[] | undefined>;
+
+	/**
+	 * Write a consistent snapshot of the storage to a new file at path. SQLite uses VACUUM INTO, so the
+	 * snapshot covers the whole database file, every project in it, including committed WAL content. The
+	 * target must not exist; that error is passed through. MemoryStorage has no file backend and rejects
+	 * with an unsupported-capability error. The caller owns the target path: parent directories are not
+	 * created.
+	 */
+	backup(path: string, context: Context): Promise<void>;
 
 	/** Release backend resources; all later operations must reject. */
 	close(context: Context): Promise<void>;

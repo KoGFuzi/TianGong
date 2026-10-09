@@ -183,6 +183,16 @@ backup(path: string, context: Context): Promise<void>;
 - **append-only 审计语义**：delete 是显式生命周期操作，不等价于"静默改史"。`durable_metadata` 记录 delete 审计事件（新 key，如 `deleted_conversations`，值为 `{conversationId, deletedAt}`）——**不改已冻结的 V1 schema**（entries/documents 等表结构零变更，本项无 migration）。
 - `MemoryStorage` 同步实现，否则 conformance 套件会拉爆。
 
+### 2.8 落地修订（2026-10-09）
+
+本节已按 `docs/p1-2-storage-lifecycle.md` 落地，五处口径修正：
+
+1. **审计载体**：`durable_metadata` 新列 `deleted_conversations`（迁移 v3，单表 `ALTER TABLE`）。原"本项无 migration"表述修正——singleton 表加 key 机械上必须走迁移；"冻结数据表零变更"的意图保留。
+2. **delete 返回值**：`Promise<ConversationDeletion | undefined>`（原写 boolean），审计对象让 conformance 双实现可直接断言，不必裸查 SQL。
+3. **export**：返回 `readonly string[]`；行范围在 header+entries+docs 之外增加 task/submission 行，与 delete 级联完全对称；header 带会话 record，doc 行带 `key`/`version`/`taskId`。
+4. **ancestry 断链**：原"读取侧已有处理"不成立（五处 walk 会抛 `TypeError`），已硬化：父行缺失视为可见历史终点，以独立 `fix` 落地。
+5. **backup**："事务内 `VACUUM INTO`"修正为事务外单语句（实测事务内直接报错）；`MemoryStorage` 因包根导出图零 Node 导入的机械约束（`test/storage-runtime-boundary.test.ts`）改为**拒绝文件备份**，原"写 JSON 投影"方案作废。
+
 ---
 
 ## 3. P1-3：telemetry 接线（第一批 span）

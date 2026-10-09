@@ -2,7 +2,7 @@
 
 版本：V1（`2.0.1`）
 适用范围：`@OnePanda-TgSec/tg-ai`、`@OnePanda-TgSec/tg-gibraltar`
-更新日期：2026-10-04
+更新日期：2026-10-09
 
 本手册只写已经过测试或在本仓库内验证过的行为。凡本手册与代码不符，以代码为准，并请回报，因为那是本手册的缺陷。
 
@@ -121,6 +121,51 @@ PRAGMA wal_checkpoint(PASSIVE)       打开时执行，把 WAL 限制在有界�
 
 **若断电不可接受**，`synchronous` 需要更高等级。这是 SQLite 的语义而非本适配器的选择；改动前请先阅读 SQLite 官方文档中 `synchronous` 一节。
 
+### 3.4 生命周期三方法（delete / export / backup）
+
+除读写之外，`Storage` 接口还提供三个显式生命周期方法。它们不进 `commit` 写路径，直接操作持久层；调用时机由调用方负责。
+
+**删除会话**：
+
+```typescript
+const deletion = await storage.deleteConversation(conversationId, context);
+// 会话不存在时返回 undefined（幂等，不抛错、不重复审计）
+// 成功时返回 { conversationId, projectId, deletedAt, counts }
+```
+
+- 单事务级联：该会话的 conversation 记录、entries、tasks、submissions、以及 conversation-scope 与 task-scope（其任务名下）文档的全部化身与 revisions。
+- **保留会话（id=1）拒删**：抛 `The root conversation is reserved and cannot be deleted`。
+- **ID 不回收**：`record_ids` 不动，用已删除的 ID 重建会被 `commit` 拒绝；`deletedAt` 为墙钟毫秒。
+- **审计**：每次删除在 `durable_metadata.deleted_conversations` 尾部追加一条 `{v:1, conversationId, projectId, deletedAt, counts}`：
+
+```sql
+SELECT deleted_conversations FROM durable_metadata WHERE singleton = 1;
+```
+
+- **调用方责任**：删除前保证没有运行中任务还会写该会话，且没有活着的 Session/Harness 持有其已加载文档（先 `waitForIdle()`，必要时 `unloadDocuments()`，或独占打开后执行）。
+- fork 子会话与 owned 子会话**不级联**：删除父会话后，子会话可见历史在断链处结束（读取不崩，只变短）。
+
+**导出会话**：
+
+```typescript
+const lines: readonly string[] | undefined = await storage.exportConversation(conversationId, context);
+```
+
+- 返回 JSONL 行数组（每行一个 JSON 记录），自单个一致性快照读出，按 ID 升序：header（含会话 record）→ entry → task → submission → doc。doc 行带 `key`（singleton 为 `null`）、`version` 与物化值；task-scope 文档另带 `taskId`。
+- 导出范围与删除级联**完全一致**：先导后删不丢数据。其他会话、fork 父会话、session-scope 文档永不出现在导出里。
+- 本期只导不入；大会话整载内存（行数组），流式变体属 P2。
+
+**备份**：
+
+```typescript
+await storage.backup("/backup/session-2026-10-09.sqlite", context);
+```
+
+- SQLite 走 `VACUUM INTO ?`：一致快照，**覆盖整个文件（所有 project）**，含已提交的 WAL 内容；无需停写。
+- 目标文件必须不存在（存在报 `output file already exists`）；父目录不自动创建。
+- `MemoryStorage` 无文件后端（包根导出图保持零 Node 导入），调用会抛 `cannot write file backups`；备份是 SQLite 能力。
+- 备份窗口内进程外写者按 busy 语义等待（默认 5s 超时）。
+
 ---
 
 ## 4. 健康检查
@@ -132,7 +177,7 @@ const health = await storage.health();
 // {
 //   ok: true,
 //   integrity: "ok",
-//   schemaVersion: 2,
+//   schemaVersion: 3,
 //   journalMode: "wal",
 //   synchronous: 1,
 //   walAutoCheckpointPages: 1000,
@@ -169,8 +214,8 @@ setInterval(async () => {
 	if (health.journalMode !== "wal") {
 		console.error("journal mode regressed:", health.journalMode);
 	}
-	if (health.schemaVersion < 2) {
-		console.warn("schema below project isolation:", health.schemaVersion);
+	if (health.schemaVersion < 3) {
+		console.warn("schema below deletion audit:", health.schemaVersion);
 	}
 }, 60_000);
 ```
@@ -309,6 +354,9 @@ POST /   Authorization: <缺失>             → 401 { ok: false, code: "missing
 | `busyTimeoutMs` 为 0 | 打开时未传 `busyTimeoutMs`，落到 SQLite 默认值 |
 | `integrity` 非 `ok` | **立即停止写入**，备份文件，然后用 `sqlite3 <file> ".recover"` 处理 |
 | `-wal` 文件持续增长 | 长事务未提交，或 autocheckpoint 被设为 0。调用 `storage.checkpoint()` |
+| `deleted_conversations` 体积增长 | 只随删除次数增长（每事件约 200B），属正常审计；查询见 §3.4 |
+| backup 报 `output file already exists` | `VACUUM INTO` 要求目标不存在；换新文件名，不要删旧备份再覆盖 |
+| delete 后子会话历史变短 | 父会话行已随删除移除，ancestry 在断链处结束——预期语义（§3.4）而非损坏 |
 | 打开时报 `must not be empty` | `project` 传了空字符串 |
 | 凭据读不到 | 检查 data 根（`~/.local/share/TianGong/auth.json`），**不是** config 根 |
 | `401 invalid_key` 但确认 key 正确 | 存储侧存的是明文 key 而非 `hashApiKey(key)` 的返回值 |
@@ -319,7 +367,7 @@ POST /   Authorization: <缺失>             → 401 { ok: false, code: "missing
 
 1. 升级前完整备份 data 根，包括 `session.sqlite`、`-wal`、`-shm` 三个文件
 2. 停止所有持有该存储的进程（单进程独占存储，无跨进程锁）
-3. 升级代码，重新启动；迁移在打开时自动执行
+3. 升级代码，重新启动；迁移在打开时自动执行（v3 只对 `durable_metadata` 做一次 `ALTER TABLE` 加审计列，数据表零变更）
 4. 启动后立即执行第 4.2 节自检，确认 `schemaVersion` 达到预期且 `integrity` 为 `ok`
 
 **回滚**：schema 版本只前进不后退。`durable_schema` 版本高于代码支持版本时，打开会直接报错并拒绝，防止降级代码写过新 schema。回滚前先恢复备份文件。
@@ -329,6 +377,8 @@ POST /   Authorization: <缺失>             → 401 { ok: false, code: "missing
 ## 9. 交付范围说明（V1）
 
 **已交付**：SQLite 唯一生产源、`project_id` 隔离、开箱即用默认路径、基础 API Key 鉴权、WAL 调优、自动迁移、健康检查、启动自检、entry 数据模型与复杂事件流设计冻结。
+
+**V2 分支进展**：storage 生命周期三方法（§3.4：delete / export / backup）与 schema v3 删除审计已落地。
 
 **延后至 V2**：非核心闭环的优雅架构重构，包括会话共享与分享链接、多工作区/工作树模型、权限模型、事件流持久化、`synchronous` 等级提升、以及存储引擎的再扩展。
 

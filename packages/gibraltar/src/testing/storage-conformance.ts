@@ -51,6 +51,100 @@ function entry(
 	return { id, conversationId, kind, ...extra };
 }
 
+type LifecycleFixture = {
+	readonly conversationId: ConversationId;
+	readonly otherConversationId: ConversationId;
+	readonly entryIds: readonly [EntryId, EntryId];
+	readonly otherEntryId: EntryId;
+	readonly taskId: TaskId<JsonValue>;
+	readonly submissionId: SubmissionId;
+	/** Conversation-scoped singleton, conversation-scoped family member, task-scoped singleton. */
+	readonly documentIds: readonly [DocumentId, DocumentId, DocumentId];
+};
+
+/** Seeds one non-root conversation with every scoped record kind, plus a neighbouring conversation. */
+async function seedLifecycleFixture(storage: Storage): Promise<LifecycleFixture> {
+	await createRoot(storage);
+	const conversationId = await storage.mintId<ConversationId>();
+	const otherConversationId = await storage.mintId<ConversationId>();
+	await storage.commit(
+		[
+			{ type: "conversation", value: { id: conversationId } },
+			{ type: "conversation", value: { id: otherConversationId } },
+		],
+		context,
+	);
+	const firstEntryId = await storage.mintId<EntryId>();
+	const secondEntryId = await storage.mintId<EntryId>();
+	const otherEntryId = await storage.mintId<EntryId>();
+	await storage.commit(
+		[
+			{ type: "entry", value: entry(firstEntryId, conversationId) },
+			{ type: "entry", value: entry(secondEntryId, conversationId) },
+			{ type: "entry", value: entry(otherEntryId, otherConversationId) },
+		],
+		context,
+	);
+	const taskId = await storage.mintId<TaskId<JsonValue>>();
+	const submissionId = await storage.mintId<SubmissionId>();
+	const conversationSingletonId = await storage.mintId<DocumentId>();
+	const conversationFamilyId = await storage.mintId<DocumentId>();
+	const taskDocumentId = await storage.mintId<DocumentId>();
+	await storage.commit(
+		[
+			{ type: "task", value: pendingTask(taskId, conversationId) },
+			{
+				type: "submission",
+				value: {
+					id: submissionId,
+					conversationId,
+					requestId: "lifecycle",
+					type: "input",
+					status: "queued",
+				},
+			},
+			{
+				type: "document.create",
+				record: {
+					id: conversationSingletonId,
+					kind: "lifecycle.singleton",
+					scope: { kind: "conversation", conversationId },
+					history: "latest",
+					fork: "current",
+				},
+				content: { kind: "base", version: 1, value: { state: "singleton" } },
+			},
+			{
+				type: "document.create",
+				record: {
+					id: conversationFamilyId,
+					kind: "lifecycle.family",
+					key: "slot-1",
+					scope: { kind: "conversation", conversationId },
+					history: "latest",
+					fork: "current",
+				},
+				content: { kind: "base", version: 1, value: { state: "family" } },
+			},
+			{
+				type: "document.create",
+				record: { id: taskDocumentId, kind: "lifecycle.task", scope: { kind: "task", taskId } },
+				content: { kind: "base", version: 1, value: { state: "task" } },
+			},
+		],
+		context,
+	);
+	return {
+		conversationId,
+		otherConversationId,
+		entryIds: [firstEntryId, secondEntryId],
+		otherEntryId,
+		taskId,
+		submissionId,
+		documentIds: [conversationSingletonId, conversationFamilyId, taskDocumentId],
+	};
+}
+
 type ConformanceTest = (storage: Storage) => Promise<void>;
 
 type AssertionResult = {
@@ -1572,12 +1666,188 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 			await expect(storage.mintId<EntryId>()).rejects.toThrow("ID space is exhausted");
 		}),
 
+		createCase(
+			options,
+			"deleteConversation removes every scoped row, keeps neighbours, and reports counts",
+			async (storage) => {
+				const fixture = await seedLifecycleFixture(storage);
+				const deletion = await storage.deleteConversation(fixture.conversationId, context);
+				expect(deletion).toBeDefined();
+				expect(deletion?.conversationId).toBe(fixture.conversationId);
+				expect(deletion?.counts).toEqual({ entries: 2, tasks: 1, submissions: 1, documents: 3 });
+
+				expect(await storage.conversation(fixture.conversationId, context)).toBeUndefined();
+				expect((await storage.scanConversations({}, 10, undefined, context)).items.map(({ id }) => id)).toEqual([
+					ROOT_CONVERSATION_ID,
+					fixture.otherConversationId,
+				]);
+				expect(
+					(await storage.scanTasks({ conversationId: fixture.conversationId }, 10, undefined, context)).items,
+				).toHaveLength(0);
+				expect(
+					(await storage.scanSubmissions({ conversationId: fixture.conversationId }, 10, undefined, context))
+						.items,
+				).toHaveLength(0);
+				expect(
+					(
+						await storage.scanDocuments(
+							{ scope: { kind: "conversation", conversationId: fixture.conversationId }, at: "current" },
+							10,
+							undefined,
+							context,
+						)
+					).items,
+				).toHaveLength(0);
+				expect(
+					(
+						await storage.scanDocuments(
+							{ scope: { kind: "task", taskId: fixture.taskId }, at: "current" },
+							10,
+							undefined,
+							context,
+						)
+					).items,
+				).toHaveLength(0);
+				expect(await storage.entry(fixture.entryIds[0], context)).toBeUndefined();
+				expect(await storage.entry(fixture.entryIds[1], context)).toBeUndefined();
+				expect(await storage.document(fixture.documentIds[0], "current", context)).toBeUndefined();
+				expect(await storage.document(fixture.documentIds[1], "current", context)).toBeUndefined();
+				expect(await storage.document(fixture.documentIds[2], "current", context)).toBeUndefined();
+
+				expect(await storage.conversation(fixture.otherConversationId, context)).toEqual({
+					id: fixture.otherConversationId,
+				});
+				expect(
+					(
+						await storage.scanEntries({ conversationId: fixture.otherConversationId }, 10, undefined, context)
+					).items.map(({ id }) => id),
+				).toEqual([fixture.otherEntryId]);
+
+				expect(await storage.deleteConversation(fixture.conversationId, context)).toBeUndefined();
+			},
+		),
+
+		createCase(options, "deleteConversation never reclaims record IDs", async (storage) => {
+			const fixture = await seedLifecycleFixture(storage);
+			const deletion = await storage.deleteConversation(fixture.conversationId, context);
+			expect(deletion).toBeDefined();
+			await expect(
+				storage.commit([{ type: "conversation", value: { id: fixture.conversationId } }], context),
+			).rejects.toThrow(`ID ${fixture.conversationId} already belongs to conversation`);
+			// Fresh allocation still advances past every committed ID, and using it succeeds.
+			const fresh = await storage.mintId<ConversationId>();
+			expect(fresh).toBeGreaterThan(fixture.documentIds[2]);
+			await storage.commit([{ type: "conversation", value: { id: fresh } }], context);
+			expect((await storage.conversation(fresh, context))?.id).toBe(fresh);
+		}),
+
+		createCase(options, "deleteConversation rejects the reserved root conversation", async (storage) => {
+			const rootId = await createRoot(storage);
+			await expect(storage.deleteConversation(rootId, context)).rejects.toThrow("reserved and cannot be deleted");
+			expect(await storage.conversation(rootId, context)).toBeDefined();
+		}),
+
+		createCase(options, "keeps a fork child readable after its parent conversation is deleted", async (storage) => {
+			const parentId = await storage.mintId<ConversationId>();
+			await storage.commit([{ type: "conversation", value: { id: parentId } }], context);
+			const parentEntryId = await storage.mintId<EntryId>();
+			const parentMarkerId = await storage.mintId<EntryId>();
+			await storage.commit(
+				[
+					{ type: "entry", value: entry(parentEntryId, parentId) },
+					{ type: "entry", value: entry(parentMarkerId, parentId, "marker", { head: parentEntryId }) },
+				],
+				context,
+			);
+			const childId = await storage.mintId<ConversationId>();
+			await storage.commit(
+				[
+					{
+						type: "conversation",
+						value: { id: childId, parent: { conversationId: parentId, at: parentMarkerId } },
+					},
+				],
+				context,
+			);
+			const childEntryId = await storage.mintId<EntryId>();
+			await storage.commit([{ type: "entry", value: entry(childEntryId, childId) }], context);
+
+			// Before the deletion the child sees its own line plus the inherited parent range.
+			expect(
+				(await storage.scanEntries({ conversationId: childId }, 10, undefined, context)).items.map(({ id }) => id),
+			).toEqual([childEntryId, parentMarkerId, parentEntryId]);
+			expect((await storage.findLatestHeadMarker(childId, undefined, context))?.id).toBe(parentMarkerId);
+
+			await storage.deleteConversation(parentId, context);
+
+			// The missing ancestor ends the visible history instead of faulting.
+			expect(
+				(await storage.scanEntries({ conversationId: childId }, 10, undefined, context)).items.map(({ id }) => id),
+			).toEqual([childEntryId]);
+			expect(await storage.entry(childId, parentEntryId, context)).toBeUndefined();
+			expect(await storage.findLatestHeadMarker(childId, undefined, context)).toBeUndefined();
+			expect(await storage.entry(parentEntryId, context)).toBeUndefined();
+		}),
+
+		createCase(options, "exportConversation serializes the deletion-symmetric payload in order", async (storage) => {
+			const fixture = await seedLifecycleFixture(storage);
+			const lines = await storage.exportConversation(fixture.conversationId, context);
+			expect(lines).toBeDefined();
+			expect(lines).toHaveLength(8);
+			const parsed = (lines ?? []).map(
+				(line) => JSON.parse(line) as { readonly kind: string; readonly [key: string]: unknown },
+			);
+			expect(parsed.map(({ kind }) => kind)).toEqual([
+				"tg.export.header",
+				"tg.export.entry",
+				"tg.export.entry",
+				"tg.export.task",
+				"tg.export.submission",
+				"tg.export.doc",
+				"tg.export.doc",
+				"tg.export.doc",
+			]);
+			expect(parsed[0]).toMatchObject({ v: 1, kind: "tg.export.header", conversationId: fixture.conversationId });
+			expect((parsed[0].conversation as { readonly id: number }).id).toBe(fixture.conversationId);
+			expect(parsed[0].exportedAt as number).toBeGreaterThan(0);
+			expect(parsed.slice(1, 3).map((line) => (line.entry as { readonly id: number }).id)).toEqual([
+				fixture.entryIds[0],
+				fixture.entryIds[1],
+			]);
+			expect((parsed[3].task as { readonly id: number }).id).toBe(fixture.taskId);
+			expect((parsed[4].submission as { readonly id: number }).id).toBe(fixture.submissionId);
+			expect(parsed[5].key).toBe(null);
+			expect(parsed[5].taskId).toBeUndefined();
+			expect(parsed[6].key).toBe("slot-1");
+			expect(parsed[7].taskId).toBe(fixture.taskId);
+			expect(parsed[7].version).toBe(1);
+			expect(await storage.exportConversation(idFromNumber<ConversationId>(999_999), context)).toBeUndefined();
+		}),
+
+		createCase(options, "exportConversation covers exactly what deleteConversation removes", async (storage) => {
+			const fixture = await seedLifecycleFixture(storage);
+			const lines = await storage.exportConversation(fixture.conversationId, context);
+			expect(lines).toBeDefined();
+			const kinds = (lines ?? []).map((line) => (JSON.parse(line) as { readonly kind: string }).kind);
+			const countOf = (kind: string) => kinds.filter((value) => value === kind).length;
+			const deletion = await storage.deleteConversation(fixture.conversationId, context);
+			expect(deletion).toBeDefined();
+			expect(deletion?.counts).toEqual({
+				entries: countOf("tg.export.entry"),
+				tasks: countOf("tg.export.task"),
+				submissions: countOf("tg.export.submission"),
+				documents: countOf("tg.export.doc"),
+			});
+		}),
+
 		createCase(options, "rejects every operation after close", async (storage) => {
 			await createRoot(storage);
 			await storage.close(context);
 			await expect(storage.conversation(ROOT_CONVERSATION_ID, context)).rejects.toThrow("closed");
 			await expect(storage.commit([] satisfies StorageWrite[], context)).rejects.toThrow("closed");
 			await expect(storage.mintId<ConversationId>()).rejects.toThrow("closed");
+			await expect(storage.deleteConversation(ROOT_CONVERSATION_ID, context)).rejects.toThrow("closed");
+			await expect(storage.exportConversation(ROOT_CONVERSATION_ID, context)).rejects.toThrow("closed");
 		}),
 	];
 }

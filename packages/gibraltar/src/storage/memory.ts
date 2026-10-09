@@ -3,6 +3,7 @@ import { applyImmutableBatches, type Op } from "@OnePanda-TgSec/chord/delta";
 import { StorageRejected } from "../errors.ts";
 import { idFromNumber, seqFromNumber } from "../ids.ts";
 import type {
+	ConversationDeletion,
 	ConversationId,
 	ConversationQuery,
 	ConversationRecord,
@@ -31,6 +32,7 @@ import type {
 	TaskQuery,
 	TaskRecord,
 } from "../types.ts";
+import { ROOT_CONVERSATION_ID } from "../types.ts";
 
 type StoredTask = TaskRecord<JsonValue, JsonValue, JsonValue>;
 type TaskStatus = StoredTask["state"]["status"];
@@ -87,6 +89,8 @@ type State = {
 	documents: Map<DocumentId, StoredDocumentState>;
 	documentAddresses: Map<string, DocumentAddressIndex>;
 	documentIdsByScope: Map<string, DocumentId[]>;
+	/** Append-only audit trail mirroring the SQLite `durable_metadata.deleted_conversations` events. */
+	deletions: ConversationDeletion[];
 };
 
 const clone = <T>(value: T): T => {
@@ -237,6 +241,7 @@ export class MemoryStorage implements Storage {
 		documents: new Map(),
 		documentAddresses: new Map(),
 		documentIdsByScope: new Map(),
+		deletions: [],
 	};
 	private nextId = 2;
 	private nextSeq = 1;
@@ -489,7 +494,9 @@ export class MemoryStorage implements Storage {
 				const entry = this.state.entries.get(ids[index])!;
 				return clone({ ...entry, head: entry.head! });
 			}
-			const conversation = this.state.conversations.get(currentId)!;
+			const conversation = this.state.conversations.get(currentId);
+			// A missing ancestor ends the visible history: its rows were deleted after this conversation forked.
+			if (conversation === undefined) return undefined;
 			if (conversation.parent === undefined) return undefined;
 			upperEntryId = Math.min(upperEntryId, conversation.parent.at);
 			currentId = conversation.parent.conversationId;
@@ -628,6 +635,150 @@ export class MemoryStorage implements Storage {
 		return page(values, limit);
 	}
 
+	/**
+	 * Permanently remove one conversation and every row scoped to it in this storage's project: its
+	 * conversation record, entries, tasks, submissions, and conversation- and task-scoped document
+	 * incarnations with their revisions. Then appends an audit event to the deletion trail and returns it.
+	 * Returns undefined when the conversation is absent; nothing is deleted or audited. The reserved root
+	 * conversation is rejected. IDs are never reclaimed, so recreating a deleted conversation's ID is
+	 * rejected by commit. The caller owns liveness: no live task may still write the conversation, and no
+	 * Session may hold its documents loaded.
+	 */
+	async deleteConversation(id: ConversationId, _context: Context): Promise<ConversationDeletion | undefined> {
+		this.assertOpen();
+		if (id === ROOT_CONVERSATION_ID) throw new Error("The root conversation is reserved and cannot be deleted");
+		if (!this.state.conversations.has(id)) return undefined;
+		const entryIds = this.state.entryIds.get(id) ?? [];
+		const taskIds = this.state.taskIds.filter((taskId) => this.state.tasks.get(taskId)?.conversationId === id);
+		const submissionIds = this.state.submissionIds.filter(
+			(submissionId) => this.state.submissions.get(submissionId)?.conversationId === id,
+		);
+		const documentIds = [
+			...(this.state.documentIdsByScope.get(scopeKey({ kind: "conversation", conversationId: id })) ?? []),
+			...taskIds.flatMap((taskId) => this.state.documentIdsByScope.get(scopeKey({ kind: "task", taskId })) ?? []),
+		];
+		for (const entryId of entryIds) {
+			this.state.entries.delete(entryId);
+			this.state.entryCommitSeqs.delete(entryId);
+		}
+		this.state.entryIds.delete(id);
+		this.state.headEntryIds.delete(id);
+		for (const taskId of taskIds) {
+			const task = this.state.tasks.get(taskId)!;
+			removeSorted(this.state.taskIds, taskId);
+			removeSorted(this.state.taskIdsByStatus[task.state.status], taskId);
+			this.state.tasks.delete(taskId);
+			this.state.conversationIdsByOwnerTask.delete(taskId);
+		}
+		for (const submissionId of submissionIds) {
+			const submission = this.state.submissions.get(submissionId)!;
+			removeSorted(this.state.submissionIds, submissionId);
+			removeSorted(this.state.submissionIdsByStatus[submission.status], submissionId);
+			this.state.submissions.delete(submissionId);
+		}
+		this.state.submissionIdsByRequest.delete(id);
+		for (const documentId of documentIds) {
+			const stored = this.state.documents.get(documentId)!;
+			const key = recordAddressKey(stored.record);
+			const address = this.state.documentAddresses.get(key);
+			if (address !== undefined) {
+				removeSorted(address.ids, documentId);
+				if (address.currentId === documentId) delete address.currentId;
+				if (address.ids.length === 0 && address.currentId === undefined) this.state.documentAddresses.delete(key);
+			}
+			this.state.documents.delete(documentId);
+		}
+		this.state.documentIdsByScope.delete(scopeKey({ kind: "conversation", conversationId: id }));
+		for (const taskId of taskIds) {
+			this.state.documentIdsByScope.delete(scopeKey({ kind: "task", taskId }));
+		}
+		removeSorted(this.state.conversationIds, id);
+		this.state.conversations.delete(id);
+		this.state.conversationIdsByOwnerConversation.delete(id);
+		const deletion: ConversationDeletion = {
+			conversationId: id,
+			deletedAt: Date.now(),
+			counts: {
+				entries: entryIds.length,
+				tasks: taskIds.length,
+				submissions: submissionIds.length,
+				documents: documentIds.length,
+			},
+		};
+		this.state.deletions.push(freeze(clone(deletion)));
+		return deletion;
+	}
+
+	/**
+	 * Serialize one conversation's own rows as JSONL lines: a header line carrying the conversation record,
+	 * then entry, task, submission, and document lines in ascending ID order. Returns undefined when the
+	 * conversation is absent. The payload covers exactly what deleteConversation removes, so
+	 * export-before-delete loses nothing. Session-scoped documents and other conversations' rows
+	 * (including fork parents') never appear.
+	 */
+	async exportConversation(id: ConversationId, _context: Context): Promise<readonly string[] | undefined> {
+		this.assertOpen();
+		const conversation = this.state.conversations.get(id);
+		if (conversation === undefined) return undefined;
+		const lines: string[] = [
+			JSON.stringify({
+				v: 1,
+				kind: "tg.export.header",
+				conversationId: id,
+				exportedAt: Date.now(),
+				schemaVersion: 0,
+				conversation,
+			}),
+		];
+		for (const entryId of this.state.entryIds.get(id) ?? []) {
+			lines.push(
+				JSON.stringify({
+					kind: "tg.export.entry",
+					seq: this.state.entryCommitSeqs.get(entryId)!,
+					entry: this.state.entries.get(entryId)!,
+				}),
+			);
+		}
+		const taskIds = this.state.taskIds.filter((taskId) => this.state.tasks.get(taskId)?.conversationId === id);
+		for (const taskId of taskIds) {
+			lines.push(JSON.stringify({ kind: "tg.export.task", task: this.state.tasks.get(taskId)! }));
+		}
+		for (const submissionId of this.state.submissionIds) {
+			const submission = this.state.submissions.get(submissionId)!;
+			if (submission.conversationId !== id) continue;
+			lines.push(JSON.stringify({ kind: "tg.export.submission", submission }));
+		}
+		const documentIds = [
+			...(this.state.documentIdsByScope.get(scopeKey({ kind: "conversation", conversationId: id })) ?? []),
+			...taskIds.flatMap((taskId) => this.state.documentIdsByScope.get(scopeKey({ kind: "task", taskId })) ?? []),
+		].sort((a, b) => a - b);
+		for (const documentId of documentIds) {
+			const materialized = this.materializeDocument(documentId, "current");
+			if (materialized === undefined) continue;
+			lines.push(
+				JSON.stringify({
+					kind: "tg.export.doc",
+					doc: materialized.record.kind,
+					...(materialized.record.scope.kind === "task" ? { taskId: materialized.record.scope.taskId } : {}),
+					key: materialized.record.key ?? null,
+					version: materialized.version,
+					state: materialized.value,
+				}),
+			);
+		}
+		return lines;
+	}
+
+	/**
+	 * MemoryStorage has no file backend, so it cannot write a snapshot: the portable core stays free of
+	 * Node imports and the package root remains loadable anywhere. Rejects with an unsupported-capability
+	 * error while the storage stays open and usable. File backups are a SQLite storage capability.
+	 */
+	async backup(_path: string, _context: Context): Promise<void> {
+		this.assertOpen();
+		throw new Error("MemoryStorage cannot write file backups; backup is a SQLite storage capability");
+	}
+
 	async close(_context: Context): Promise<void> {
 		this.closed = true;
 	}
@@ -668,7 +819,9 @@ export class MemoryStorage implements Storage {
 				if (id < minEntryId) break;
 				yield this.state.entries.get(id)!;
 			}
-			const conversation = this.state.conversations.get(currentId)!;
+			const conversation = this.state.conversations.get(currentId);
+			// A missing ancestor ends the visible history: its rows were deleted after this conversation forked.
+			if (conversation === undefined) break;
 			if (conversation.parent === undefined) break;
 			upperEntryId = Math.min(upperEntryId, conversation.parent.at);
 			if (upperEntryId < minEntryId) break;

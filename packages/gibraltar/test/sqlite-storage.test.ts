@@ -102,6 +102,11 @@ class ReopeningStorage implements Storage {
 	document: Storage["document"] = (id, at, readContext) => this.current.document(id, at, readContext);
 	scanDocuments: Storage["scanDocuments"] = (query, limit, cursor, readContext) =>
 		this.current.scanDocuments(query, limit, cursor, readContext);
+	deleteConversation: Storage["deleteConversation"] = (id, deleteContext) =>
+		this.current.deleteConversation(id, deleteContext);
+	exportConversation: Storage["exportConversation"] = (id, exportContext) =>
+		this.current.exportConversation(id, exportContext);
+	backup: Storage["backup"] = (path, backupContext) => this.current.backup(path, backupContext);
 
 	async close(closeContext: Parameters<Storage["close"]>[0]): Promise<void> {
 		if (this.closed) return;

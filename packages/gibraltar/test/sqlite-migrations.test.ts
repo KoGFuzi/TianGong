@@ -35,9 +35,14 @@ describe("durable SQLite migrations", () => {
 			expect(await database.get("SELECT version FROM durable_schema WHERE singleton = 1")).toEqual({
 				version: CURRENT_SQLITE_SCHEMA_VERSION,
 			});
-			expect(await database.get("SELECT next_id, next_seq FROM durable_metadata WHERE singleton = 1")).toEqual({
+			expect(
+				await database.get(
+					"SELECT next_id, next_seq, deleted_conversations FROM durable_metadata WHERE singleton = 1",
+				),
+			).toEqual({
 				next_id: "2",
 				next_seq: 1,
+				deleted_conversations: "[]",
 			});
 		} finally {
 			await database.close();

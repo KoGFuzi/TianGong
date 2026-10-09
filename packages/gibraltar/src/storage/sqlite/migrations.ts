@@ -147,10 +147,20 @@ const ADD_PROJECT_ID: readonly string[] = [
 	) STRICT`,
 ];
 
+// Version 3 adds the conversation-deletion audit to the storage singleton. One ALTER on durable_metadata
+// only: the data tables (conversations, entries, tasks, submissions, documents, document_revisions,
+// record_ids) do not change. The column is read and written only by deleteConversation; commit's metadata
+// SELECT lists next_id and next_seq explicitly, so the audit never touches the commit path. Events append
+// at the array tail as {v, conversationId, projectId, deletedAt, counts}.
+const ADD_DELETION_AUDIT: readonly string[] = [
+	`ALTER TABLE durable_metadata ADD COLUMN deleted_conversations TEXT NOT NULL DEFAULT '[]'`,
+];
+
 /** Immutable, ordered schema history. Append new migrations after the initial schema ships. */
 export const SQLITE_MIGRATIONS: readonly SqliteMigration[] = [
 	{ version: 1, statements: INITIAL_SCHEMA },
 	{ version: 2, statements: ADD_PROJECT_ID },
+	{ version: 3, statements: ADD_DELETION_AUDIT },
 ];
 
 export const CURRENT_SQLITE_SCHEMA_VERSION = SQLITE_MIGRATIONS.at(-1)?.version ?? 0;

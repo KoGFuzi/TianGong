@@ -15,8 +15,10 @@ import {
 	toToolDeclaration,
 	validateToolArguments,
 } from "@OnePanda-TgSec/tg-ai";
+import type { TelemetryContext } from "@OnePanda-TgSec/tg-telemetry";
 import { evaluatePermission, permissionGrantKey, toolResource } from "./permission.ts";
 import { getDefaultStreamFn } from "./stream-fn.ts";
+import { type AgentSpanStarter, agentSpanStarter, traceToolCall, turnStopReason } from "./telemetry.ts";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -159,6 +161,18 @@ function createAgentStream(): EventStream<AgentEvent, AgentMessage[]> {
 }
 
 /**
+ * Error class name for a failed assistant message. Prefers the provider diagnostic's error name,
+ * which is what the request span records, and falls back to the generic `Error`.
+ */
+function failureName(message: AssistantMessage): string {
+	for (const diagnostic of message.diagnostics ?? []) {
+		const name = diagnostic.error?.name;
+		if (name) return name;
+	}
+	return "Error";
+}
+
+/**
  * Main loop logic shared by agentLoop and agentLoopContinue.
  */
 async function runLoop(
@@ -208,84 +222,106 @@ async function runLoop(
 				await emit({ type: "turn_start" });
 			}
 
-			// Process prepared and queued messages before the next assistant response.
-			for (const message of declareToolChanges(currentContext, [...preparedMessages, ...pendingMessages])) {
-				await emit({ type: "message_start", message });
-				await emit({ type: "message_end", message });
-				currentContext.messages.push(message);
-				newMessages.push(message);
-			}
-			pendingMessages = [];
+			// The turn span covers this iteration's assistant response and the tool calls it issued.
+			// `prepareNextTurn` above and `finishTurn` below stay outside it.
+			const turn = await agentSpanStarter(config.telemetryContext)(
+				"tg.span.agent.turn",
+				{ provider: config.model.provider, model: config.model.id },
+				async (turnSpan, toolStarter) => {
+					// Process prepared and queued messages before the next assistant response.
+					for (const message of declareToolChanges(currentContext, [...preparedMessages, ...pendingMessages])) {
+						await emit({ type: "message_start", message });
+						await emit({ type: "message_end", message });
+						currentContext.messages.push(message);
+						newMessages.push(message);
+					}
+					pendingMessages = [];
 
-			const requestUpdate = await config.prepareRequest?.(
-				{
-					context: currentContext,
-					model: config.model,
-					thinkingLevel: config.reasoning ?? "off",
+					const requestUpdate = await config.prepareRequest?.(
+						{
+							context: currentContext,
+							model: config.model,
+							thinkingLevel: config.reasoning ?? "off",
+						},
+						signal,
+					);
+					if (requestUpdate) {
+						currentContext = requestUpdate.context ?? currentContext;
+						config = {
+							...config,
+							model: requestUpdate.model ?? config.model,
+							reasoning:
+								requestUpdate.thinkingLevel === undefined
+									? config.reasoning
+									: requestUpdate.thinkingLevel === "off"
+										? undefined
+										: requestUpdate.thinkingLevel,
+						};
+					}
+
+					// Stream assistant response. The turn span becomes the parent of the provider
+					// request spans the stream function opens.
+					const message = await streamAssistantResponse(
+						currentContext,
+						{ ...config, telemetryContext: turnSpan },
+						signal,
+						emit,
+						streamFunction,
+					);
+					newMessages.push(message);
+
+					const failed = message.stopReason === "error" || message.stopReason === "aborted";
+					const toolCalls = message.content.filter((c) => c.type === "toolCall");
+					const toolResults: ToolResultMessage[] = [];
+					let hasMore = false;
+					if (!failed && toolCalls.length > 0) {
+						// A "length" stop means the output was cut off by the token limit, so
+						// every tool call in the message may carry truncated arguments. Fail
+						// them all instead of executing potentially borked calls.
+						const executedToolBatch =
+							message.stopReason === "length"
+								? await failToolCallsFromTruncatedMessage(toolCalls, emit, toolStarter)
+								: await executeToolCalls(currentContext, message, config, signal, emit, toolStarter);
+						toolResults.push(...executedToolBatch.messages);
+						hasMore = !executedToolBatch.terminate;
+
+						for (const result of toolResults) {
+							currentContext.messages.push(result);
+							newMessages.push(result);
+						}
+					}
+
+					const stopReason = turnStopReason(message.stopReason);
+					turnSpan.setAttributes({
+						toolCallCount: toolCalls.length,
+						...(stopReason === undefined ? {} : { stopReason }),
+					});
+					if (failed) {
+						turnSpan.setStatus({
+							status: "error",
+							error: { name: failureName(message), message: message.errorMessage ?? "" },
+						});
+					}
+					return { message, toolResults, hasMoreToolCalls: hasMore, failed };
 				},
-				signal,
 			);
-			if (requestUpdate) {
-				currentContext = requestUpdate.context ?? currentContext;
-				config = {
-					...config,
-					model: requestUpdate.model ?? config.model,
-					reasoning:
-						requestUpdate.thinkingLevel === undefined
-							? config.reasoning
-							: requestUpdate.thinkingLevel === "off"
-								? undefined
-								: requestUpdate.thinkingLevel,
-				};
-			}
 
-			// Stream assistant response
-			const message = await streamAssistantResponse(currentContext, config, signal, emit, streamFunction);
-			newMessages.push(message);
-
-			if (message.stopReason === "error" || message.stopReason === "aborted") {
-				lastCompletedTurn = {
-					message,
-					toolResults: [],
-					context: currentContext,
-					newMessages,
-				};
+			hasMoreToolCalls = turn.hasMoreToolCalls;
+			lastCompletedTurn = {
+				message: turn.message,
+				toolResults: turn.toolResults,
+				context: currentContext,
+				newMessages,
+			};
+			if (turn.failed) {
 				await config.finishTurn?.(lastCompletedTurn, signal);
-				await emit({ type: "turn_end", message, toolResults: [] });
+				await emit({ type: "turn_end", message: turn.message, toolResults: [] });
 				await emit({ type: "agent_end", messages: newMessages });
 				return;
 			}
 
-			// Check for tool calls
-			const toolCalls = message.content.filter((c) => c.type === "toolCall");
-
-			const toolResults: ToolResultMessage[] = [];
-			hasMoreToolCalls = false;
-			if (toolCalls.length > 0) {
-				// A "length" stop means the output was cut off by the token limit, so
-				// every tool call in the message may carry truncated arguments. Fail
-				// them all instead of executing potentially borked calls.
-				const executedToolBatch =
-					message.stopReason === "length"
-						? await failToolCallsFromTruncatedMessage(toolCalls, emit)
-						: await executeToolCalls(currentContext, message, config, signal, emit);
-				toolResults.push(...executedToolBatch.messages);
-				hasMoreToolCalls = !executedToolBatch.terminate;
-
-				for (const result of toolResults) {
-					currentContext.messages.push(result);
-					newMessages.push(result);
-				}
-			}
-
-			lastCompletedTurn = {
-				message,
-				toolResults,
-				context: currentContext,
-				newMessages,
-			};
 			const decision = await config.finishTurn?.(lastCompletedTurn, signal);
-			await emit({ type: "turn_end", message, toolResults });
+			await emit({ type: "turn_end", message: turn.message, toolResults: turn.toolResults });
 
 			if (decision?.action === "end") {
 				await emit({ type: "agent_end", messages: newMessages });
@@ -294,7 +330,7 @@ async function runLoop(
 
 			explicitContinuation = decision?.action === "continue";
 			pendingMessages = (await config.getSteeringMessages?.()) || [];
-			if (hasMoreToolCalls || pendingMessages.length > 0) {
+			if (turn.hasMoreToolCalls || pendingMessages.length > 0) {
 				explicitContinuation = false;
 			}
 		}
@@ -479,6 +515,7 @@ async function streamAssistantResponse(
 async function failToolCallsFromTruncatedMessage(
 	toolCalls: AgentToolCall[],
 	emit: AgentEventSink,
+	toolStarter: AgentSpanStarter,
 ): Promise<ExecutedToolCallBatch> {
 	const messages: ToolResultMessage[] = [];
 	for (const toolCall of toolCalls) {
@@ -488,13 +525,18 @@ async function failToolCallsFromTruncatedMessage(
 			toolName: toolCall.name,
 			args: toolCall.arguments,
 		});
-		const finalized: FinalizedToolCallOutcome = {
-			toolCall,
-			result: createErrorToolResult(
-				`Tool call "${toolCall.name}" was not executed: the response hit the output token limit, so its arguments may be truncated. Re-issue the tool call with complete arguments.`,
-			),
-			isError: true,
-		};
+		const finalized = await traceToolCall(
+			toolStarter,
+			toolCall.name,
+			async (): Promise<FinalizedToolCallOutcome> => ({
+				toolCall,
+				result: createErrorToolResult(
+					`Tool call "${toolCall.name}" was not executed: the response hit the output token limit, so its arguments may be truncated. Re-issue the tool call with complete arguments.`,
+				),
+				isError: true,
+			}),
+			(outcome) => outcome.isError,
+		);
 		await emitToolExecutionEnd(finalized, emit);
 		const toolResultMessage = createToolResultMessage(finalized);
 		await emitToolResultMessage(toolResultMessage, emit);
@@ -512,15 +554,16 @@ async function executeToolCalls(
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
+	toolStarter: AgentSpanStarter,
 ): Promise<ExecutedToolCallBatch> {
 	const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
 	const hasSequentialToolCall = toolCalls.some(
 		(tc) => currentContext.tools?.find((t) => t.name === tc.name)?.executionMode === "sequential",
 	);
 	if (config.toolExecution === "sequential" || hasSequentialToolCall) {
-		return executeToolCallsSequential(currentContext, assistantMessage, toolCalls, config, signal, emit);
+		return executeToolCallsSequential(currentContext, assistantMessage, toolCalls, config, signal, emit, toolStarter);
 	}
-	return executeToolCallsParallel(currentContext, assistantMessage, toolCalls, config, signal, emit);
+	return executeToolCallsParallel(currentContext, assistantMessage, toolCalls, config, signal, emit, toolStarter);
 }
 
 type ExecutedToolCallBatch = {
@@ -535,6 +578,7 @@ async function executeToolCallsSequential(
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
+	toolStarter: AgentSpanStarter,
 ): Promise<ExecutedToolCallBatch> {
 	const finalizedCalls: FinalizedToolCallOutcome[] = [];
 	const messages: ToolResultMessage[] = [];
@@ -547,25 +591,34 @@ async function executeToolCallsSequential(
 			args: toolCall.arguments,
 		});
 
-		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
-		let finalized: FinalizedToolCallOutcome;
-		if (preparation.kind === "immediate") {
-			finalized = {
-				toolCall,
-				result: preparation.result,
-				isError: preparation.isError,
-			};
-		} else {
-			const executed = await executePreparedToolCall(preparation, signal, emitToolExecutionUpdate(toolCall, emit));
-			finalized = await finalizeExecutedToolCall(
-				currentContext,
-				assistantMessage,
-				preparation,
-				executed,
-				config,
-				signal,
-			);
-		}
+		const finalized = await traceToolCall(
+			toolStarter,
+			toolCall.name,
+			async (): Promise<FinalizedToolCallOutcome> => {
+				const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
+				if (preparation.kind === "immediate") {
+					return {
+						toolCall,
+						result: preparation.result,
+						isError: preparation.isError,
+					};
+				}
+				const executed = await executePreparedToolCall(
+					preparation,
+					signal,
+					emitToolExecutionUpdate(toolCall, emit),
+				);
+				return await finalizeExecutedToolCall(
+					currentContext,
+					assistantMessage,
+					preparation,
+					executed,
+					config,
+					signal,
+				);
+			},
+			(outcome) => outcome.isError,
+		);
 
 		await emitToolExecutionEnd(finalized, emit);
 		const toolResultMessage = createToolResultMessage(finalized);
@@ -591,6 +644,7 @@ async function executeToolCallsParallel(
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
+	toolStarter: AgentSpanStarter,
 ): Promise<ExecutedToolCallBatch> {
 	const finalizedCalls: FinalizedToolCallEntry[] = [];
 
@@ -604,11 +658,16 @@ async function executeToolCallsParallel(
 
 		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
 		if (preparation.kind === "immediate") {
-			const finalized = {
-				toolCall,
-				result: preparation.result,
-				isError: preparation.isError,
-			} satisfies FinalizedToolCallOutcome;
+			const finalized = await traceToolCall(
+				toolStarter,
+				toolCall.name,
+				async (): Promise<FinalizedToolCallOutcome> => ({
+					toolCall,
+					result: preparation.result,
+					isError: preparation.isError,
+				}),
+				(outcome) => outcome.isError,
+			);
 			await emitToolExecutionEnd(finalized, emit);
 			finalizedCalls.push(finalized);
 			if (signal?.aborted) {
@@ -618,23 +677,32 @@ async function executeToolCallsParallel(
 		}
 
 		finalizedCalls.push(async () => {
-			if (signal?.aborted) {
-				const finalized = {
-					toolCall,
-					result: createErrorToolResult("Operation aborted"),
-					isError: true,
-				} satisfies FinalizedToolCallOutcome;
-				await emitToolExecutionEnd(finalized, emit);
-				return finalized;
-			}
-			const executed = await executePreparedToolCall(preparation, signal, emitToolExecutionUpdate(toolCall, emit));
-			const finalized = await finalizeExecutedToolCall(
-				currentContext,
-				assistantMessage,
-				preparation,
-				executed,
-				config,
-				signal,
+			const finalized = await traceToolCall(
+				toolStarter,
+				toolCall.name,
+				async (): Promise<FinalizedToolCallOutcome> => {
+					if (signal?.aborted) {
+						return {
+							toolCall,
+							result: createErrorToolResult("Operation aborted"),
+							isError: true,
+						};
+					}
+					const executed = await executePreparedToolCall(
+						preparation,
+						signal,
+						emitToolExecutionUpdate(toolCall, emit),
+					);
+					return await finalizeExecutedToolCall(
+						currentContext,
+						assistantMessage,
+						preparation,
+						executed,
+						config,
+						signal,
+					);
+				},
+				(outcome) => outcome.isError,
 			);
 			await emitToolExecutionEnd(finalized, emit);
 			return finalized;
@@ -865,6 +933,11 @@ export interface RunToolCallOptions extends ToolCallHooks {
 	context: AgentContext;
 	signal?: AbortSignal;
 	onUpdate?: ToolUpdateSink;
+	/**
+	 * Parent context for this call's `tg.span.agent.tool` span. Nested callers pass the enclosing
+	 * tool span so the child nests under it; omit it to record nothing.
+	 */
+	telemetryContext?: TelemetryContext;
 }
 
 /**
@@ -878,12 +951,19 @@ export interface RunToolCallOptions extends ToolCallHooks {
  */
 export async function runToolCall(toolCall: AgentToolCall, options: RunToolCallOptions): Promise<AgentToolCallOutcome> {
 	const { assistantMessage, context, signal } = options;
-	const preparation = await prepareToolCall(context, assistantMessage, toolCall, options, signal, options.tools);
-	if (preparation.kind === "immediate") {
-		return { toolCall, result: preparation.result, isError: preparation.isError };
-	}
-	const executed = await executePreparedToolCall(preparation, signal, options.onUpdate ?? (() => {}));
-	return finalizeExecutedToolCall(context, assistantMessage, preparation, executed, options, signal);
+	return await traceToolCall(
+		agentSpanStarter(options.telemetryContext),
+		toolCall.name,
+		async (): Promise<AgentToolCallOutcome> => {
+			const preparation = await prepareToolCall(context, assistantMessage, toolCall, options, signal, options.tools);
+			if (preparation.kind === "immediate") {
+				return { toolCall, result: preparation.result, isError: preparation.isError };
+			}
+			const executed = await executePreparedToolCall(preparation, signal, options.onUpdate ?? (() => {}));
+			return await finalizeExecutedToolCall(context, assistantMessage, preparation, executed, options, signal);
+		},
+		(outcome) => outcome.isError,
+	);
 }
 
 async function executePreparedToolCall(

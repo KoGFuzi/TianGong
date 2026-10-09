@@ -33,6 +33,15 @@
 
 - README documenting the agent loop, event stream, tool contract, hooks, steering and follow-up
   queues, and the low-level loop exports.
+- Turn and tool-call spans. Each turn is recorded as `tg.span.agent.turn` (`provider` and `model` at
+  start; `stopReason` and `toolCallCount` when it ends) and each tool call as `tg.span.agent.tool`
+  (`toolName` at start; `isError` when it settles). Both nest under the turn span, and the turn span
+  is handed to the provider request as its parent context, so a turn with a model call and tool calls
+  appears as one tree. Sequential and parallel tool execution, truncated-message failures, and
+  `runToolCall` from a nested tool are all covered; `RunToolCallOptions` gains an optional
+  `telemetryContext` so a nested caller can parent its span. Without a configured context the spans
+  are no-ops and the event sequence is unchanged. New module `src/telemetry.ts`; new dependency on
+  `@OnePanda-TgSec/tg-telemetry`.
 
 ## [2.0.1] - 2026-10-03
 

@@ -245,15 +245,19 @@ Dependency edges, verified by `packages/chord/test/boundary.test.ts` and by the 
 `tsconfig.json` path map:
 
 ```text
-              telemetry ──▶ ai ──▶ agent
-                   ▲
-chord ─────────────────────▶ gibraltar
+telemetry ──▶ ai ──┬──▶ agent
+   └───────────────┘
+                   └──▶ gibraltar ▲
+chord ────────────────────────────┘
 
 codemode   mcp                     (vendored, no edges in or out)
 ```
 
-`chord`, `tui`, `telemetry`, `codemode`, and `mcp` are leaves: they import nothing from this
-workspace. That is what keeps `chord` publishable on its own.
+Arrows point from a package toward the packages that depend on it. `tg-agent-core` depends on
+both `tg-ai` and `tg-telemetry` (it records turn/tool spans against the shared vocabulary);
+`tg-gibraltar` depends on `chord` and `tg-ai`. `chord`, `tui`, `telemetry`, `codemode`, and
+`mcp` are leaves: they import nothing from this workspace. That is what keeps `chord`
+publishable on its own.
 
 Do not call `bun test`. Bun reserves that name for its own runner, which would silently bypass
 every per-package Vitest and `node:test` configuration. Use `bun run test`.

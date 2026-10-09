@@ -248,6 +248,26 @@ stream(model, context, options) →
 - 不做 span 采样、批量导出、进程外转发。
 - 不给 tui 挂 span（UI 观测走它自己的性能路径）。
 
+### 3.6 落地记录（2026-10-10）
+
+本节已按 `docs/p1-3-telemetry-wiring.md` 落地（`bun run check` / `build` / `test` 全绿），
+五处相对父规划原稿的口径修正：
+
+1. **span 数 3→4**：详规 D1 拍板新增 `tg.span.provider.acquire`（并发门排队/拒绝观测），
+   词表落 `packages/telemetry/src/spans.ts` 的 `TG_SPAN_SCHEMA`，经 index 再导出。
+2. **形态非扁平**：`Models.holdSlot` 包 `limiter.acquire()`，acquire span 作为下层请求的
+   `telemetryContext`，实际树形为 `turn ⊃ acquire ⊃ request`（§3.3 草图的扁平单 span 未采用，
+   详规 §2.5 偏差清单已列）。
+3. **retried 实现**：`ProviderRequestOptions.onRetry` 内部管线（重试两守卫通过后、退避等待前
+   同步触发），8 个适配器调用点机械透传；`retried` = 重试次数 > 0。
+4. **agent 依赖面**：`tg-agent-core` 新增对 `tg-telemetry` 的运行时依赖（AGENTS.md 边界图已
+   同步）；`RunToolCallOptions` 增可选 `telemetryContext` 供嵌套调用挂父 span；
+   `examples/mcp-codemode` 的嵌套 runner 暂不传该字段（记档缺口，宿主接入点）。
+5. **默认零开销**：不配 telemetryContext 时全链 NOOP 直通、与原路径同形，事件序列不变
+   （T5/A3 断言）。
+
+测试矩阵：telemetry 词表 V1-V3、ai T1-T7、agent A1-A4，共 14 条新用例。
+
 ---
 
 ## 4. 实施顺序与提交切分

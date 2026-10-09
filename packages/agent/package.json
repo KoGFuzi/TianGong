@@ -24,6 +24,7 @@
 	},
 	"dependencies": {
 		"@OnePanda-TgSec/tg-ai": "^2.0.1",
+		"@OnePanda-TgSec/tg-telemetry": "^2.0.1",
 		"typebox": "1.3.27"
 	},
 	"keywords": [

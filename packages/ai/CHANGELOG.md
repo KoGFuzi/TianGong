@@ -64,6 +64,15 @@
   another.
 - `EventStream.settled()` resolves once a stream can produce no further events, through either a
   terminal event or `end()`. Unlike `result()`, it settles when the stream ends without a final value.
+- Provider calls are traced as `tg.span.provider.request`, one span per logical request through
+  `createProvider` (chat streaming, `streamSimple`, image generation, and classification). The span
+  carries `provider`/`api`/`model` at start and, when the call settles, `stopReason`, `retried`, the
+  token counts and total cost the response reported, and the error name on failure. `Models.holdSlot`
+  records concurrency-gate admission as `tg.span.provider.acquire`, parented to the request span, so
+  a refused or aborted admission is recorded without a request span. `ProviderRequestOptions.onRetry`
+  is the internal hook the wrapper installs to observe adapter retries; the adapters forward it to
+  `retryProviderRequest` unchanged. Without an active `telemetryContext` both paths pass through
+  untouched.
 
 ### Fixed
 

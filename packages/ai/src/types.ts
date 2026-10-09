@@ -133,6 +133,11 @@ export interface ProviderRequestOptions<TModel = Model<Api>> {
 	signal?: AbortSignal;
 	/** Explicit parent context for telemetry produced by this logical request. */
 	telemetryContext?: TelemetryContext;
+	/**
+	 * Invoked each time the provider retry loop schedules a retry, before its backoff wait.
+	 * Internal telemetry plumbing: set by the provider wrapper and forwarded by adapters.
+	 */
+	onRetry?: () => void;
 	apiKey?: string;
 	/**
 	 * Optional fetch implementation for provider HTTP requests.

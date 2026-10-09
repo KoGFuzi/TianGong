@@ -78,6 +78,7 @@ export const generateImages: ImagesFunction<ImagesOptions> = async (
 				maxRetries: options?.maxRetries,
 				maxRetryDelayMs: options?.maxRetryDelayMs,
 				signal: options?.signal,
+				onRetry: options?.onRetry,
 			},
 		);
 		await options?.onResponse?.({ status: rawResponse.status, headers: headersToRecord(rawResponse.headers) }, model);

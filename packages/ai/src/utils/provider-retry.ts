@@ -14,6 +14,8 @@ interface ProviderRetryOptions {
 	maxRetries?: number;
 	maxRetryDelayMs?: number;
 	signal?: AbortSignal;
+	/** Invoked after a retry is scheduled and before its backoff wait. */
+	onRetry?: () => void;
 }
 
 interface ProviderError extends Error {
@@ -127,6 +129,7 @@ export async function retryProviderRequest<T>(
 			if (options.signal?.aborted) throw createAbortError();
 			if (retriesRemaining <= 0 || !isProviderError(error) || !isRetryableProviderError(error)) throw error;
 
+			options.onRetry?.();
 			const retryIndex = maxRetries - retriesRemaining;
 			retriesRemaining--;
 			await abortableSleep(getRetryDelayMs(error, retryIndex, options.maxRetryDelayMs), options.signal);

@@ -1,3 +1,9 @@
+import {
+	createTypedSpanStarter,
+	NOOP_TELEMETRY_CONTEXT,
+	type TelemetryContext,
+	TG_SPAN_SCHEMA,
+} from "@OnePanda-TgSec/tg-telemetry";
 import { lazyStream } from "./api/lazy.ts";
 import { defaultProviderAuthContext as defaultAuthContext } from "./auth/context.ts";
 import { InMemoryCredentialStore } from "./auth/credential-store.ts";
@@ -46,6 +52,7 @@ import type {
 	ProviderRequestOptions,
 	ProviderStreams,
 	SimpleStreamOptions,
+	StreamOptions,
 	TranscriptContext,
 	Usage,
 } from "./types.ts";
@@ -60,6 +67,7 @@ import {
 	imageErrorResult,
 	isModelType,
 } from "./utils/model-operations.ts";
+import { providerRequestResult, providerRequestStream } from "./utils/provider-spans.ts";
 import { normalizeContext } from "./utils/transcript.ts";
 
 export { ModelsError, type ModelsErrorCode } from "./auth/resolve.ts";
@@ -884,16 +892,35 @@ class ModelsImpl implements MutableModels {
 	 * moment the adapter returns, so the slot cannot be scoped to the call that opened it.
 	 * `EventStream.settled()` resolves on both a terminal event and `end()`, so the slot returns on
 	 * every path except an abandoned stream the consumer never drains.
+	 *
+	 * With an active telemetry context the wait and admission are recorded as a
+	 * `tg.span.provider.acquire` span, which becomes the parent of the provider request span.
 	 */
 	private async holdSlot(
 		bucket: string,
-		open: () => AssistantMessageEventStream,
+		open: (parent: TelemetryContext | undefined) => AssistantMessageEventStream,
 		signal?: AbortSignal,
+		telemetryContext?: TelemetryContext,
+	): Promise<AssistantMessageEventStream> {
+		if (telemetryContext === undefined || telemetryContext === NOOP_TELEMETRY_CONTEXT) {
+			return await this.openSlot(bucket, open, signal, undefined);
+		}
+		const startSpan = createTypedSpanStarter(telemetryContext, [TG_SPAN_SCHEMA]);
+		return await startSpan("tg.span.provider.acquire", { provider: bucket }, (acquireSpan) =>
+			this.openSlot(bucket, open, signal, acquireSpan),
+		);
+	}
+
+	private async openSlot(
+		bucket: string,
+		open: (parent: TelemetryContext | undefined) => AssistantMessageEventStream,
+		signal: AbortSignal | undefined,
+		parent: TelemetryContext | undefined,
 	): Promise<AssistantMessageEventStream> {
 		await this.limiter.acquire(bucket, signal);
 		let stream: AssistantMessageEventStream;
 		try {
-			stream = open();
+			stream = open(parent);
 		} catch (error) {
 			this.limiter.release(bucket);
 			throw error;
@@ -922,8 +949,16 @@ class ModelsImpl implements MutableModels {
 			// slot cannot be scoped to a promise here; it is released when the stream settles.
 			return await this.holdSlot(
 				model.provider,
-				() => provider.stream(requestModel, transcript, requestOptions as ApiStreamOptions<TApi>),
+				(parent) =>
+					provider.stream(
+						requestModel,
+						transcript,
+						(parent === undefined
+							? requestOptions
+							: { ...requestOptions, telemetryContext: parent }) as ApiStreamOptions<TApi>,
+					),
 				options?.signal,
+				requestOptions.telemetryContext,
 			);
 		});
 	}
@@ -944,8 +979,16 @@ class ModelsImpl implements MutableModels {
 			const { requestModel, requestOptions } = await this.applyAuth(model, options);
 			return await this.holdSlot(
 				model.provider,
-				() => provider.streamSimple(requestModel, transcript, requestOptions as SimpleStreamOptions),
+				(parent) =>
+					provider.streamSimple(
+						requestModel,
+						transcript,
+						(parent === undefined
+							? requestOptions
+							: { ...requestOptions, telemetryContext: parent }) as SimpleStreamOptions,
+					),
 				options?.signal,
+				requestOptions.telemetryContext,
 			);
 		});
 	}
@@ -1162,9 +1205,16 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 			: undefined,
 		filterModels: input.filterModels,
 		filterAllModels: input.filterAllModels,
-		stream: (model, context, options) => dispatch(model, (streams) => streams.stream(model, context, options)),
+		stream: (model, context, options) =>
+			dispatch(model, (streams) =>
+				providerRequestStream<Model<TApi>, StreamOptions>(model, options, (next) =>
+					streams.stream(model, context, next),
+				),
+			),
 		streamSimple: (model, context, options) =>
-			dispatch(model, (streams) => streams.streamSimple(model, context, options)),
+			dispatch(model, (streams) =>
+				providerRequestStream(model, options, (next) => streams.streamSimple(model, context, next)),
+			),
 	};
 
 	if (streams.some((entry) => entry.fetchDeferred !== undefined)) {
@@ -1204,7 +1254,9 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 					),
 				);
 			}
-			return implementation.generateImages(model, context, options);
+			return await providerRequestResult(model, options, (next) =>
+				implementation.generateImages(model, context, next),
+			);
 		};
 	}
 	if (classifiers && classifierImplementations.length > 0) {
@@ -1216,7 +1268,7 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 					new ModelsError("provider", `Provider ${input.id} has no classifier implementation for "${model.api}"`),
 				);
 			}
-			return implementation.classify(model, context, options);
+			return await providerRequestResult(model, options, (next) => implementation.classify(model, context, next));
 		};
 	}
 

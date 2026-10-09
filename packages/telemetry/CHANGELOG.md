@@ -14,6 +14,10 @@
 - README documenting the span contracts, typed schemas, adapter obligations, the conformance suite,
   and the in-memory recorder.
 - `vitest.config.ts`, resolving sibling packages through the shared `vitest.base.ts` aliases.
+- `src/spans.ts` and the `TG_SPAN_SCHEMA` export: the first span vocabulary, covering
+  `tg.span.provider.acquire`, `tg.span.provider.request`, `tg.span.agent.turn`, and
+  `tg.span.agent.tool`, declared as typed schema data. Every attribute is a count or a closed
+  enumeration; no span carries prompt text, tool arguments, or paths.
 
 ## [2.0.1] - 2026-10-03
 

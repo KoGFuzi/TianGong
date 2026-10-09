@@ -1,47 +1,49 @@
 # @OnePanda-TgSec/tg-gibraltar
 
-> **Experimental.** The API changes without notice between releases.
+> **实验性。** 发布之间 API 可能不预告就变化。
 
-A durable agent harness. Conversations, model turns, tool calls, and your own state are committed to storage before anything is shown. If the process dies mid-turn, reopening the storage picks the work up where it stopped.
+持久化 agent harness。会话、模型 turn、工具调用以及你自己的状态，都在展示之前先提交进存储。进程
+死在 turn 中途，重新打开存储后工作会从断点继续。
 
-Built on [`@OnePanda-TgSec/tg-ai`](../ai/README.md) for model access and `@OnePanda-TgSec/chord` for document state.
+构建于 [`@OnePanda-TgSec/tg-ai`](../ai/README.md)（模型访问）与 `@OnePanda-TgSec/chord`（文档状
+态）之上。
 
-## Table of Contents
+## 目录
 
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Concepts](#concepts)
-- [Persist and Resume](#persist-and-resume)
-- [Extensions](#extensions)
-- [Tools](#tools)
-- [System Prompt](#system-prompt)
-- [Per-Conversation Agent](#per-conversation-agent)
-- [Settings](#settings)
-- [Environment](#environment)
+- [安装](#安装)
+- [快速开始](#快速开始)
+- [概念](#概念)
+- [持久化与恢复](#持久化与恢复)
+- [扩展](#扩展)
+- [工具](#工具)
+- [系统提示词](#系统提示词)
+- [每会话 Agent](#每会话-agent)
+- [设置](#设置)
+- [环境](#环境)
 - [Reload](#reload)
-- [Watching a Conversation](#watching-a-conversation)
-- [Busy Conversations](#busy-conversations)
-- [Reset and Handoff](#reset-and-handoff)
-- [Compaction](#compaction)
-- [Agent Events (Experimental)](#agent-events-experimental)
+- [观察会话](#观察会话)
+- [忙碌会话](#忙碌会话)
+- [重置与交接](#重置与交接)
+- [压缩（Compaction）](#压缩compaction)
+- [Agent 事件（实验性）](#agent-事件实验性)
 - [Hooks](#hooks)
-- [More Conversations and Forks](#more-conversations-and-forks)
-- [Abort and Subagents](#abort-and-subagents)
-- [Child Tasks](#child-tasks)
-- [Task Graph](#task-graph)
-- [Your Own State](#your-own-state)
-- [Usage and Cost](#usage-and-cost)
-- [Storage](#storage)
-- [Examples](#examples)
-- [Design Documents](#design-documents)
+- [更多会话与 Fork](#更多会话与-fork)
+- [中止与 Subagent](#中止与-subagent)
+- [子任务](#子任务)
+- [任务图](#任务图)
+- [你自己的状态](#你自己的状态)
+- [用量与费用](#用量与费用)
+- [存储](#存储)
+- [示例](#示例)
+- [设计文档](#设计文档)
 
-## Installation
+## 安装
 
 ```bash
 bun add @OnePanda-TgSec/tg-gibraltar @OnePanda-TgSec/tg-ai @OnePanda-TgSec/chord
 ```
 
-## Quick Start
+## 快速开始
 
 ```typescript
 import { BACKGROUND_CONTEXT } from "@OnePanda-TgSec/chord/context";
@@ -52,7 +54,7 @@ import { AssistantEntry, createRegistry, Harness, MemoryStorage } from "@OnePand
 const context = BACKGROUND_CONTEXT;
 
 const models = createModels();
-models.setProvider(openaiProvider()); // reads OPENAI_API_KEY
+models.setProvider(openaiProvider()); // 读取 OPENAI_API_KEY
 
 const harness = await Harness.open(new MemoryStorage(), { models, registry: createRegistry() }, context);
 const root = await harness.root(context, { agent: { model: { provider: "openai", modelId: "gpt-6-sol" } } });
@@ -66,66 +68,80 @@ if (settled.status === "done" && settled.type === "input") {
 await harness.close(context);
 ```
 
-What happened:
+发生了什么：
 
-- `Harness.open()` opens a Session over a storage backend. `MemoryStorage` keeps everything in memory.
-- `root()` returns the root conversation, creating it on first use with the given agent choices. A conversation is a transcript of immutable entries.
-- `submit()` durably admits your input and returns a `Submission`. A built-in generation task calls the model and appends the answer.
-- `wait()` resolves once the input is answered (`done`) or has failed (`unanswered`, with a reason).
+- `Harness.open()` 在存储后端上打开一个 Session。`MemoryStorage` 把所有东西放在内存里。
+- `root()` 返回根会话，首次使用时按给定的 agent 选择创建。会话是 immutable entry 的 transcript。
+- `submit()` 把你的输入持久化受理，并返回一个 `Submission`。内置 generation 任务调用模型并追加
+  回答。
+- `wait()` 在输入被回答（`done`）或失败（`unanswered`，带原因）时 resolve。
 
-Every async call takes a Chord `Context`, which carries cancellation. `BACKGROUND_CONTEXT` never cancels. Cancelling a wait only cancels that wait, never the work.
+每个异步调用都接受一个 Chord `Context`，它携带取消语义。`BACKGROUND_CONTEXT` 永不取消。取消一个
+wait 只取消那个 wait，永不取消工作本身。
 
-## Concepts
+## 概念
 
-- **Harness**: one open storage plus the machinery that runs agents on it. All changes go through one line of atomic commits, and nothing is shown before its commit is stored.
-- **Conversation**: a transcript. `root()` creates the root conversation on first use; you can create more and fork them. A `Conversation` handle holds no state; compare handles by `id`.
-- **Entry**: one immutable transcript record, such as a user message (`tg.user`), a model response (`tg.assistant`), a tool result (`tg.tool-result`), a system prompt change (`tg.system`), a reset (`tg.reset`), or your own kind. The model sees the entries from the newest reset onward.
-- **Commit**: an atomic write. `conversation.commit((tx) => ...)` can append entries, edit documents, and create tasks together; either all of it is stored or none of it.
-- **Document**: typed JSON state stored next to the transcript and changed in commits. Built-in ones hold each conversation's agent choices (`tg.agent`), the running generation and tools (`tg.live`), queued submissions (`tg.inbox`), and spend (`tg.usage`).
-- **Task**: a durable state machine that saves a checkpoint at every step, so a restarted process continues from the last one. Every task has an owner: its conversation, or another task. The Harness runs answers as built-in tasks: `tg.generation` calls the model and owns the `tg.tool` tasks of its tool calls, waits for them, and hands the run to the next generation.
-- **Submission**: something you hand to a conversation, either user input or an entry to write, which you can wait for.
-- **Turn and run**: a turn is one model response and its tool calls; a run is the turns from an input to its final answer. A conversation is busy while a run is going.
-- **Extension**: a named bundle of tools, system prompt sections, hooks, wrappers, and tasks.
-- **Registry**: the extensions this process installed. It can change while the Harness runs; new work uses the new state.
-- **Agent**: what a conversation runs with: model, thinking level, selected extensions, tools, instructions, and working directory. Stored per conversation as names in `tg.agent`, resolved against the registry at each use.
+- **Harness**：一份打开的存储加上在其上运行 agent 的机制。所有变更都走同一条原子提交线，任何东
+  西在它的提交落库之前不会被展示。
+- **Conversation**：一条 transcript。`root()` 首次使用时创建根会话；你可以创建更多并 fork。会话
+  句柄不持有状态；按 `id` 比较句柄。
+- **Entry**：一条 immutable transcript 记录，如用户消息（`tg.user`）、模型响应（`tg.assistant`）、
+  工具结果（`tg.tool-result`）、系统提示词变更（`tg.system`）、重置（`tg.reset`），或你自己的
+  kind。模型看到的是最近一次 reset 以来的 entry。
+- **Commit**：一次原子写入。`conversation.commit((tx) => ...)` 可以追加 entry、编辑文档、创建任
+  务，要么全部落库要么全部不落。
+- **Document**：存放在 transcript 旁边的类型化 JSON 状态，随 commit 变更。内置文档保存每个会话的
+  agent 选择（`tg.agent`）、运行中的 generation 与工具（`tg.live`）、排队的 submission
+  （`tg.inbox`）与花费（`tg.usage`）。
+- **Task**：随每一步保存检查点的持久化状态机，重启的进程从上一个检查点继续。每个任务都有属主：
+  它的会话，或另一个任务。Harness 以内置任务运行回答：`tg.generation` 调用模型并持有其工具调用
+  的 `tg.tool` 任务，等待它们，然后把运行交给下一轮 generation。
+- **Submission**：你交给会话的东西，用户输入或一条待写 entry，可以等待它。
+- **Turn 与 run**：turn 是一次模型响应及其工具调用；run 是从一个输入到其最终回答的若干 turn。有
+  run 进行时会话处于忙碌状态。
+- **Extension**：具名的一组工具、系统提示词 section、hook、包装器与任务。
+- **Registry**：本进程安装的扩展。可以在 Harness 运行中变更；新工作使用新状态。
+- **Agent**：会话运行的配置：模型、thinking level、选中的扩展、工具、指令与工作目录。按会话存储
+  为 `tg.agent` 中的名字，每次使用时对照 registry 解析。
 
-One answered input, as entries and tasks:
+一个被回答的输入，以 entry 与任务表示：
 
 ```text
 submit(input) → tg.user
-  tg.generation → tg.system (only if the prompt or tools changed), tg.assistant (tool calls)
-    tg.tool × n → tg.tool-result × n   (owned by the generation, which waits for them)
-  tg.generation → tg.assistant (answer) → submission done
+  tg.generation → tg.system（仅当提示词或工具变化时）, tg.assistant（工具调用）
+    tg.tool × n → tg.tool-result × n   （由 generation 持有并等待）
+  tg.generation → tg.assistant（回答） → submission done
 ```
 
-## Persist and Resume
+## 持久化与恢复
 
-Use SQLite storage to keep conversations across restarts:
+使用 SQLite 存储让会话跨重启保留：
 
 ```typescript
 import { openNodeSqliteStorage } from "@OnePanda-TgSec/tg-gibraltar/storage/sqlite/node";
 
 const harness = await Harness.open(await openNodeSqliteStorage("./session.sqlite"), { models, registry }, context);
-// or, with no path at all:
+// 或不带任何路径：
 // const harness = await Harness.open(await openDefaultSqliteStorage(), { models, registry }, context);
-const root = await harness.root(context); // the same root as last time
-harness.resume(); // continue any run the last process left unfinished
+const root = await harness.root(context); // 与上次同一个根会话
+harness.resume(); // 继续上次进程未完成的任何运行
 ```
 
-Work interrupted by a crash or close stays pending. `resume()` starts the task scheduler; submitting or waiting starts it too. A retried submission with the same `requestId` returns the existing submission instead of submitting twice:
+被崩溃或关闭打断的工作保持挂起。`resume()` 启动任务调度器；submit 或 wait 也会启动它。带相同
+`requestId` 的重试 submission 会返回已有 submission 而不是重复提交：
 
 ```typescript
 const submission = await root.submit({ type: "input", content: "Hello", requestId: "greeting-1" }, context);
-// After a restart: the same request ID finds the same submission.
+// 重启之后：同一个请求 ID 找到同一个 submission。
 const again = await root.submit({ type: "input", content: "Hello", requestId: "greeting-1" }, context);
 // again.id === submission.id
 ```
 
-`harness.submission(id)` reacquires a submission by ID, for example to wait for it after a restart.
+`harness.submission(id)` 按 ID 重新获取一个 submission，例如用于在重启后等待它。
 
-## Extensions
+## 扩展
 
-Code the Harness runs, other than its built-in tasks, comes in named extensions installed in a registry your process owns:
+Harness 运行的、内置任务以外的代码，以具名扩展的形式安装在你进程拥有的 registry 里：
 
 ```typescript
 import { createRegistry, defineExtension, defineTool, hook, section, ToolTask } from "@OnePanda-TgSec/tg-gibraltar";
@@ -142,13 +158,17 @@ registry.install(CodingTools);
 registry.install(Coding);
 ```
 
-An extension may bring `tools`, `sections`, `hooks`, `wraps` (decorators of a tool or section by name), and `tasks`. By default every conversation selects every installed extension, in install order. Nothing in the registry is stored; conversations store extension names.
+一个扩展可以携带 `tools`、`sections`、`hooks`、`wraps`（按名字装饰工具或 section）与 `tasks`。
+默认每个会话按安装顺序选中所有已安装扩展。registry 里没有任何东西被存储；会话存的是扩展名。
 
-## Tools
+## 工具
 
-`@OnePanda-TgSec/tg-gibraltar/tools` provides `read`, `write`, `edit`, and `bash`, and the `CodingTools` extension with all four. They touch files and processes only through the call's environment (see [Environment](#environment)). Reading images is not supported yet.
+`@OnePanda-TgSec/tg-gibraltar/tools` 提供 `read`、`write`、`edit`、`bash`，以及包含全部四个的
+`CodingTools` 扩展。它们只通过调用的环境接触文件与进程（见[环境](#环境)）。暂不支持读取图片。
 
-Define your own tool with a TypeBox schema. `defineTool()` types `args` from `parameters`, which the Harness validates before `execute()`. `api.output()` streams running output, which becomes the result when `execute()` returns no `content`:
+用 TypeBox schema 定义你自己的工具。`defineTool()` 从 `parameters` 类型化 `args`，Harness 在
+`execute()` 之前校验。`api.output()` 流式输出运行中的内容，当 `execute()` 没有返回 `content` 时
+成为结果：
 
 ```typescript
 import { Type } from "@OnePanda-TgSec/tg-ai";
@@ -165,9 +185,13 @@ const count = defineTool({
 registry.install(defineExtension({ name: "count", tools: [count] }));
 ```
 
-Each call runs as its own durable task. Its intent is committed before `execute()` runs. If the process dies mid-call, the tool reruns on reopen only when it is declared `replay: "safe"`; otherwise the model gets an `interrupted` error result with the output committed so far. Throwing from `execute()` gives the model an error result. A result can also return `usage`, which is added to the conversation's [usage](#usage-and-cost). It can also return `control: { terminate: true }`: when every result of the round asks for it, the run ends without another model request.
+每次调用作为独立的持久化任务运行。它的意图在 `execute()` 运行之前就已提交。进程死在调用中途
+时，只有声明了 `replay: "safe"` 的工具会在重新打开时重跑；否则模型得到一个 `interrupted` 错误
+结果，已提交的输出随之保留。从 `execute()` 抛出会给模型一个错误结果。结果也可以返回 `usage`，
+会计入会话的[用量](#用量与费用)。还可以返回 `control: { terminate: true }`：当一轮的每个结果都
+这样要求时，run 结束且不再发模型请求。
 
-A later extension's tool with the same name replaces an earlier one where both are selected, and `wrapTool()` decorates whichever tool won:
+后安装的扩展里的同名工具在两个都被选中时替换先安装的；`wrapTool()` 装饰最终胜出的那个工具：
 
 ```typescript
 const Venv = defineExtension({ name: "venv", tools: [createBashTool({ commandPrefix: "source .venv/bin/activate" })] });
@@ -177,48 +201,58 @@ const Timing = defineExtension({
 });
 ```
 
-## System Prompt
+## 系统提示词
 
-The system prompt is built from the selected extensions' sections, rendered in order before each request. A section sees the resolved agent, the environment built for the request, and committed documents:
+系统提示词由选中扩展的 section 按顺序构建，在每次请求前渲染。section 能看到解析后的 agent、为
+请求构建的环境以及已提交的文档：
 
 ```typescript
-section("cwd", (input) => input.env?.cwd); // rendered as <cwd>\n...\n</cwd>; undefined omits it
+section("cwd", (input) => input.env?.cwd); // 渲染为 <cwd>\n...\n</cwd>；undefined 则省略
 ```
 
-A conversation's `instructions` render last, as the section `instructions`. Sections and tool changes are stored as positional system entries in the transcript. Only what changed is sent again, which keeps provider prompt caches warm. A section that returns something different every time, such as the current time, defeats that.
+会话的 `instructions` 最后渲染，作为 section `instructions`。section 与工具变化以位置系统 entry
+的形式存储在 transcript 里。只有变化的部分会重新发送，保持 provider prompt 缓存的热度。每次都
+返回不同内容的 section（例如当前时间）会破坏这一点。
 
-## Per-Conversation Agent
+## 每会话 Agent
 
-Each conversation stores what it runs with in its `tg.agent` document. `configure()` changes it in one commit; unset fields follow the host:
+每个会话把自己的运行配置存在 `tg.agent` 文档里。`configure()` 在一次 commit 里修改它；未设置
+的字段跟随宿主：
 
 ```typescript
 await root.configure(
 	{
 		model: { provider: "openai", modelId: "gpt-6-sol" },
 		thinkingLevel: "high",
-		extensions: { remove: [Coding] }, // edits the host default; an array selects exactly these, in order
-		tools: [readTool, bashTool], // an array offers exactly these; { remove: [...] } drops some
+		extensions: { remove: [Coding] }, // 编辑宿主默认；数组形式则恰好选中这些，按顺序
+		tools: [readTool, bashTool], // 数组形式恰好提供这些；{ remove: [...] } 移除部分
 		instructions: "Only read; never edit files.",
 		cwd: "/work/repo",
 	},
 	context,
 );
-await root.configure({ tools: null }, context); // null clears a field back to the host default
-const agent = await root.agent(context); // resolved: model, extensions, tools, sections, cwd
+await root.configure({ tools: null }, context); // null 把字段清回宿主默认
+const agent = await root.agent(context); // 已解析：model、extensions、tools、sections、cwd
 ```
 
-Extensions and tools are passed as objects and stored by name, so a stored name outlives its code: after an extension is uninstalled, conversations that select it just stop getting it until it is installed again. `createConversation()`, `fork()`, and `root()` take the same change as `agent`. A task-owned conversation, such as a subagent's, starts as a copy of its owner's conversation's agent. A fork starts with the agent its parent had at the fork entry. The model, prompt, and offered tools of a request are fixed when it is prepared; a change applies from the next request. Tool calls and hooks use the agent as their task phase resolves it, and the environment is built from the current `cwd` at each use, so a `cwd` or extension change can reach calls the model already made.
+扩展与工具以对象传入、以名字存储，所以存储的名字比代码活得久：扩展被卸载后，选中它的会话只是不
+再得到它，直到重新安装。`createConversation()`、`fork()` 与 `root()` 接受与 `agent` 相同的变
+更。任务持有的会话（如 subagent 的）起始是其属主会话 agent 的拷贝。fork 从父会话在 fork entry 处
+的 agent 开始。请求所用模型、提示词与工具在准备时固定；变更从下一个请求生效。工具调用与 hook 使
+用的 agent 是其任务阶段所解析的，环境在每次使用时从当前 `cwd` 构建，所以 `cwd` 或扩展变更可以影
+响模型已经发出的调用。
 
-## Settings
+## 设置
 
-Run policy shared by every conversation is passed as `settings`. It is read at every use and never stored, so getters make it live, for example backed by a settings file:
+所有会话共享的运行策略以 `settings` 传入。它在每次使用时读取且永不存储，所以 getter 是活配置，
+例如由设置文件支撑：
 
 ```typescript
 const harness = await Harness.open(storage, {
 	models,
 	registry,
 	settings: {
-		extensions: [CodingTools, Coding], // default selection; absent: every installed extension
+		extensions: [CodingTools, Coding], // 默认选中；缺省时为全部已安装扩展
 		stream: { timeoutMs: 120_000 },
 		retry: { maxRetries: 3 },
 		compaction: { reserveTokens: 16384 },
@@ -230,9 +264,10 @@ const harness = await Harness.open(storage, {
 }, context);
 ```
 
-## Environment
+## 环境
 
-`env` builds the execution environment for each tool call, section rendering, and `runtime.env()`. It receives the conversation's ID, its agent `cwd`, and committed reads, so one function serves a directory per conversation or a container per conversation:
+`env` 为每次工具调用、section 渲染与 `runtime.env()` 构建执行环境。它接收会话 ID、其 agent
+`cwd` 与已提交的读，所以一个函数可以服务于"每会话一个目录"或"每会话一个容器"：
 
 ```typescript
 import { NodeExecutionEnv } from "@OnePanda-TgSec/tg-gibraltar/env/node";
@@ -244,131 +279,148 @@ const harness = await Harness.open(storage, {
 }, context);
 ```
 
-A throw from `env` becomes the call's error result. Without an environment, the built-in tools fail with an error result. A fresh environment object per call is fine: `edit` and `write` serialize changes to one file by the environment's `id` and path. A custom `ExecutionEnv` sets `id` so that equal ids see the same files at the same paths, for example one id per container.
+`env` 抛出的异常成为该调用的错误结果。没有环境时，内置工具以错误结果失败。每次调用用新的环境
+对象没有问题：`edit` 与 `write` 按环境的 `id` 与路径串行化对同一文件的变更。自定义
+`ExecutionEnv` 要设置 `id`，使相同 id 看到相同路径下的相同文件，例如每容器一个 id。
 
 ## Reload
 
-Installing an extension with an installed name replaces it in place, in one step:
+以已安装的名字安装一个扩展会原地一步替换它：
 
 ```typescript
-registry.install(await loadCodingExtension()); // same name "coding": replaces the installed one
+registry.install(await loadCodingExtension()); // 同名 "coding"：替换已安装的那个
 ```
 
-`registry.uninstall(extension)` removes the installed extension with that name, whichever object it is.
+`registry.uninstall(extension)` 移除该名字已安装的扩展，无论对象是谁。
 
-Work that already started keeps the code it took: a running tool call finishes under its old implementation, and each task phase resolves hooks and the agent once, from the registry at the phase's start. The next phase, request, or call uses the new code. After a restart, install the same extensions again; pending tasks of an extension's `tasks` resume once it is installed.
+已经开始的工作保留它取到的代码：运行中的工具调用在旧实现下跑完，每个任务阶段从阶段开始时点的
+registry 解析一次 hook 与 agent。下一个阶段、请求或调用使用新代码。重启后重新安装同样的扩展；
+扩展 `tasks` 的挂起任务在安装后恢复。
 
-## Watching a Conversation
+## 观察会话
 
-Everything a UI needs is committed state. `viewState()` returns the conversation's structural view as a read-only Chord state, updated after every commit that touches it:
+UI 需要的一切都是已提交状态。`viewState()` 把会话的结构视图作为只读 Chord 状态返回，在每个触
+及它的 commit 之后更新：
 
 ```typescript
 const view = await root.viewState(context);
 view.subscribe((value) => {
-	// value.entries: the active transcript
-	// value.docs["tg.live"]: the running generation (streamed partial, retry, deferred) and tool calls (output, details)
+	// value.entries：活跃 transcript
+	// value.docs["tg.live"]：运行中的 generation（流式 partial、retry、deferred）与工具调用（output、details）
 	// value.docs["tg.inbox"], value.docs["tg.usage"], value.docs["tg.agent"]
 	render(value);
 });
-// later: view.dispose();
+// 之后：view.dispose();
 ```
 
-`watch()` delivers the same view with the exact Chord operations of each commit, one callback at a time:
+`watch()` 以每个 commit 的精确 Chord 操作交付同样的视图，一次一个回调：
 
 ```typescript
 const watch = await root.watch(context);
-render(watch.value); // the state at attachment
+render(watch.value); // 附着时刻的状态
 watch.start(async (value, ops) => {
-	await send(ops); // for example to a remote client that applies them
+	await send(ops); // 例如发给应用操作的远程客户端
 });
-// later: await watch.stop();
+// 之后：await watch.stop();
 ```
 
-A slow watch keeps at most 100 undelivered frames. After that, the pending frames are replaced by one frame holding the whole newest view. A client that joins late or reconnects starts from the current view; nothing is replayed.
+慢的 watch 最多积压 100 帧未投递内容；超过后，待投帧被替换为持有最新完整视图的一帧。迟到或重连
+的客户端从当前视图开始；不重放任何内容。
 
-Partial answers and tool output are committed at most every 100 ms, so a crash loses at most that window.
+部分回答与工具输出最多每 100 ms 提交一次，所以一次崩溃最多丢失这个窗口。
 
-## Busy Conversations
+## 忙碌会话
 
-A conversation is busy while a run is working on an input. Submitting to a busy conversation queues the submission in the conversation's inbox, `docs["tg.inbox"]` in the view:
+有 run 在处理输入时会话处于忙碌状态。向忙碌会话提交会把 submission 排进会话收件箱，即视图里
+的 `docs["tg.inbox"]`：
 
 ```typescript
-await root.submit({ type: "input", content: "Also run the tests" }, context); // follow-up (default)
+await root.submit({ type: "input", content: "Also run the tests" }, context); // follow-up（默认）
 await root.submit({ type: "input", content: "Use pnpm, not npm", whenBusy: "steer" }, context);
-await root.submit({ type: "input", content: "Only if idle", whenBusy: "reject" }, context); // throws ConversationBusy
+await root.submit({ type: "input", content: "Only if idle", whenBusy: "reject" }, context); // 抛 ConversationBusy
 await root.submit({ type: "write", entry: { kind: "app.note", data: "user opened a file" } }, context);
 ```
 
-- **Steers** are placed after the current tool round and join the running work.
-- **Follow-ups** are placed when the run answers, and start the next run.
-- **Writes** append an entry without asking the model anything.
-- `await submission.abort(context)` withdraws a queued submission.
-- The [settings](#settings) `steeringMode: "all"` and `followUpMode: "all"` place every queued item at once instead of one per turn.
+- **Steer** 放在当前工具轮之后，加入正在运行的工作。
+- **Follow-up** 在 run 回答时放入，启动下一个 run。
+- **Write** 追加一条 entry，不问模型。
+- `await submission.abort(context)` 撤回一个排队的 submission。
+- [设置](#设置)里的 `steeringMode: "all"` 与 `followUpMode: "all"` 一次性放入全部排队项，而不是每
+  轮一条。
 
-If a run fails, queued items stay in the inbox until the next submission places them, oldest first.
+run 失败时，排队项留在收件箱里，直到下一个 submission 放置它们，最旧的最先。
 
-## Reset and Handoff
+## 重置与交接
 
-`reset()` starts a new context. The model no longer sees older entries, but they stay in storage:
+`reset()` 开启一段新上下文。模型不再看到更旧的 entry，但它们仍留在存储里：
 
 ```typescript
-await root.reset(undefined, context);                                  // start from nothing
-await root.reset("We were fixing the flaky login test. Continue.", context); // start from a handoff note
+await root.reset(undefined, context);                                  // 从零开始
+await root.reset("We were fixing the flaky login test. Continue.", context); // 从交接说明开始
 ```
 
-While busy, the reset is queued like a write. When it is placed during a tool round, the current run ends. A tool can request the same with `control: { handoff: "..." }`.
+忙碌时的重置像 write 一样排队。在工具轮中被放置时，当前 run 结束。工具可以用
+`control: { handoff: "..." }` 要求同样的效果。
 
-## Compaction
+## 压缩（Compaction）
 
-Compaction shrinks what the model sees: it summarizes older entries and appends a `tg.compaction` entry that holds the summary and heads the first entry it keeps. Older entries stay in storage.
+压缩缩小模型看到的内容：它总结较旧的 entry 并追加一条 `tg.compaction` entry，保存摘要并指向它
+保留的第一条 entry。更旧的 entry 留在存储里。
 
 ```typescript
-const id = await root.compact("Keep the failing test names", context); // manual, with optional instructions
+const id = await root.compact("Keep the failing test names", context); // 手动，可带指令
 const { outcome } = (await harness.waitForTask(id, context)).state;
 if (outcome.status === "completed" && outcome.result.submissionId !== undefined) {
 	const placed = await (await harness.submission(outcome.result.submissionId, context))!.wait(context);
-	console.log(placed.status); // "done", or "unanswered" with reason "stale"
+	console.log(placed.status); // "done"，或带原因 "stale" 的 "unanswered"
 }
 ```
 
-The conversation keeps working while the summary is made. The summary is placed at once when the conversation is idle, otherwise at the next turn boundary. Esc (`abort()`) cancels a manual compaction.
+摘要生成期间会话继续工作。摘要在会话空闲时一次性放置，否则在下一个 turn 边界放置。Esc
+（`abort()`）取消手动压缩。
 
-Generation also compacts on its own, controlled by the [settings](#settings):
+generation 也自行压缩，由[设置](#设置)控制：
 
 ```typescript
 settings: {
 	compaction: {
-		enabled: true, // automatic compaction; manual compact() always works
-		reserveTokens: 16384, // above contextWindow - reserveTokens, the next request waits for a compaction
-		keepRecentTokens: 20000, // roughly how much recent context stays verbatim
-		backgroundTokens: 32768, // this far below that, a compaction starts in the background; 0 disables it
+		enabled: true, // 自动压缩；手动 compact() 永远可用
+		reserveTokens: 16384, // 高于 contextWindow - reserveTokens 时，下一个请求等待压缩
+		keepRecentTokens: 20000, // 粗略保留多少最近的上下文原文
+		backgroundTokens: 32768, // 低于该值这么多时，后台开始一次压缩；0 关闭
 	},
 }
 ```
 
-When a provider rejects a request because the context is too long, generation compacts and retries once. A summary that would cut before the start of the current context settles as `stale` when it is placed, so when several are in flight, the furthest cut stays in effect. Summarization spend counts in `tg.usage`. A `beforeCompact` hook on `CompactionTask` can decline or supply its own summary.
+当 provider 以上下文过长为由拒绝请求时，generation 压缩后重试一次。会把当前上下文起点切掉的摘
+要在放置时 settle 为 `stale`，所以多个摘要在飞时最远的切口保持生效。摘要生成的花费计入
+`tg.usage`。`CompactionTask` 上的 `beforeCompact` hook 可以拒绝或提供自己的摘要。
 
-Running compactions are listed in `docs["tg.live"].compactions` with their reason, attempt, and retry backoff. The agent events add `compaction_start` and `compaction_end`, and a `compactions` field in the snapshot.
+运行中的压缩列在 `docs["tg.live"].compactions`，带原因、尝试次数与重试退避。agent 事件增加
+`compaction_start` 与 `compaction_end`，snapshot 里增加 `compactions` 字段。
 
-## Agent Events (Experimental)
+## Agent 事件（实验性）
 
-For consumers that want coding-agent style events (`message_start`, `message_update`, `tool_execution_start`, ...) instead of structural state:
+想要编码代理风格事件（`message_start`、`message_update`、`tool_execution_start`，……）而不是结
+构化状态的消费方：
 
 ```typescript
 import { watchEvents } from "@OnePanda-TgSec/tg-gibraltar";
 
 const stream = await watchEvents(harness, root.id, context);
-initialize(stream.snapshot); // entries, run, in-flight generation, tools, compactions, inbox, agent, usage
+initialize(stream.snapshot); // entries、run、进行中的 generation、工具、压缩、inbox、agent、usage
 stream.start(async (events) => {
 	for (const event of events) console.log(JSON.stringify(event));
 });
 ```
 
-Events are derived from commits, one batch per commit, and apply on top of the snapshot. Message and tool updates carry deltas: text and thinking appends, appended tool-call argument text, and output trims and appends. When a consumer falls more than 100 batches behind, it receives a fresh `snapshot` event instead. See `test/examples/19-json.ts` for the full stream of one run.
+事件从 commit 派生，每个 commit 一批，叠加在 snapshot 之上。消息与工具更新携带 delta：文本与
+thinking 追加、工具调用参数的追加文本、输出的裁剪与追加。消费者落后超过 100 批时，会收到一个全
+新的 `snapshot` 事件。完整的一次运行事件流见 `test/examples/19-json.ts`。
 
 ## Hooks
 
-Hooks let extensions observe or adjust the built-in tasks, in the conversations that select them:
+Hook 让扩展观察或调整内置任务，在选中它们的会话里：
 
 ```typescript
 import { GenerationTask, hook, ToolTask } from "@OnePanda-TgSec/tg-gibraltar";
@@ -382,25 +434,30 @@ const Guard = defineExtension({
 });
 ```
 
-- **Generation:** `beforeRequest` (replace the messages of one request), `afterResponse`, `onYield` (continue the run with another user message), and `afterTools` (runs once a round's tools are done).
-- **Tools:** `beforeTool` (block or rewrite arguments) and `afterTool` (replace the result).
+- **Generation**：`beforeRequest`（替换一次请求的消息）、`afterResponse`、`onYield`（以另一条用户
+  消息继续 run）、`afterTools`（一轮工具全部完成后运行一次）。
+- **Tools**：`beforeTool`（阻断或改写参数）与 `afterTool`（替换结果）。
 
-To limit a hook to some conversations, select its extension only there, for example with `configure({ extensions: { add: [Guard] } })`.
+要让 hook 只作用于部分会话，只在那里选中它的扩展，例如 `configure({ extensions: { add: [Guard] } })`。
 
-## More Conversations and Forks
+## 更多会话与 Fork
 
 ```typescript
 const other = await harness.createConversation({ ownership: { kind: "ownerless" } }, context);
 const fork = await root.fork(entryId, { ownership: { kind: "ownerless" } }, context);
 ```
 
-A fork sees its parent's entries up to `entryId` and continues independently. It keeps the parent's agent as of that entry. Both take `agent` and `init`, applied in the creating commit.
+fork 看到其父会话到 `entryId` 为止的 entry，然后独立继续。它保留父会话在该 entry 处的 agent。两
+者都接受 `agent` 与 `init`，在创建它们的 commit 里应用。
 
-## Abort and Subagents
+## 中止与 Subagent
 
-`await root.abort(context)` stops a conversation: queued inputs are withdrawn (queued writes stay), every task of its current work is aborted, and the call resolves once the conversation is idle.
+`await root.abort(context)` 停止一个会话：排队的输入被撤回（排队的 write 保留），其当前工作的
+每个任务被中止，调用在会话空闲后 resolve。
 
-A conversation can be **owned** by a task. A subagent tool creates its child inside `api.commit()` with `ownership: { kind: "task", taskId: api.taskId }`, then drives it through `api.conversation(id)`:
+会话可以被任务**持有**。subagent 工具在 `api.commit()` 里以
+`ownership: { kind: "task", taskId: api.taskId }` 创建其子会话，然后通过 `api.conversation(id)`
+驱动它：
 
 ```typescript
 const Subagent: Extension = defineExtension({
@@ -410,19 +467,19 @@ const Subagent: Extension = defineExtension({
 			name: "subagent",
 			description: "Delegate a self-contained task to a subagent and get its answer back.",
 			parameters: Type.Object({ task: Type.String() }),
-			replay: "safe", // a rerun after a crash finds the same child and submission
+			replay: "safe", // 崩溃后的重跑找到同一个子会话与 submission
 			execute: async (args, api, context) => {
 				const child = await api.commit(async (tx) => {
-					// The ownership index remembers the child, so a rerun reuses it.
+					// 属主索引记住了子会话，所以重跑会复用它。
 					const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
 					if (existing !== undefined) return existing.id;
-					// Starts as a copy of this conversation's agent: model, extensions, tools, cwd.
+					// 起始是该会话 agent 的拷贝：模型、扩展、工具、cwd。
 					const created = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
-					// A cheaper model, and no subagents of its own.
+					// 更便宜的模型，且它自己没有 subagent。
 					await configure(tx, created.id, { model: haiku, extensions: { remove: [Subagent] } });
 					return created.id;
 				}, context);
-				await api.details({ conversationId: child }, context); // lets a UI attach to the child
+				await api.details({ conversationId: child }, context); // 让 UI 附着到子会话
 				const request = { type: "input", content: args.task, requestId: `subagent:${api.taskId}` } as const;
 				const settled = await (await (await api.conversation(child, context))!.submit(request, context)).wait(context);
 				return { content: [{ type: "text", text: settled.status }] };
@@ -432,20 +489,27 @@ const Subagent: Extension = defineExtension({
 });
 ```
 
-Owned work belongs to its owner:
+被持有的工作属于它的属主：
 
-- Aborting the call aborts the child. So does the call failing: `execute()` throwing, or a crash that interrupts a call that is not replay-safe.
-- The parent is idle only once the child is.
-- A task created with `{ background: true }` is a boundary: work it owns survives the parent's abort and does not keep the parent busy. `root.abort(context, { background: true })` aborts it too.
+- 中止调用会中止子会话。调用失败也一样：`execute()` 抛异常，或崩溃打断了一个非 replay-safe 的调
+  用。
+- 父会话只有在子会话空闲后才算空闲。
+- 以 `{ background: true }` 创建的任务是一个边界：它持有的工作在父会话中止后存活，且不让父会话
+  保持忙碌。`root.abort(context, { background: true })` 也会中止它。
 
-The examples show both patterns as product code:
+两个模式在示例里都是产品代码：
 
-- [`22-subagent-foreground.ts`](test/examples/22-subagent-foreground.ts): the tool above, returning the child's answer. The UI finds the child through the call's `details` and prints the child's events indented under the call.
-- [`23-subagent-background.ts`](test/examples/23-subagent-background.ts): persistent subagents behind one `subagent` tool that spawns, messages (steer or follow-up), waits for, stops, and lists them. Each child is owned by a background anchor task, so the parent's Esc and idle waits never reach it. Each message is delivered by a background reporter task that posts the answer back to the parent as a follow-up input once it arrives; request IDs keep a restart from sending a message or a report twice.
+- [`22-subagent-foreground.ts`](test/examples/22-subagent-foreground.ts)：上面的工具，返回子会话的
+  回答。UI 通过调用的 `details` 找到子会话，把子会话事件缩进打印在调用下面。
+- [`23-subagent-background.ts`](test/examples/23-subagent-background.ts)：一个 `subagent` 工具背
+  后的常驻 subagent：生成、发消息（steer 或 follow-up）、等待、停止、列出。每个子会话由一个后台
+  锚任务持有，所以父会话的 Esc 与空闲等待都够不到它。每条消息由一个后台 reporter 任务投递，答
+  到后以 follow-up 输入回发给父会话；request ID 保证重启后不会重复发送消息或报告。
 
-## Child Tasks
+## 子任务
 
-A task can own child tasks, created with `ownership: { kind: "task", taskId }`, and wait for them by committing a `waiting` state:
+一个任务可以持有子任务，以 `ownership: { kind: "task", taskId }` 创建，并通过提交一个 `waiting`
+状态等待它们：
 
 ```typescript
 pay: async (task, runtime, context) => {
@@ -454,25 +518,32 @@ pay: async (task, runtime, context) => {
 		for (const card of task.input.cards) {
 			payments.push(await tx.createTask(Payment, { card }, { ownership: { kind: "task", taskId: task.id } }));
 		}
-		// Resume in `decide` once every payment is done; the first failure aborts the rest.
+		// 每个 payment 完成后在 `decide` 恢复；第一个失败会中止其余。
 		return { status: "waiting", checkpoint: { phase: "decide", payments }, on: payments, policy: "failFast" };
 	}, context);
 },
 decide: async (task, runtime, context) => {
 	const outcomes = await runtime.outcomes(task.state.checkpoint.payments, context);
-	// ...commit the checkout's own outcome
+	// ...提交 checkout 自己的 outcome
 },
 ```
 
-- **Waiting:** the task runs no code while it waits. With `allSettled` it resumes once every task in `on` is done; with `failFast` the first failed child also aborts the others. `on` may name other tasks too, with `allSettled`.
-- **Finishing:** a task that finishes while work it owns is still running is `completing`: its outcome is decided, but it becomes terminal, and `waitForTask()` returns, only once that work is done. A failed or aborted outcome aborts that work first.
-- **Aborting:** abort runs bottom-up. Aborting a task aborts the work it owns first, and its own abort handler starts only once that work is done, so each task undoes its own effects.
+- **等待**：任务在等待期间不运行代码。`allSettled` 时一旦 `on` 里的每个任务完成就恢复；
+  `failFast` 时第一个失败的子任务也会中止其余。`on` 也可以命名其他任务，配合 `allSettled`。
+- **完成**：结束时仍有其持有的工作在运行的任务是 `completing`：它的 outcome 已定，但要等到那份
+  工作完成才成为终态，`waitForTask()` 也到那时才返回。失败或中止的 outcome 会先中止那份工作。
+- **中止**：中止自底向上运行。中止一个任务先中止它持有的工作，它自己的中止处理器只在那份工作完
+  成后才开始，于是每个任务撤销自己的效果。
 
-[`24-child-tasks.ts`](test/examples/24-child-tasks.ts) runs a checkout with four payments: a declined card, a cancelled checkout, and a restart while the payments run.
+[`24-child-tasks.ts`](test/examples/24-child-tasks.ts) 运行一个拥有并等待四笔支付的 checkout：一
+张被拒的卡、一个被取消的 checkout、以及支付进行中的一次重启。
 
-## Task Graph
+## 任务图
 
-`harness.taskGraph(context)` shows every live task of the Session as one Chord state, for a task panel or debugging. Each node has its owner edge (`owner` task, or none for a task its conversation owns), its status, whether it is `background` or abort-marked, and the conversations it owns. `harness.watchTaskGraph(context)` delivers the same value as a watch, like a conversation's `watch()`.
+`harness.taskGraph(context)` 把 Session 的每个活任务显示为一个 Chord 状态，供任务面板或调试使
+用。每个节点有其属主边（`owner` 任务，或会话自持任务没有）、状态、是否 `background` 或带中止标
+记，以及它持有的会话。`harness.watchTaskGraph(context)` 以 watch 的方式交付同样的值，如同会话的
+`watch()`。
 
 ```typescript
 const graph = await harness.taskGraph(context);
@@ -484,11 +555,16 @@ graph.subscribe((value) => {
 });
 ```
 
-A task appears with the commit that creates it and leaves with the commit that makes it terminal. Statuses are the committed ones: `pending`, `running`, `waiting` (with `on` and `policy`), and `completing` (with the held outcome's status). After a restart, tasks that were `running` show as `pending` until they run again. Whether a pending task is blocked by a missing definition is not part of the graph; `harness.inspect()` reports that. The graph lists live tasks only: once a subagent's owner task is terminal, a later task in its conversation is a top-level node, and the conversation's `ConversationRecord.owner` (also in its view's `conversation`) links it to its parent. [`24-child-tasks.ts`](test/examples/24-child-tasks.ts) prints the checkout's tree while its payments run.
+任务随创建它的 commit 出现，随使它成为终态的 commit 离开。状态是已提交的那几个：`pending`、
+`running`、`waiting`（带 `on` 与 `policy`）、`completing`（持有未决的 outcome 状态）。重启后，
+曾处于 `running` 的任务显示为 `pending`，直到再次运行。挂起的任务是否被缺失的定义阻塞不属于图
+的内容；`harness.inspect()` 会报告。图只列活任务：一旦 subagent 的属主任务成为终态，其会话中较
+晚的任务就是顶层节点，会话的 `ConversationRecord.owner`（也在其视图的 `conversation` 里）把它链
+回父会话。[`24-child-tasks.ts`](test/examples/24-child-tasks.ts) 在支付进行时打印 checkout 的树。
 
-## Your Own State
+## 你自己的状态
 
-Documents are typed JSON objects committed together with entries. Define one, and edit it in a commit:
+文档是与 entry 一起提交的类型化 JSON 对象。定义一个，然后在 commit 里编辑它：
 
 ```typescript
 import { defineDoc } from "@OnePanda-TgSec/tg-gibraltar";
@@ -497,8 +573,8 @@ const Todos = defineDoc<{ items: string[] }>({
 	kind: "app.todos",
 	version: 1,
 	scope: "conversation",
-	history: "latest", // or "rewindable" to read old values with snapshotAsOf()
-	fork: "initial", // what a fork starts with: "initial", "current", or "asOf"
+	history: "latest", // 或 "rewindable"，用 snapshotAsOf() 读旧值
+	fork: "initial", // fork 的起始内容："initial"、"current" 或 "asOf"
 	initial: () => ({ items: [] }),
 });
 
@@ -508,70 +584,109 @@ await root.commit(async (tx) => {
 console.log(await harness.snapshot(Todos, root.id, context));
 ```
 
-`harness.watchDoc()` and `harness.documentState()` observe one document like the view above. `HarnessOptions.conversationCreated(tx, conversation)` runs in every commit that creates or forks a conversation, including a tool's raw `tx.createConversation()`, so every conversation gets your documents; `init` in `createConversation()`, `fork()`, and `root()` writes per-call data in the same commit. An extension's tools, sections, and hooks read their own documents through `api` or `input.read`, and treat an absent one as its default ([`11-extension-state.ts`](test/examples/11-extension-state.ts)).
+`harness.watchDoc()` 与 `harness.documentState()` 像上面的视图一样观察单个文档。
+`HarnessOptions.conversationCreated(tx, conversation)` 在每个创建或 fork 会话的 commit 里运行，
+包括工具的裸 `tx.createConversation()`，所以每个会话都有你的文档；`createConversation()`、
+`fork()` 与 `root()` 里的 `init` 在同一份 commit 里写按次数据。扩展的工具、section 与 hook 通过
+`api` 或 `input.read` 读取自己的文档，并把缺失文档按默认值对待
+（[`11-extension-state.ts`](test/examples/11-extension-state.ts)）。
 
-## Usage and Cost
+## 用量与费用
 
-Each conversation keeps token and cost totals in `docs["tg.usage"]`: per `provider/model` for model responses, and per tool name for tool results that report usage. Failed and aborted attempts count too. For the whole Session:
+每个会话在 `docs["tg.usage"]` 里保存 token 与费用总计：模型响应按 `provider/model`、报告了
+usage 的工具结果按工具名。失败与中止的尝试也计入。整个 Session：
 
 ```typescript
 const usage = await harness.usage(context); // { models: { "openai/gpt-6-sol": Usage }, tools: {...} }
 ```
 
-## Storage
+写入点与 entry 追加同 commit 原子：assistant 消息（`models` bucket）与工具结果（`tools` bucket）
+落账时不会留下半提交的 turn。
 
-SQLite is the only production backend. `MemoryStorage` exists for tests.
+整个项目层面，`projectUsage(storage, context)` 只读聚合出 `{ conversations, usage }`：有花费的会
+话数，以及按模型/工具折叠的 `UsageState`。账始终只有一份（`tg.usage`），聚合是读时计算，不引入
+第二份写路径。
 
-| Backend | Import | Notes |
+## 存储
+
+生产环境只用 SQLite。`MemoryStorage` 为测试存在。
+
+| 后端 | 导入 | 说明 |
 |---|---|---|
-| SQLite | `openNodeSqliteStorage(file)` from `@OnePanda-TgSec/tg-gibraltar/storage/sqlite/node` | One database file. WAL mode with `synchronous = NORMAL`: commits survive process crashes; the newest may be lost on power or host failure. |
-| Default | `openDefaultSqliteStorage()` from the same subpath | `~/.local/share/TianGong/session.sqlite`, no path argument needed. |
-| Memory | `MemoryStorage` from the package root | Nothing is persisted. Tests only. |
+| SQLite | `@OnePanda-TgSec/tg-gibraltar/storage/sqlite/node` 的 `openNodeSqliteStorage(file)` | 一个数据库文件。WAL 模式 + `synchronous = NORMAL`：commit 在进程崩溃后存活；最新数据在断电或主机故障时可能丢失。 |
+| 默认 | 同一子路径的 `openDefaultSqliteStorage()` | `~/.local/share/TianGong/session.sqlite`，无需路径参数。 |
+| 内存 | 包根目录的 `MemoryStorage` | 什么都不持久化。仅测试。 |
 
-### JSONL storage was removed
+### 生命周期：删除、导出、备份
 
-An append-only JSONL backend existed alongside SQLite. It was removed rather than kept as a second file
-format, for one reason: two production file formats means two migration paths, two recovery paths, and
-two sets of crash semantics to reason about, and only one of them was ever going to be tuned. SQLite
-gives WAL, atomic multi-table commits, and `integrity_check`; JSONL gave none of those.
+生命周期是 `Storage` 接口上的显式方法，不进 commit 写路径；`MemoryStorage` 与 `SqliteStorage`
+同一 conformance 套件双侧同测：
 
-Storage written by an earlier release in JSONL format has no reader. That is the honest statement, and
-it is why the removal happened before any deployment rather than after one.
+```typescript
+// 单事务删除会话及其全部行（entries、tasks、submissions、documents 按 conversation_id 级联）。
+// 返回 ConversationDeletion 审计摘要；会话不存在返回 undefined，不抛错。
+const deletion = await storage.deleteConversation(id, context);
 
-### Project isolation
+// 把会话自己的行序列化为有序 JSONL 字符串数组：header + entries + tasks + submissions + documents，
+// 从同一份一致快照读出。逐行 JSON.parse 即可还原。本期只导不入。
+const lines = await storage.exportConversation(id, context);
 
-Every row carries a `project_id`, and every read is filtered by it. One database file can hold several
-projects without either seeing the other's conversations, entries, tasks, or submissions.
+// 用 VACUUM INTO 写出整库一致快照；目标文件已存在则报错（SQLite 语义原样透传）。
+await storage.backup("./backup-session.sqlite", context);
+```
+
+约束：
+
+- **审计**：每次删除在 `durable_metadata.deleted_conversations` 追加一条审计记录（何时删了哪个会
+  话）。数据表结构不变，schema 版本随该单列迁移升到 3。
+- **幂等**：删除不存在的会话返回 `undefined`；ID 永不回收（`record_ids` / `durable_metadata` 不动），
+  保证 `mintId` 单调与审计连续。
+- **Fork 不断链**：删除父会话不级联子会话——子会话的 entry 自持有数据；父行缺失被视为可见历史的
+  终点，读取不会报错。
+- **不导不入**：导入涉及 ID 冲突策略（重新 mint 还是保留原 ID），单独评审后再做。
+
+### JSONL 存储已移除
+
+append-only JSONL 后端曾与 SQLite 并存。它被移除了，理由只有一个：两种生产文件格式意味着两条迁
+移路径、两条恢复路径、两套要推理的崩溃语义，而其中只有一条会被真正调优。SQLite 有 WAL、多表原
+子 commit 与 `integrity_check`；JSONL 一样都没有。
+
+早期版本写出的 JSONL 存储没有读取器。这是诚实的陈述，也是移除发生在任何部署之前而非之后的原因。
+
+### 项目隔离
+
+每一行都带 `project_id`，每次读取都按它过滤。一个数据库文件可以装多个项目，互不可见对方的会话、
+entry、任务与 submission。
 
 ```typescript
 const storage = await openNodeSqliteStorage(path, { project: "workspace-a" });
 storage.project; // "workspace-a"
 ```
 
-The value defaults to `"default"`, and rows written before project isolation was added were assigned to
-it. An empty project id is rejected at open.
+默认值是 `"default"`；项目隔离引入之前写入的行都被归入它。空项目 id 在打开时被拒绝。
 
-### Health and maintenance
+### 健康与维护
 
 ```typescript
 const health = await storage.health();
-// { ok: true, integrity: "ok", schemaVersion: 2, journalMode: "wal",
+// { ok: true, integrity: "ok", schemaVersion: 3, journalMode: "wal",
 //   synchronous: 1, walAutoCheckpointPages: 1000, busyTimeoutMs: 5000 }
 await storage.checkpoint(); // wal_checkpoint(TRUNCATE)
 ```
 
-`health()` reads `integrity_check`, the recorded schema version, and the connection settings back from
-the connection, so it reports what the database is configured to do rather than what the adapter
-intended. On a file where no migration has run yet, `schemaVersion` is 0.
+`health()` 从连接读回 `integrity_check`、已记录的 schema 版本与连接设置，所以它报告的是数据库实
+际被配置成什么，而不是适配器意图什么。在还没有跑过迁移的文件上，`schemaVersion` 是 0。
 
-### Portability
+### 可移植性
 
-One process owns a storage at a time; there is no cross-process locking. The portable SQLite core
-(`/storage/sqlite`) runs without Node APIs, for example on Bun or in Cloudflare Durable Objects, given
-an asynchronous `SqliteDatabase` facade. The Node subpath (`/storage/sqlite/node`) is what binds it to
-`node:sqlite`, applies the WAL pragmas, and resolves the default path.
+一个进程同时持有一份存储；没有跨进程锁。可移植 SQLite 核心（`/storage/sqlite`）不依赖 Node
+API，例如跑在 Bun 或 Cloudflare Durable Objects 上，只要提供一个异步 `SqliteDatabase` 门面。Node
+子路径（`/storage/sqlite/node`）负责绑定 `node:sqlite`、应用 WAL pragma 并解析默认路径。
 
-SQLite adapters implement promise-based `exec`, `run`, `get`, `all`, `transaction`, and `close`. `run`, `get`, and `all` take SQL text plus positional bindings; adapters may cache prepared statements by SQL text. A transaction callback receives a transaction handle; all work in the transaction must use it, and the handle expires when the callback settles. Adapters must queue unrelated operations and other transactions until the transaction finishes, so calling `database` itself inside the callback never settles:
+SQLite 适配器实现基于 promise 的 `exec`、`run`、`get`、`all`、`transaction` 与 `close`。`run`、
+`get`、`all` 接收 SQL 文本加位置绑定；适配器可以按 SQL 文本缓存预编译语句。事务回调收到一个事
+务句柄；事务里的所有工作必须使用它，回调 settle 后句柄失效。适配器必须把无关操作与其他事务排队
+到该事务结束之后，所以在回调里调用 `database` 本身永远不会 settle：
 
 ```typescript
 await database.transaction(async (transaction) => {
@@ -580,7 +695,7 @@ await database.transaction(async (transaction) => {
 });
 ```
 
-Custom backends can run the shared conformance suite with any Vitest- or Jest-compatible runner:
+自定义后端可以用任何 Vitest 或 Jest 兼容运行器跑共享 conformance 套件：
 
 ```typescript
 import { registerStorageConformance } from "@OnePanda-TgSec/tg-gibraltar/testing";
@@ -596,65 +711,65 @@ registerStorageConformance({ describe, expect, it }, "My Storage", async (use) =
 });
 ```
 
-The package root loads TypeBox, because the tool task validates arguments with `@OnePanda-TgSec/tg-ai`'s `validateToolArguments()`. That costs about 23 MB of peak RSS unbundled, about 4 MB in a tree-shaken bundle.
+包根目录加载 TypeBox，因为工具任务用 `@OnePanda-TgSec/tg-ai` 的 `validateToolArguments()` 校验
+参数。未打包时峰值 RSS 约 23 MB，tree-shaken 后约 4 MB。
 
-## Examples
+## 示例
 
-Runnable examples live in [`test/examples`](test/examples). Run one from this package directory with:
+可运行示例在 [`test/examples`](test/examples)。在本包目录下运行其中一个：
 
 ```bash
 node --conditions=source --experimental-strip-types test/examples/14-chat.ts
 ```
 
-| Example | Shows |
+| 示例 | 展示 |
 |---|---|
-| [14-chat](test/examples/14-chat.ts) | One question and answer |
-| [16-real-model](test/examples/16-real-model.ts) | Streaming an answer from OpenAI |
-| [17-coding-tools](test/examples/17-coding-tools.ts) | A tool-using turn on SQLite storage |
-| [18-print](test/examples/18-print.ts) | Print mode: submit a prompt, print the answer |
-| [19-json](test/examples/19-json.ts) | JSON mode: agent events or raw view operations, on SQLite or memory |
-| [20-inbox](test/examples/20-inbox.ts) | Steers, follow-ups, writes, and withdrawal while busy |
-| [21-late-join](test/examples/21-late-join.ts) | Attaching a view and an event stream mid-run |
-| [22-subagent-foreground](test/examples/22-subagent-foreground.ts) | A replay-safe subagent tool whose child the call owns, with the child's events under the call |
-| [23-subagent-background](test/examples/23-subagent-background.ts) | Persistent subagents: spawn, steer, stop, list, answers reported back, restart-safe |
-| [24-child-tasks](test/examples/24-child-tasks.ts) | A checkout that owns and waits for four payments: failFast, abort, restart |
-| [25-compaction](test/examples/25-compaction.ts) | A long chat compacted in the background, manually, and after a context overflow |
-| [26-coding-agent](test/examples/26-coding-agent.ts) | CodingTools, live settings from a settings object, an environment that follows the conversation's directory |
-| [27-plan-mode](test/examples/27-plan-mode.ts) | A read-only plan mode as an extension with its own document, switched with `configure()` |
-| [28-reviewer](test/examples/28-reviewer.ts) | A reviewer conversation with its own model, extensions, tools, directory, and review loop |
-| [29-sandbox-per-conversation](test/examples/29-sandbox-per-conversation.ts) | An environment per conversation, looked up from an app document |
-| [30-tool-override](test/examples/30-tool-override.ts) | A same-name bash for some conversations, and a wrapper that times whichever bash won |
-| [31-reload-and-restart](test/examples/31-reload-and-restart.ts) | Reloading an extension mid-call, and stored choices surviving a restart |
-| [00](test/examples/00-conversation.ts)–[13](test/examples/13-recovery.ts) | The layers underneath: sessions, documents, forks, watches, the Harness, agent configuration, reload, extension state, tasks, recovery |
+| [14-chat](test/examples/14-chat.ts) | 一问一答 |
+| [16-real-model](test/examples/16-real-model.ts) | 从 OpenAI 流式回答 |
+| [17-coding-tools](test/examples/17-coding-tools.ts) | SQLite 存储上一次用工具的 turn |
+| [18-print](test/examples/18-print.ts) | 打印模式：提交提示词，打印回答 |
+| [19-json](test/examples/19-json.ts) | JSON 模式：agent 事件或原始视图操作，SQLite 或内存 |
+| [20-inbox](test/examples/20-inbox.ts) | 忙碌时的 steer、follow-up、write 与撤回 |
+| [21-late-join](test/examples/21-late-join.ts) | 运行中途附着视图与事件流 |
+| [22-subagent-foreground](test/examples/22-subagent-foreground.ts) | replay-safe 的 subagent 工具，其子会话归调用持有，事件缩进在调用下 |
+| [23-subagent-background](test/examples/23-subagent-background.ts) | 常驻 subagent：生成、steer、停止、列出，回答回报，重启安全 |
+| [24-child-tasks](test/examples/24-child-tasks.ts) | 拥有并等待四笔支付的 checkout：failFast、中止、重启 |
+| [25-compaction](test/examples/25-compaction.ts) | 长对话在后台、手动、上下文溢出后压缩 |
+| [26-coding-agent](test/examples/26-coding-agent.ts) | CodingTools、来自设置对象的活设置、跟随会话目录的环境 |
+| [27-plan-mode](test/examples/27-plan-mode.ts) | 只读计划模式作为带自有文档的扩展，用 `configure()` 切换 |
+| [28-reviewer](test/examples/28-reviewer.ts) | 有自有模型、扩展、工具、目录与评审循环的 reviewer 会话 |
+| [29-sandbox-per-conversation](test/examples/29-sandbox-per-conversation.ts) | 每会话一个环境，从应用文档查得 |
+| [30-tool-override](test/examples/30-tool-override.ts) | 部分会话的同名 bash，以及给胜出的 bash 计时的包装器 |
+| [31-reload-and-restart](test/examples/31-reload-and-restart.ts) | 调用中途 reload 扩展，存储的选择跨重启存活 |
+| [00](test/examples/00-conversation.ts)–[13](test/examples/13-recovery.ts) | 底下的各层：session、文档、fork、watch、Harness、agent 配置、reload、扩展状态、任务、恢复 |
 
-Examples that call OpenAI need `OPENAI_API_KEY`; most use the faux provider otherwise.
+调用 OpenAI 的示例需要 `OPENAI_API_KEY`；其余多数使用 faux provider。
 
-## Design Documents
+## 设计文档
 
-- [`docs/spec.md`](docs/spec.md): the normative specification
-- [`docs/pico-v5-handoff.md`](docs/pico-v5-handoff.md): the implementation plan
-- [`docs/pico-v5-chord-usage.md`](docs/pico-v5-chord-usage.md): how the package uses Chord
+- [`docs/spec.md`](docs/spec.md)：规范性规格
+- [`docs/pico-v5-handoff.md`](docs/pico-v5-handoff.md)：实现计划
+- [`docs/pico-v5-chord-usage.md`](docs/pico-v5-chord-usage.md)：本包如何使用 Chord
 
-Benchmarks: `bun run bench:storage`, `bun run bench:storage:memory`, and `bun run bench:tool-output`.
+基准：`bun run bench:storage`、`bun run bench:storage:memory`、`bun run bench:tool-output`。
 
-## The `tg.*` identifiers
+## `tg.*` 标识符
 
-Entry kinds (`tg.user`, `tg.assistant`, `tg.tool-result`, `tg.system`, `tg.reset`,
-`tg.compaction`), document kinds (`tg.agent`, `tg.live`, `tg.inbox`, `tg.usage`), and task kinds
-(`tg.generation`, `tg.tool`) are **persisted strings**, not package names. They appear in stored
-transcripts, in document tables, and in SQLite migrations.
+Entry kind（`tg.user`、`tg.assistant`、`tg.tool-result`、`tg.system`、`tg.reset`、
+`tg.compaction`）、文档 kind（`tg.agent`、`tg.live`、`tg.inbox`、`tg.usage`）与任务 kind
+（`tg.generation`、`tg.tool`）是**持久化字符串**，不是包名。它们出现在存储的 transcript、文档表
+与 SQLite 迁移里。
 
-They were `pi.*` upstream and were renamed to `tg.*` as part of the TianGong house standard. They are
-not a compatibility shim and no alias is provided: there is a single canonical prefix, and storage
-written by this package version is read by this package version. If you are migrating storage created
-by an upstream release, rewrite the kind strings in place before opening it.
+它们在上游是 `pi.*`，作为 TianGong house standard 的一部分改名为 `tg.*`。它们不是兼容垫片，也没
+有别名：只有一个权威前缀，这个包版本写出的存储由这个包版本读取。如果你在迁移上游版本创建的存
+储，打开前原地改写 kind 字符串。
 
-## Provenance
+## 来源
 
-Adopted from the [pi agent](https://github.com/earendil-works/pi) project as
-`@earendil-works/pi-durable` and rebranded under `@OnePanda-TgSec`. No module was added, removed,
-or restructured; only the naming layer changed. See [`docs/provenance.md`](../../docs/provenance.md)
-in the workspace root.
+从 [pi agent](https://github.com/earendil-works/pi) 项目以 `@earendil-works/pi-durable` 身份采
+用，改牌到 `@OnePanda-TgSec`。模块无增删重组，只有命名层改变。存储生命周期三方法（delete /
+export / backup）、删除审计迁移（schema v3）与 `projectUsage` 聚合为本工作区新增。见工作区根目
+录的 [`docs/provenance.md`](../../docs/provenance.md)。
 
 ## License
 

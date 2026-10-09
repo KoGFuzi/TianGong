@@ -1,31 +1,32 @@
 # @OnePanda-TgSec/tg-telemetry
 
-Vendor-neutral telemetry contracts, a typed schema, and a conformance suite for adapters.
+厂商中立的 telemetry 契约、类型化 span 词表，以及面向适配器实现的 conformance 套件。
 
-The point of this package is that an adapter author should not have to read anyone's SDK docs. You
-implement two interfaces, and the conformance suite tells you exactly what you got wrong.
+这个包的重点是：适配器作者不应该需要读任何厂商的 SDK 文档。你实现两个接口，conformance 套件会
+精确告诉你哪里做错了。
 
-## Table of Contents
+## 目录
 
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Contracts](#contracts)
-- [Typed Schemas](#typed-schemas)
-- [Implementing an Adapter](#implementing-an-adapter)
+- [安装](#安装)
+- [快速开始](#快速开始)
+- [契约](#契约)
+- [类型化 Schema](#类型化-schema)
+- [Span 词表（第一批）](#span-词表第一批)
+- [实现一个适配器](#实现一个适配器)
 - [Conformance](#conformance)
-- [In-Memory Recorder](#in-memory-recorder)
-- [Entry Points](#entry-points)
-- [Development](#development)
-- [Provenance](#provenance)
+- [内存记录器](#内存记录器)
+- [入口](#入口)
+- [开发](#开发)
+- [来源](#来源)
 - [License](#license)
 
-## Installation
+## 安装
 
 ```bash
 bun add @OnePanda-TgSec/tg-telemetry
 ```
 
-## Quick Start
+## 快速开始
 
 ```typescript
 import { NOOP_TELEMETRY_CONTEXT } from "@OnePanda-TgSec/tg-telemetry";
@@ -37,10 +38,10 @@ await NOOP_TELEMETRY_CONTEXT.startSpan({ name: "agent.turn" }, async (span) => {
 });
 ```
 
-`NOOP_TELEMETRY_CONTEXT` is the default when telemetry is not configured. It implements the same
-interfaces and does nothing, so instrumentation can be written unconditionally.
+未配置 telemetry 时默认使用 `NOOP_TELEMETRY_CONTEXT`：它实现同样的接口但什么都不做，因此埋点代码
+可以无条件编写。
 
-## Contracts
+## 契约
 
 ```typescript
 interface TelemetryContext {
@@ -54,21 +55,19 @@ interface TelemetrySpan extends TelemetryContext {
 }
 ```
 
-Two properties matter and are what the conformance suite checks:
+两个性质最关键，也是 conformance 套件检查的内容：
 
-- **`startSpan` takes a callback, not a handle.** A span cannot outlive the work it measures. That
-  removes the most common telemetry bug, a span that is started in one place and closed in another
-  after an early return.
-- **A `TelemetrySpan` is itself a `TelemetryContext`,** so nesting is `span.startSpan(...)` with no
-  plumbing.
+- **`startSpan` 接收回调，而不是句柄。** span 不能活得比它测量的工作更久。这消除了最常见的
+  telemetry bug：在一处开 span、另一处关 span，而中间早就提前 return 了。
+- **`TelemetrySpan` 本身就是 `TelemetryContext`**，嵌套就是 `span.startSpan(...)`，不需要任何
+  管道传递。
 
-`SpanStatus` is `{ status: "ok" }` or `{ status: "error"; error?: { name; message } }`.
+`SpanStatus` 是 `{ status: "ok" }` 或 `{ status: "error"; error?: { name; message } }`。
 
-## Typed Schemas
+## 类型化 Schema
 
-A schema declares the spans and events an application emits, with per-attribute types. The types
-then flow into the code that starts the spans, so a typo in an attribute name or a string where a
-number belongs is a compile error.
+schema 声明应用会发出哪些 span 和 event，以及每个属性的类型。类型会流进开 span 的代码里：属性名
+打错、该写 number 的地方写了 string，都是编译错误。
 
 ```typescript
 import { createTypedSpanStarter, defineTelemetrySchema } from "@OnePanda-TgSec/tg-telemetry";
@@ -102,19 +101,42 @@ const schema = defineTelemetrySchema({
 const startSpan = createTypedSpanStarter([schema]);
 ```
 
-Mark an attribute `sensitive: true` when it must not leave the process; adapters are expected to
-redact it. `cardinality: "high"` warns adapter authors that unbounded values belong in an example
-field instead.
+属性标 `sensitive: true` 表示它不允许离开进程，适配器应负责脱敏。`cardinality: "high"` 提醒适配
+器作者：无界值应该放进 example 字段，而不是属性。
 
-## Implementing an Adapter
+## Span 词表（第一批）
 
-Implement `TelemetryContext`. `startSpan` must call the callback exactly once, with a `TelemetrySpan`
-that forwards `addEvent`, `setAttributes`, and `setStatus` to the vendor SDK, and must:
+包内导出一份开箱即用的词表 `TG_SPAN_SCHEMA`，`tg-ai` 与 `tg-agent-core` 的全部埋点都记录在它
+上面。词表之外的 span 名在类型层面即被拒绝：
 
-- run the callback to completion and return its value,
-- propagate the callback's rejection as the `startSpan` rejection,
-- record `status` when the span closes, applying `status.default` unless `setStatus` overrode it,
-- not swallow errors from `addEvent`, `setAttributes`, or `setStatus`.
+| Span | 层 | 父 | 关键属性（全部低基数） |
+| --- | --- | --- | --- |
+| `tg.span.provider.acquire` | ai | 调用方上下文 | `provider` |
+| `tg.span.provider.request` | ai | 调用方上下文（经 gate 时父于 acquire） | `provider`、`api`、`model`、`stopReason`、`retried`、`tokens.input/output/cacheRead/cacheWrite`、`cost.total`、`errorName` |
+| `tg.span.agent.turn` | agent | 调用方上下文 | `provider`、`model`、`stopReason`、`toolCallCount` |
+| `tg.span.agent.tool` | agent | `tg.span.agent.turn` 或 `tg.span.agent.tool`（嵌套工具调用） | `toolName`、`isError` |
+
+隐私边界：span 属性只放计数与闭集枚举，不放内容——不进 prompt 文本、工具参数、路径。`model` 用
+catalog id（如 `claude-sonnet-5-5`），不是自由文本。
+
+实际形态是一棵树：
+
+```text
+tg.span.agent.turn
+  ├─ tg.span.provider.acquire
+  │    └─ tg.span.provider.request
+  └─ tg.span.agent.tool × n
+```
+
+## 实现一个适配器
+
+实现 `TelemetryContext`。`startSpan` 必须恰好调用一次回调，并提供一个把 `addEvent`、
+`setAttributes`、`setStatus` 转发到厂商 SDK 的 `TelemetrySpan`；它必须：
+
+- 把回调运行到完成并返回其值；
+- 把回调的 rejection 原样传播为 `startSpan` 的 rejection；
+- 在 span 关闭时记录 `status`：除非 `setStatus` 覆盖，否则应用 `status.default`；
+- 不吞掉 `addEvent`、`setAttributes`、`setStatus` 抛出的错误。
 
 ## Conformance
 
@@ -131,50 +153,49 @@ describe("my adapter", () => {
 });
 ```
 
-The suite exercises callback completion, error propagation, nesting, attribute overwrites, event
-ordering, and status resolution, then reports failures as individual test cases. Turn off
-`expectEvents` or `expectStatus` if your vendor genuinely cannot deliver them; the suite will not
-assert what you disclaimed.
+套件会跑回调完成、错误传播、嵌套、属性覆盖、事件顺序、status 决议，并把失败报告为独立的测试用例。
+如果你的厂商确实做不到某项，关掉 `expectEvents` 或 `expectStatus`；套件不会断言你声明过做不到的
+东西。
 
-## In-Memory Recorder
+## 内存记录器
 
-`InMemoryTelemetryContext` records spans and events instead of exporting them. Useful in tests, and
-useful in development when you want to see what instrumentation actually fires:
+`InMemoryTelemetryContext` 记录 span 和 event 而不是导出它们。测试可用，开发期想看清埋点到底有
+没有触发时也可用：
 
 ```typescript
 import { InMemoryTelemetryContext } from "@OnePanda-TgSec/tg-telemetry";
 
 const telemetry = new InMemoryTelemetryContext();
-// ... run work ...
+// ... 运行工作 ...
 telemetry.spans; // RecordedTelemetrySpan[]
 telemetry.reset();
 ```
 
-## Entry Points
+## 入口
 
-| Import | Contents |
+| 导入 | 内容 |
 | --- | --- |
-| `@OnePanda-TgSec/tg-telemetry` | Contracts, schema types, `defineTelemetrySchema`, `createTypedSpanStarter`, `NOOP_TELEMETRY_CONTEXT`, `InMemoryTelemetryContext`. |
-| `@OnePanda-TgSec/tg-telemetry/testing` | `createTelemetryAdapterConformance` and its option types. |
+| `@OnePanda-TgSec/tg-telemetry` | 契约、schema 类型、`defineTelemetrySchema`、`createTypedSpanStarter`、`TG_SPAN_SCHEMA`、`NOOP_TELEMETRY_CONTEXT`、`InMemoryTelemetryContext`。 |
+| `@OnePanda-TgSec/tg-telemetry/testing` | `createTelemetryAdapterConformance` 及其选项类型。 |
 
-Keep `/testing` out of production bundles: it exists to fail adapters, not to ship.
+`/testing` 不要进生产 bundle：它存在的意义是让适配器出错，而不是随产品发布。
 
-## Development
+## 开发
 
-From the monorepo root:
+从 monorepo 根目录：
 
 ```bash
-bun run check             # house standard, formatting, types
-bun run test              # every package suite
+bun run check             # house standard、格式、类型
+bun run test              # 每个包套件
 bun run test packages/telemetry
 ```
 
-## Provenance
+## 来源
 
-Adopted from the [pi agent](https://github.com/earendil-works/pi) project as
-`@earendil-works/pi-telemetry` and rebranded under `@OnePanda-TgSec`. No module was added, removed, or
-restructured, and the public API is unchanged. See
-[`docs/provenance.md`](../../docs/provenance.md) in the workspace root.
+从 [pi agent](https://github.com/earendil-works/pi) 项目以 `@earendil-works/pi-telemetry` 身份采
+用，改牌到 `@OnePanda-TgSec`。词表文件（`src/spans.ts`）为本工作区新增，其余模块无增删重组，公开
+API 不变。见工作区根目录的
+[`docs/provenance.md`](../../docs/provenance.md)。
 
 ## License
 

@@ -1,43 +1,43 @@
 # @OnePanda-TgSec/tg-ai
 
-One interface to every model provider, with model discovery and provider auth handled for you.
+一个接口对接所有模型 provider，模型发现与 provider 鉴权替你打理。
 
-`createModels()` gives you a registry of providers. You ask it for a model by `provider` and `id`;
-it resolves credentials, picks the right wire API, and hands back a stream. Providers are opt-in, so
-importing this package does not pull in every SDK.
+`createModels()` 给你一个 provider 注册表。你按 `provider` 和 `id` 要一个模型；它解析凭证、选对
+线上 API、交回一条流。provider 是按需注册的：import 这个包不会拖入所有 SDK。
 
-## Table of Contents
+## 目录
 
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Entry Points](#entry-points)
+- [安装](#安装)
+- [快速开始](#快速开始)
+- [入口](#入口)
 - [Models](#models)
-- [Streaming](#streaming)
+- [流式调用](#流式调用)
 - [Providers](#providers)
-- [Authentication](#authentication)
-- [Model Data](#model-data)
-- [Tools and TypeBox](#tools-and-typebox)
-- [Utilities](#utilities)
-- [Development](#development)
-- [Provenance](#provenance)
+- [鉴权](#鉴权)
+- [模型数据](#模型数据)
+- [工具与 TypeBox](#工具与-typebox)
+- [工具函数](#工具函数)
+- [可观测性](#可观测性)
+- [开发](#开发)
+- [来源](#来源)
 - [License](#license)
 
-## Installation
+## 安装
 
 ```bash
 bun add @OnePanda-TgSec/tg-ai
 ```
 
-## Quick Start
+## 快速开始
 
 ```typescript
 import { createModels } from "@OnePanda-TgSec/tg-ai/models";
 import { openaiProvider } from "@OnePanda-TgSec/tg-ai/providers/openai";
 
 const models = createModels();
-models.setProvider(openaiProvider()); // reads OPENAI_API_KEY
+models.setProvider(openaiProvider()); // 读取 OPENAI_API_KEY
 
-await models.refresh(); // fetch the live model list for configured providers
+await models.refresh(); // 拉取已配置 provider 的实时模型列表
 
 const model = models.getModel("openai", "gpt-5.2")!;
 const stream = models.streamSimple(model, {
@@ -50,63 +50,60 @@ for await (const event of stream) {
 }
 ```
 
-## Entry Points
+## 入口
 
-| Import | Contents |
+| 导入 | 内容 |
 | --- | --- |
-| `@OnePanda-TgSec/tg-ai` | Types, the registry interface, `Type`, and shared utilities. Side-effect free. |
-| `@OnePanda-TgSec/tg-ai/models` | `createModels()`, `createProvider()`, cost and thinking helpers. |
-| `@OnePanda-TgSec/tg-ai/providers/*` | One module per provider, e.g. `providers/openai`. |
-| `@OnePanda-TgSec/tg-ai/providers/all` | `builtinProviders()`, every provider factory at once. |
-| `@OnePanda-TgSec/tg-ai/api/*` | Wire implementations, e.g. `api/anthropic-messages`. |
-| `@OnePanda-TgSec/tg-ai/utils/*` | Retry, validation, transcript helpers, token estimation. |
-| `@OnePanda-TgSec/tg-ai/compat` | The older global-API shape, kept working. |
-| `@OnePanda-TgSec/tg-ai/oauth` | OAuth login flows on their own. |
-| `@OnePanda-TgSec/tg-ai/models.generated` | Generated catalog constants. Do not edit. |
+| `@OnePanda-TgSec/tg-ai` | 类型、注册表接口、`Type`、共享工具函数。无副作用。 |
+| `@OnePanda-TgSec/tg-ai/models` | `createModels()`、`createProvider()`、费用与 thinking 辅助。 |
+| `@OnePanda-TgSec/tg-ai/providers/*` | 每个 provider 一个模块，如 `providers/openai`。 |
+| `@OnePanda-TgSec/tg-ai/providers/all` | `builtinProviders()`，所有 provider 工厂一次拿全。 |
+| `@OnePanda-TgSec/tg-ai/api/*` | 线上协议实现，如 `api/anthropic-messages`。 |
+| `@OnePanda-TgSec/tg-ai/utils/*` | 重试、校验、transcript 辅助、token 估算。 |
+| `@OnePanda-TgSec/tg-ai/compat` | 旧的全局 API 形态，保持可用。 |
+| `@OnePanda-TgSec/tg-ai/oauth` | OAuth 登录流程，独立入口。 |
+| `@OnePanda-TgSec/tg-ai/models.generated` | 生成的 catalog 常量。勿手改。 |
 
-The root entry point deliberately does not load catalogs, provider factories, or OAuth
-implementations. Import from the specific path you need.
+根入口刻意不加载 catalog、provider 工厂或 OAuth 实现。按你需要的具体路径导入。
 
 ## Models
 
-`createModels()` returns a `MutableModels`. The registry is synchronous for reads and asynchronous
-for anything that touches the network or the credential store.
+`createModels()` 返回一个 `MutableModels`。读操作同步，任何碰网络或凭证存储的操作异步。
 
 ```typescript
-models.getProviders();                       // registered providers
-models.getModels("openai");                 // last-known chat models
-models.getModel("openai", "gpt-5.2");       // one model, or undefined
+models.getProviders();                       // 已注册的 provider
+models.getModels("openai");                 // 最近一次已知的聊天模型
+models.getModel("openai", "gpt-5.2");       // 单个模型，或 undefined
 models.getModelsOfType("embedding", "openai");
-models.getAllModels();                      // every model type, every provider
+models.getAllModels();                      // 所有模型类型、所有 provider
 
-await models.refresh();                     // refetch dynamic provider lists
-await models.getAvailable();                // only models whose auth is configured
-await models.getAuth(model);                // resolved credential, or undefined
+await models.refresh();                     // 重新拉取动态 provider 列表
+await models.getAvailable();                // 只返回鉴权已配置好的模型
+await models.getAuth(model);                // 解析后的凭证，或 undefined
 ```
 
-Reads come from the last-known lists. A provider whose refresh throws yields no models rather than
-failing the whole call, and `refresh()` reports per-provider errors instead of rejecting.
+读来自最近一次已知列表。某个 provider 的 refresh 抛错只会让它的模型为空，而不会拖垮整个调用；
+`refresh()` 按 provider 报告错误而不是 reject。
 
-## Streaming
+## 流式调用
 
-Four entry points, differing only in how much they know about the wire:
+四个入口，区别只在它们对线上协议知道多少：
 
 ```typescript
-models.stream(model, context, options);        // Model<TApi>: typed per API
-models.complete(model, context, options);      // one shot, returns the message
-models.streamSimple(model, context, options);  // Model<Api>: the portable shape
+models.stream(model, context, options);        // Model<TApi>：按 API 类型化
+models.complete(model, context, options);      // 一次性，返回消息
+models.streamSimple(model, context, options);  // Model<Api>：可移植形态
 models.completeSimple(model, context, options);
 ```
 
-`streamDeferred()` and `fetchDeferred()` handle deferred/long-running responses (batch jobs and
-similar): keep the handle, fetch later, cancel if you change your mind.
+`streamDeferred()` 与 `fetchDeferred()` 处理 deferred/长时响应（批处理作业之类）：保留句柄，稍后
+取结果，改变主意就取消。
 
-All of them return an `AssistantMessageEventStream`. Failures are encoded in the stream as protocol
-events and a final message with `stopReason` of `"error"` or `"aborted"`. Nothing rejects, so a
-consumer that only iterates the stream cannot miss a failure.
+四个入口都返回 `AssistantMessageEventStream`。失败以协议事件加一条 `stopReason` 为 `"error"` 或
+`"aborted"` 的终局消息编码在流里。什么都不 reject，所以只迭代流的消费者不会漏掉任何失败。
 
-Also available: `generateImages()` for image models and `classify()` for classifier models. Neither
-rejects; both return an error result instead.
+另有 `generateImages()`（图片模型）与 `classify()`（分类模型）。两者都不 reject；失败时返回错误
+结果。
 
 ## Providers
 
@@ -116,21 +113,19 @@ import { builtinProviders } from "@OnePanda-TgSec/tg-ai/providers/all";
 const models = createModels({ providers: builtinProviders() });
 ```
 
-`createModels({ providers })` registers them at construction. Otherwise `setProvider()` one at a
-time. Provider ids are unique; setting the same id twice replaces it.
+`createModels({ providers })` 在构造时注册它们；否则用 `setProvider()` 逐个注册。provider id 唯
+一；同 id 设置两次会替换。
 
-To wire a provider that is not built in, use `createProvider()`. It takes the base URL, the api
-implementation, model metadata, and an auth strategy, and returns a `Provider<TApi>` you can register
-like any other.
+要接入非内置的 provider，用 `createProvider()`：传入 base URL、api 实现、模型元数据与鉴权策略，
+返回一个可以像其他 provider 一样注册的 `Provider<TApi>`。
 
-## Authentication
+## 鉴权
 
-Two shapes, unified behind `getAuth()`:
+两种形态，统一在 `getAuth()` 后面：
 
-- **API keys** from the environment. Provider factories read them by convention
-  (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and so on).
-- **OAuth** for providers that offer it: Anthropic, OpenAI ChatGPT and Codex, GitHub Copilot,
-  OpenRouter, Google, xAI, Mistral, Kimi, and Radius.
+- **API key**，来自环境变量。provider 工厂按约定读取（`OPENAI_API_KEY`、`ANTHROPIC_API_KEY` 等）。
+- **OAuth**，面向提供 OAuth 的 provider：Anthropic、OpenAI ChatGPT 与 Codex、GitHub Copilot、
+  OpenRouter、Google、xAI、Mistral、Kimi、Radius。
 
 ```typescript
 const auth = await models.getAuth(model);
@@ -139,35 +134,33 @@ await models.logout("github-copilot");
 await models.checkAuth("openai");
 ```
 
-`getAuth()` rejects with a `ModelsError` rather than silently continuing: code `"oauth"` when a token
-refresh failed (the stored credential is preserved so a retry or a re-login works), code `"auth"`
-when key resolution or the credential store failed. Request paths surface those rejections as stream
-errors.
+`getAuth()` 失败时 reject 一个 `ModelsError` 而不是默默继续：token 刷新失败报 code `"oauth"`（已存
+凭证保留，可重试或重新登录），key 解析或凭证存储失败报 code `"auth"`。请求路径把这些 rejection
+呈现为流错误。
 
-For a short-lived token that expires mid-run, resolve it per request instead of once:
+短期会过期的 token 应该按请求解析，而不是只解析一次：
 
 ```typescript
 const agent = new Agent({ getApiKey: async (provider) => (await models.getAuth(provider))?.apiKey });
 ```
 
-## Model Data
+## 模型数据
 
-Provider model lists are generated, not hand-maintained.
+provider 模型列表是生成的，不是手维护的。
 
 ```bash
-bun run generate:models         # writes src/models.generated.ts and src/providers/data/
-bun run hydrate:model-data      # only the provider data
-bun run generate:model-catalog  # publishable catalog under .artifacts/model-catalog
-bun run check:model-data        # verify the checked-in data is internally consistent
+bun run generate:models         # 写出 src/models.generated.ts 与 src/providers/data/
+bun run hydrate:model-data      # 只刷新 provider 数据
+bun run generate:model-catalog  # 可发布 catalog，写入 .artifacts/model-catalog
+bun run check:model-data        # 校验签入数据内部一致
 ```
 
-`src/providers/data/` is gitignored. Run `generate:models` before building or testing this package;
-CI does the same. `src/models.generated.ts` is checked in but generated: edit
-`scripts/generate-models.ts`, never the output.
+`src/providers/data/` 被 gitignore。构建或测试本包前先跑 `generate:models`；CI 同样如此。
+`src/models.generated.ts` 签入但属生成物：改 `scripts/generate-models.ts`，永远不改输出。
 
-## Tools and TypeBox
+## 工具与 TypeBox
 
-Tool schemas are TypeBox, re-exported so there is exactly one copy in a dependency tree:
+工具 schema 是 TypeBox，重新导出，保证依赖树里只有一份拷贝：
 
 ```typescript
 import { Type } from "@OnePanda-TgSec/tg-ai";
@@ -175,34 +168,52 @@ import { Type } from "@OnePanda-TgSec/tg-ai";
 const parameters = Type.Object({ city: Type.String(), units: Type.Optional(Type.Union([Type.Literal("c"), Type.Literal("f")])) });
 ```
 
-`validateToolArguments()` and the other helpers in `utils/validation` turn a raw tool call into
-typed parameters, or into the error message the model should see.
+`validateToolArguments()` 与 `utils/validation` 里的其他辅助把原始工具调用变成类型化参数，或变成
+模型应该看到的错误信息。
 
-## Utilities
+## 工具函数
 
-`utils/retry` for retry policy with provider-aware backoff, `utils/transcript` for turning
-`AgentMessage[]` into provider messages and back, `utils/estimate` for token estimation,
-`utils/overflow` for context-window accounting, `utils/json-parse` for partial and streamed JSON,
-`utils/event-stream` for stream helpers, and `utils/diagnostics` for provider error classification.
+`utils/retry`（带 provider 感知的退避的重试策略）、`utils/transcript`（`AgentMessage[]` 与
+provider 消息互转）、`utils/estimate`（token 估算）、`utils/overflow`（上下文窗口计量）、
+`utils/json-parse`（部分/流式 JSON）、`utils/event-stream`（流辅助）、`utils/diagnostics`
+（provider 错误分类）。
 
-## Development
+## 可观测性
 
-From the monorepo root:
+每个 provider 逻辑调用都记录一个 `tg.span.provider.request` span：开始属性为 `provider`、
+`api`、`model`；流 settle 时写入 `stopReason`、`retried`、四个 `tokens.*` 与 `cost.total`，错误时
+写 `errorName` 并把 status 置为 error。适配器重试通过内部 `onRetry` 管线上报（重试守卫通过
+后、退避等待前触发），`retried` = 重试次数 > 0。
 
-```bash
-bun run generate:models   # required first: src/providers/data/ is gitignored
-bun run check             # house standard, formatting, types
-bun run test              # every package suite
-bun run test packages/ai  # this package only
+`Models` 的并发 gate 包一层 `tg.span.provider.acquire` span，并把 acquire span 作为请求的父上
+下文——gate 拒绝（`ConcurrencyLimitError`）只产生 acquire span，不产生 request span。
+
+埋点入口是一个可选字段：
+
+```typescript
+models.streamSimple(model, context, { telemetryContext });
 ```
 
-## Provenance
+不传 `telemetryContext`（或传 `NOOP_TELEMETRY_CONTEXT`）时调用路径原样直通，零开销、零行为差异。
+词表定义在 `@OnePanda-TgSec/tg-telemetry` 的 `TG_SPAN_SCHEMA`。
 
-Adopted from the [pi agent](https://github.com/earendil-works/pi) project as
-`@earendil-works/pi-ai` and rebranded under `@OnePanda-TgSec`. No module was added, removed, or
-restructured; the naming layer was renamed throughout, including the `api/tg-messages.ts`
-implementation and its `TgMessages*` types, which now carry the `tg-` prefix. See
-[`docs/provenance.md`](../../docs/provenance.md) in the workspace root.
+## 开发
+
+从 monorepo 根目录：
+
+```bash
+bun run generate:models   # 必须先跑：src/providers/data/ 被 gitignore
+bun run check             # house standard、格式、类型
+bun run test              # 每个包套件
+bun run test packages/ai  # 只跑本包
+```
+
+## 来源
+
+从 [pi agent](https://github.com/earendil-works/pi) 项目以 `@earendil-works/pi-ai` 身份采用，改牌
+到 `@OnePanda-TgSec`。模块无增删重组；命名层整体改名，包括 `api/tg-messages.ts` 实现及其
+`TgMessages*` 类型，现携带 `tg-` 前缀。埋点模块（`utils/provider-spans.ts`）为本工作区新增。见工
+作区根目录的 [`docs/provenance.md`](../../docs/provenance.md)。
 
 ## License
 

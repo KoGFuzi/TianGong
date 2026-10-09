@@ -1,41 +1,37 @@
 # @OnePanda-TgSec/chord
 
-Application composition runtime: services, replicated state, RPC, and plugins.
+应用组合运行时：服务、复制状态、RPC 与插件。
 
-Chord is standalone. It depends on nothing in this workspace and nothing at runtime except its own
-bundler, so it stays publishable on its own.
+Chord 是独立的。它不依赖本工作区里的任何包，运行时也只依赖自己的 bundler，因此可以独立发布。
 
-- **Services** are typed interfaces with a declared identity. A provider implements one; consumers
-  resolve one by id and address. Services can be local, remote over a transport, or both.
-- **Replicated state** is a JSON document with an ordered set of replicas. Every edit is turned
-  into an operation batch that any replica can apply to reach the same value. That is what makes a
-  local object and a remote peer converge without either being authoritative in a way the other
-  cannot see.
-- **Facets** are the packaging unit: a named bundle of services, state, and configuration that a
-  host loads at runtime.
+- **服务**是带声明身份的强类型接口。provider 实现一个；consumer 按 id 与地址解析一个。服务可
+  以是本地的、经由传输层远程的，或两者兼有。
+- **复制状态**是一份带有序副本集合的 JSON 文档。每次编辑都会变成一个操作批次，任何副本应用后
+  都能到达相同的值。这正是本地对象与远程对等方在没有谁是权威、且彼此可见的前提下收敛的原因。
+- **Facet** 是打包单元：一个具名的服务、状态与配置的组合，由宿主在运行时加载。
 
-## Table of Contents
+## 目录
 
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Services](#services)
-- [Replicated State](#replicated-state)
-- [Facets](#facets)
-- [Remote Services](#remote-services)
+- [安装](#安装)
+- [快速开始](#快速开始)
+- [服务](#服务)
+- [复制状态](#复制状态)
+- [Facet](#facet)
+- [远程服务](#远程服务)
 - [Context](#context)
-- [Delta Engine](#delta-engine)
-- [Entry Points](#entry-points)
-- [Development](#development)
-- [Provenance](#provenance)
+- [Delta 引擎](#delta-引擎)
+- [入口](#入口)
+- [开发](#开发)
+- [来源](#来源)
 - [License](#license)
 
-## Installation
+## 安装
 
 ```bash
 bun add @OnePanda-TgSec/chord
 ```
 
-## Quick Start
+## 快速开始
 
 ```typescript
 import { BACKGROUND_CONTEXT } from "@OnePanda-TgSec/chord/context";
@@ -66,36 +62,33 @@ await counter.increment();
 console.log(counter.read());
 ```
 
-## Services
+## 服务
 
 ```typescript
-const Weather = defineService<WeatherApi>("app.weather");                 // local only
-const Grid = defineService<GridApi>("app.grid", { mode: "remote" });      // resolved over a transport
+const Weather = defineService<WeatherApi>("app.weather");                 // 仅本地
+const Grid = defineService<GridApi>("app.grid", { mode: "remote" });      // 经传输层解析
 ```
 
-`defineService` returns a `Service<T>`, a typed id rather than a class. Two sides agree on the id and
-the interface; neither needs a reference to the other. `local: true` is shorthand for a service that
-cannot be reached remotely.
+`defineService` 返回一个 `Service<T>`——一个类型化的 id，而不是类。两端就 id 与接口达成一致即
+可；彼此都不需要对方的引用。`local: true` 是"无法远程触达"服务的简写。
 
-## Replicated State
+## 复制状态
 
-`replicatedState(initial)` returns a mutable handle owned by a facet, and a read-only
-`ReplicatedState` that anyone can subscribe to.
+`replicatedState(initial)` 返回一个由 facet 持有的可变句柄，以及任何人都可以订阅的只读
+`ReplicatedState`。
 
-The contract is operational, not decorative: an edit goes through a `Change`, the change is
-`prepare()`d into immutable `{ base, value, ops }`, and replicas apply the ops. Nobody patches a
-shared object. If two replicas edit concurrently, applying both op sets in a defined order converges
-both to the same value — that is the whole point.
+这份契约是操作层面的，不是装饰性的：一次编辑经过 `Change`，`Change` 被 `prepare()` 成不可变的
+`{ base, value, ops }`，副本应用这些 ops。没有人去 patch 一个共享对象。如果两个副本并发编辑，按
+既定顺序应用双方的 op 集合会让两者收敛到相同的值——这就是全部意义所在。
 
-`replicatedState` is JSON. `isJsonValue()` and `copyJson()` guard that boundary.
+`replicatedState` 是 JSON。`isJsonValue()` 与 `copyJson()` 守卫这条边界。
 
-For the operation format, replay rules, and the mutation-ownership table, see
-[`src/delta/README.md`](src/delta/README.md).
+操作格式、重放规则与变更归属表见 [`src/delta/README.md`](src/delta/README.md)。
 
-## Facets
+## Facet
 
-A facet is a named, self-contained unit: services, state, and an optional `setup` that wires them
-together. Hosts load facets through a `FacetLoader`, so the set can change while the host runs.
+facet 是一个具名的、自包含的单元：服务、状态，以及一个把它们接线起来的可选 `setup`。宿主通过
+`FacetLoader` 加载 facet，因此 facet 集合可以在宿主运行期间变化。
 
 ```typescript
 const loader = combineFacetLoaders([
@@ -105,22 +98,21 @@ const loader = combineFacetLoaders([
 const host = await createFacetHost({ facets: [], loader });
 ```
 
-## Remote Services
+## 远程服务
 
-A remote service is a local service seen through a transport. `createRemoteServiceBinding()` describes
-one, `createRemoteServiceEndpoint()` exposes a provider, and `RemoteServiceProvider` implements the
-transport side.
+远程服务就是经由传输层看到的本地服务。`createRemoteServiceBinding()` 描述一个，
+`createRemoteServiceEndpoint()` 暴露一个 provider，`RemoteServiceProvider` 实现传输层一侧。
 
-Failures are typed: `RemoteServiceError` with codes from `REMOTE_SERVICE_ERROR_CODES`, checked with
-`isRemoteServiceErrorCode()`. A remote call that fails is not an indistinguishable generic error.
+失败是类型化的：`RemoteServiceError`，带 `REMOTE_SERVICE_ERROR_CODES` 中的 code，用
+`isRemoteServiceErrorCode()` 检查。一次失败的远程调用不是无法区分的通用错误。
 
-Wire encoding lives in `services/wire.ts` and is exported as encode/decode pairs
-(`parseServiceCatalogue`, `parseServiceCall`, `parseServiceSubscriptionSnapshot`, and their wire
-counterparts) so a transport is easy to write in any language.
+线上编解码位于 `services/wire.ts`，以编/解码成对导出（`parseServiceCatalogue`、
+`parseServiceCall`、`parseServiceSubscriptionSnapshot` 及对应的 wire 侧函数），因此用任何语言写
+一个传输层都很容易。
 
 ## Context
 
-Every async call takes a `Context` carrying cancellation.
+每个异步调用都携带取消语义的 `Context`。
 
 ```typescript
 import { BACKGROUND_CONTEXT, withAbortSignal, withCancel, awaitWithContext } from "@OnePanda-TgSec/chord/context";
@@ -130,13 +122,12 @@ const value = await awaitWithContext(fetchSomething(context), context);
 cancel();
 ```
 
-`BACKGROUND_CONTEXT` never cancels. `TODO_CONTEXT` is the marker for a call site that should take a
-context but does not have one yet. `createContextKey` and `withContextValue` attach request-scoped
-values.
+`BACKGROUND_CONTEXT` 永不取消。`TODO_CONTEXT` 是"调用点应该带 context、但还没有"的标记。
+`createContextKey` 与 `withContextValue` 附加请求级取值。
 
-## Delta Engine
+## Delta 引擎
 
-The diff/apply engine behind replicated state is its own entry point:
+复制状态背后的 diff/apply 引擎是一个独立入口：
 
 ```typescript
 import { apply, applyImmutable, diffRevisions, track } from "@OnePanda-TgSec/chord/delta";
@@ -149,42 +140,41 @@ const ops = diffRevisions(prepared.base, prepared.value);
 tracker.adopt(prepared);
 ```
 
-Prefer `applyImmutable` over `apply`: it never hands a caller a mutable replica, which is how
-ownership bugs get prevented instead of documented.
+优先用 `applyImmutable` 而不是 `apply`：它永远不会把可变副本交给调用方——所有权 bug 是被防住
+的，不是靠文档约束的。
 
-## Entry Points
+## 入口
 
-| Import | Contents |
+| 导入 | 内容 |
 | --- | --- |
-| `@OnePanda-TgSec/chord` | Services, replicated state, facets, remote binding types. Side-effect free. |
-| `@OnePanda-TgSec/chord/context` | `Context`, cancellation helpers, `BACKGROUND_CONTEXT`. |
-| `@OnePanda-TgSec/chord/delta` | `track`, `diffRevisions`, `apply`, `applyImmutable`, path and op validation. |
-| `@OnePanda-TgSec/chord/bundler` | Bundling a facet package into a content-addressed artifact. |
-| `@OnePanda-TgSec/chord/node` | Node-side loaders: bundle loader, artifact loader, manifest reader. |
+| `@OnePanda-TgSec/chord` | 服务、复制状态、facet、远程绑定类型。无副作用。 |
+| `@OnePanda-TgSec/chord/context` | `Context`、取消辅助、`BACKGROUND_CONTEXT`。 |
+| `@OnePanda-TgSec/chord/delta` | `track`、`diffRevisions`、`apply`、`applyImmutable`、路径与 op 校验。 |
+| `@OnePanda-TgSec/chord/bundler` | 把 facet 包打包成内容寻址的产物。 |
+| `@OnePanda-TgSec/chord/node` | Node 侧 loader：bundle loader、artifact loader、manifest reader。 |
 
-## Development
+## 开发
 
-From the monorepo root:
+从 monorepo 根目录：
 
 ```bash
-bun run check             # house standard, formatting, types
-bun run test              # every package suite
+bun run check             # house standard、格式、类型
+bun run test              # 每个包套件
 bun run test packages/chord
 ```
 
-Delta benchmarks:
+Delta 基准：
 
 ```bash
 cd packages/chord && bunx vitest bench
 ```
 
-## Provenance
+## 来源
 
-Adopted from the [pi agent](https://github.com/earendil-works/pi) project as `@earendil-works/chord`
-and rebranded under `@OnePanda-TgSec`. No module was added, removed, or restructured, and the public
-API is unchanged. The name stays `chord` without a `tg-` prefix: the prefix marks packages owned end
-to end, and this one was adopted whole. See
-[`docs/provenance.md`](../../docs/provenance.md) in the workspace root.
+从 [pi agent](https://github.com/earendil-works/pi) 项目以 `@earendil-works/chord` 身份采用，改牌
+到 `@OnePanda-TgSec`。模块无增删重组，公开 API 不变。包名保持 `chord`、不带 `tg-` 前缀：这个前缀
+标记端到端自有的包，而本包是整体采用进来的。见工作区根目录的
+[`docs/provenance.md`](../../docs/provenance.md)。
 
 ## License
 

@@ -54,6 +54,12 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"provider.?returned.?error",
 	"exceeded request buffer limit while retrying upstream",
 
+	// Mistral reports a mid-stream termination as `finish_reason: "error"`; without this the
+	// message looks terminal and the turn ends as model_error instead of retrying (#10487). The
+	// literal phrase is scoped to that finish reason: other providers' `Provider stopped with:
+	// <reason>` text carries SAFETY/RECITATION-style reasons, which never equal "error".
+	"provider stopped with: error",
+
 	// Network, proxy, and fetch transport failures. This includes OpenAI Codex
 	// raw-fetch failures such as "upstream connect", "connection refused", and
 	// "reset before headers" (#733), plus OpenRouter connection drops (#3317).

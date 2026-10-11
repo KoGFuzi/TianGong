@@ -103,6 +103,12 @@
   Codex adapter's own transport classifier matches server-busy text too. Ported from upstream pi 1.1.0
   (#10543).
 
+- Mistral terminations reported as `finish_reason: "error"` are retried. The adapter's
+  `Provider stopped with: error` message matched no retry pattern, so a transient mid-stream stop
+  ended the turn as `model_error`. The literal phrase is now retryable; the equivalent wording from
+  other providers carries non-transient finish reasons (`SAFETY`, `RECITATION`, ...) and stays
+  terminal. Ported from upstream pi 1.1.0 (#10487).
+
 ## [2.0.1] - 2026-10-03
 
 ### Added

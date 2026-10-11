@@ -88,6 +88,24 @@ describe("provider retry classification", () => {
 		expect(isRetryableAssistantError(fauxAssistantMessage("", { stopReason: "error", errorMessage }))).toBe(true);
 	});
 
+	it("classifies Mistral finish_reason error as retryable without widening other providers", () => {
+		// Regression for #10487: Mistral reports a mid-stream termination as `finish_reason: "error"`
+		// and the message used to look terminal.
+		expect(
+			isRetryableAssistantError(
+				fauxAssistantMessage("", { stopReason: "error", errorMessage: "Provider stopped with: error" }),
+			),
+		).toBe(true);
+		// The same wording from Google carries a non-transient finish reason and must stay terminal.
+		for (const reason of ["SAFETY", "RECITATION", "MALFORMED_FUNCTION_CALL"]) {
+			expect(
+				isRetryableAssistantError(
+					fauxAssistantMessage("", { stopReason: "error", errorMessage: `Provider stopped with: ${reason}` }),
+				),
+			).toBe(false);
+		}
+	});
+
 	it("keeps provider limit errors non-retryable", () => {
 		expect(
 			isRetryableAssistantError(

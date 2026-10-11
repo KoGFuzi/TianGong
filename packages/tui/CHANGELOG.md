@@ -26,6 +26,12 @@
   replaces the transcript had no way to clear either: the old selection's coordinates then landed on new text,
   and a leftover click count made the next single click read as the second click of a double click.
 
+### Fixed
+
+- Markdown links are clickable under Herdr again. `TERM_PROGRAM=herdr` is now detected as forwarding OSC 8
+  hyperlinks, with image protocols off: Herdr runs inside another terminal whose variables, such as
+  `KITTY_WINDOW_ID`, leak into its panes, so the Kitty branch matched and the links stopped working.
+
 ### Changed: environment variables
 
 Every variable this package reads is now `TG_*`: `TG_TUI_WRITE_LOG`, `TG_TUI_DEBUG`,

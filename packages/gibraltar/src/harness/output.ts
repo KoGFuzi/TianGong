@@ -1,3 +1,4 @@
+import type { ShellOutputSkip } from "../env/index.ts";
 import { utf8ByteLength } from "../truncate.ts";
 
 /** Retention limits of one tool's output. */
@@ -128,12 +129,32 @@ export class OutputBuffer {
 		return this.#storedBytes;
 	}
 
-	/** Accept a chunk; returns whether anything was accepted. */
-	push(chunk: string | Uint8Array): boolean {
+	/**
+	 * Accept a chunk; returns whether anything was accepted. `skipped` is output omitted right before the chunk, which
+	 * must be more than the tail window by at least one byte or line (`ShellOutputInfo.skipped`); only tail retention
+	 * accepts it.
+	 */
+	push(chunk: string | Uint8Array, skipped?: ShellOutputSkip): boolean {
 		// Bytes of an incomplete character from an earlier byte chunk come first.
-		const text =
-			typeof chunk === "string" ? this.#decoder.decode() + chunk : this.#decoder.decode(chunk, { stream: true });
-		return this.#accept(text);
+		const pending = typeof chunk === "string" || skipped !== undefined ? this.#decoder.decode() : "";
+		const text = typeof chunk === "string" ? chunk : this.#decoder.decode(chunk, { stream: true });
+		if (skipped === undefined) return this.#accept(pending + text);
+		if (this.#limits.retain !== "tail") throw new Error("Skipped output requires tail retention");
+		this.#accept(pending);
+		this.#skip(skipped);
+		this.#accept(text);
+		return true;
+	}
+
+	/** Count omitted output; nothing stored before it can be in the window once the text after it arrives. */
+	#skip(skipped: ShellOutputSkip): void {
+		if (skipped.bytes === 0) return;
+		this.#totalBytes += skipped.bytes;
+		this.#totalNewlines += skipped.newlines;
+		this.#endsWithNewline = skipped.endsWithNewline;
+		this.#chunks = [];
+		this.#storedBytes = 0;
+		this.#storedNewlines = 0;
 	}
 
 	/** Flush an incomplete trailing character as a replacement character; call when the stream ends. */
@@ -205,18 +226,18 @@ function countNewlines(text: string): number {
 	return count;
 }
 
-/** Minimum pause between progress commits; each commit also buys a pause proportional to what it wrote. */
-const MIN_PROGRESS_INTERVAL_MS = 100;
-const PROGRESS_BYTES_PER_SECOND = 100 * 1024;
+/** Each progress commit also buys a pause proportional to what it wrote. */
+export const PROGRESS_BYTES_PER_SECOND = 100 * 1024;
 
 /**
  * Adaptive progress commits, like the environment's shell output capture: the first change after an idle period
- * commits at once; each commit then delays the next by at least 100 ms and by its written size at 100 KiB/s. At most
- * one commit is in flight; changes made meanwhile coalesce into the next one.
+ * commits at once; each commit then delays the next by at least `minIntervalMs` and by its written size at 100 KiB/s.
+ * At most one commit is in flight; changes made meanwhile coalesce into the next one.
  */
 export class Progress {
 	readonly #write: () => Promise<number>;
 	readonly #onError: (error: unknown) => void;
+	readonly #minIntervalMs: number;
 	#waiters: PromiseWithResolvers<void>[] = [];
 	#timer: ReturnType<typeof setTimeout> | undefined;
 	#inFlight: Promise<void> | undefined;
@@ -224,9 +245,10 @@ export class Progress {
 	#dirty = false;
 	#stopped = false;
 
-	constructor(write: () => Promise<number>, onError: (error: unknown) => void) {
+	constructor(write: () => Promise<number>, onError: (error: unknown) => void, minIntervalMs: number) {
 		this.#write = write;
 		this.#onError = onError;
+		this.#minIntervalMs = minIntervalMs;
 	}
 
 	/** Schedule a commit. */
@@ -271,11 +293,11 @@ export class Progress {
 		this.#inFlight = this.#write()
 			.then(
 				(bytes) => {
-					this.#nextAt = started + Math.max(MIN_PROGRESS_INTERVAL_MS, (bytes * 1000) / PROGRESS_BYTES_PER_SECOND);
+					this.#nextAt = started + Math.max(this.#minIntervalMs, (bytes * 1000) / PROGRESS_BYTES_PER_SECOND);
 					for (const waiter of waiters) waiter.resolve();
 				},
 				(error: unknown) => {
-					this.#nextAt = started + MIN_PROGRESS_INTERVAL_MS;
+					this.#nextAt = started + this.#minIntervalMs;
 					for (const waiter of waiters) waiter.reject(error);
 					this.#onError(error);
 				},

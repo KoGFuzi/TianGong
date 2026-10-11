@@ -139,6 +139,8 @@ async function open(
 ): Promise<Chat> {
 	addSection(setup.registry, "preamble", () => "You are helpful.", { tag: false });
 	const { harness, root } = await openChat(options.storage ?? new MemoryStorage(), setup);
+	// These tests exercise compaction accounting and thresholds, not the faux provider's cache simulation.
+	setup.settings.stream = { cacheRetention: "none" };
 	setup.settings.compaction = options.policy ?? MANUAL;
 	setup.settings.retry = { enabled: true, maxRetries: 2, baseDelayMs: 1 };
 	harness.resume();
@@ -176,6 +178,11 @@ async function live(chat: Chat) {
 
 function userText(message: Message | undefined): string {
 	return textOf(message) ?? "";
+}
+
+/** The first user message's text; the derived context leads with the baseline system message. */
+function firstUserText(messages: readonly Message[]): string {
+	return userText(messages.find((message) => message.role === "user"));
 }
 
 // ─── Range selection ──────────────────────────────────────────────────────
@@ -516,7 +523,7 @@ describe("manual compaction", () => {
 		// Placed and answered immediately with the uncompacted context, not queued behind the compaction.
 		expect((await input.status(context)).status).toBe("placed");
 		await answerReached.promise;
-		expect(userText(chat.faux.agentRequests.at(-1)!.messages[0])).toBe(text("u1", 100));
+		expect(firstUserText(chat.faux.agentRequests.at(-1)!.messages)).toBe(text("u1", 100));
 		// The summary is ready while the run is busy, so it queues and lands after the answer.
 		summaryGate.resolve();
 		const outcome = await result(chat, id);
@@ -1010,7 +1017,7 @@ describe("blocking threshold compaction", () => {
 		expect((await result(chat, child!.id as TaskId<CompactionResult>)).status).toBe("completed");
 		expect((await kinds(chat.root)).slice(-3)).toEqual(["tg.compaction", "tg.system", "tg.assistant"]);
 		const request = chat.faux.agentRequests.at(-1)!.messages;
-		expect(userText(request[0])).toContain("SUMMARY");
+		expect(firstUserText(request)).toContain("SUMMARY");
 		const systems = request.filter((message) => message.role === "system");
 		expect(systems).toHaveLength(1);
 		expect(systems[0]).toMatchObject({
@@ -1044,7 +1051,7 @@ describe("blocking threshold compaction", () => {
 			prepare(chat);
 			await turn(chat, text("u4", 200), "a4");
 			expect((await kinds(chat.root)).includes("tg.compaction")).toBe(false);
-			expect(userText(chat.faux.agentRequests.at(-1)!.messages[0])).toBe(text("u1", 100));
+			expect(firstUserText(chat.faux.agentRequests.at(-1)!.messages)).toBe(text("u1", 100));
 			await chat.harness.close(context);
 		});
 	}
@@ -1101,7 +1108,7 @@ describe("blocking threshold compaction", () => {
 		const [background] = await compactionTasks(chat);
 		chat.faux.summaries.push(summary("BLOCKING"));
 		await turn(chat, text("u5", 1000), "a5");
-		expect(userText((await chat.root.context(context)).messages[0])).toContain("BLOCKING");
+		expect(firstUserText((await chat.root.context(context)).messages)).toContain("BLOCKING");
 		gate.resolve();
 		const outcome = await result(chat, background!.id as TaskId<CompactionResult>);
 		const submissionId = outcome.status === "completed" ? outcome.result.submissionId! : undefined;
@@ -1265,7 +1272,7 @@ describe("compaction estimates and interactions", () => {
 			// The summary landed at postTools; the successor saw a small context and did not compact again.
 			expect(chat.faux.summaryRequests).toHaveLength(1);
 			expect(await compactionTasks(chat)).toEqual([]);
-			expect(userText(chat.faux.agentRequests.at(-1)!.messages[0])).toContain("SUMMARY");
+			expect(firstUserText(chat.faux.agentRequests.at(-1)!.messages)).toContain("SUMMARY");
 			await chat.harness.close(context);
 		});
 	}
@@ -1964,7 +1971,7 @@ describe("compaction edge cases", () => {
 		expect((await submission.status(context)).status).toBe("queued");
 		chat.setup.settings.compaction = { ...BACKGROUND, reserveTokens: 1500, keepRecentTokens: 50 };
 		expect((await input.wait(context)).status).toBe("done");
-		expect(userText(chat.faux.agentRequests.at(-1)!.messages[0])).toContain("BLOCKING");
+		expect(firstUserText(chat.faux.agentRequests.at(-1)!.messages)).toContain("BLOCKING");
 		expect(await submission.wait(context)).toMatchObject({ status: "unanswered", reason: "stale" });
 		await chat.harness.close(context);
 	});
@@ -2036,13 +2043,13 @@ describe("blocking and manual compaction together", () => {
 		run.gate.resolve();
 		expect((await run.input.wait(context)).status).toBe("done");
 		// The request after the blocking compaction used its summary; the manual one landed at the final boundary.
-		expect(userText(chat.faux.agentRequests.at(-1)!.messages[0])).toContain("BLOCKING");
+		expect(firstUserText(chat.faux.agentRequests.at(-1)!.messages)).toContain("BLOCKING");
 		expect((await submission.wait(context)).status).toBe("done");
 		const markers = (await allEntries(chat.root)).filter((record) => record.kind === "tg.compaction");
 		expect(markers).toHaveLength(2);
 		expect(markers[1]!.head).toBe(markers[0]!.head);
 		const messages = (await chat.root.context(context)).messages;
-		expect(userText(messages[0])).toContain("MANUAL");
+		expect(firstUserText(messages)).toContain("MANUAL");
 		expect(messages.some((message) => userText(message).includes("BLOCKING"))).toBe(false);
 		await chat.harness.close(context);
 	});

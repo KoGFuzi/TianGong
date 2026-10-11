@@ -81,9 +81,10 @@ describe("Harness root and conversations", () => {
 		});
 		expect(root.id).toBe(ROOT_CONVERSATION_ID);
 		expect(storage.commits).toHaveLength(1);
-		// Conversation, tg.live, tg.inbox, tg.usage, tg.agent, and the init note.
+		// Conversation, tg.live, tg.inbox, tg.usage, tg.provider, tg.agent, and the init note.
 		expect(storage.commits[0]!.map((write) => write.type)).toEqual([
 			"conversation",
+			"document.create",
 			"document.create",
 			"document.create",
 			"document.create",

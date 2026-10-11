@@ -213,6 +213,7 @@ describe("Progress", () => {
 				return size;
 			},
 			() => {},
+			100,
 		);
 		progress.mark();
 		await vi.advanceTimersByTimeAsync(0);
@@ -241,6 +242,7 @@ describe("Progress", () => {
 				throw failure;
 			},
 			(error) => errors.push(error),
+			100,
 		);
 		await expect(progress.markAndWait()).rejects.toBe(failure);
 		expect(errors).toEqual([failure]);
@@ -258,6 +260,7 @@ describe("Progress", () => {
 				return 0;
 			},
 			() => {},
+			100,
 		);
 		const first = progress.markAndWait();
 		const second = progress.markAndWait();

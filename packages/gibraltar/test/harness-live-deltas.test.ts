@@ -276,6 +276,30 @@ describe("tg.live deltas", () => {
 		await harness.close(context);
 	});
 
+	it("commits partial text on the configured progress interval", async () => {
+		/** One streamed word, and how many `tg.live` partial commits it produced. */
+		const partialCommits = async (progress: { partialIntervalMs: number } | undefined): Promise<number> => {
+			const setup = chatSetup({ tokensPerSecond: 400, tokenSize: { min: 4, max: 4 } });
+			setup.settings.progress = progress;
+			setup.faux.setResponses([fauxAssistantMessage([fauxText("word ".repeat(250))])]);
+			const { harness, root } = await openChat(new MemoryStorage(), setup);
+			const commits: Op[][] = [];
+			harness.subscribeCommits((publication) => {
+				for (const change of documentChanges(publication)) {
+					if (change.record.kind === "tg.live" && change.ops.length > 0) commits.push([...change.ops]);
+				}
+			});
+			await (await root.submit({ type: "input", content: "go" }, context)).wait(context);
+			await harness.close(context);
+			// The first two commits are the user input and the system baseline; the last is the outcome.
+			return commits.slice(2, -1).length;
+		};
+		// The same stream over the same wall clock: a longer interval means fewer storage writes.
+		expect(await partialCommits({ partialIntervalMs: 1 })).toBeGreaterThan(
+			await partialCommits({ partialIntervalMs: 1000 }),
+		);
+	});
+
 	it("stores a complete base exactly in the commits where nothing runs", async () => {
 		// Storage that remembers whether each commit wrote tg.live as a base or a delta.
 		const written = new Map<number, "base" | "delta">();

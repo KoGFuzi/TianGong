@@ -105,6 +105,22 @@ describe("conversation context", () => {
 		]);
 	});
 
+	it("leads the context with a system message that only user messages precede", async () => {
+		const { root, message } = await setup();
+		await message(user("first"));
+		await message(user("second"));
+		await message(system({ preamble: "baseline" }), "tg.system");
+		await message(assistant("done"));
+		const view = await root.context(context);
+		expect(view.messages[0]!.role).toBe("system");
+		expect(view.messages.map(describeMessage)).toEqual([
+			"system:preamble",
+			"user:first",
+			"user:second",
+			"assistant:done",
+		]);
+	});
+
 	it("synthesizes missing tool results after a fork and drops results cut from their call", async () => {
 		const { root, message } = await setup();
 		await message(user("go"));

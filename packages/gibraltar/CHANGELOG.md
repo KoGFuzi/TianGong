@@ -4,6 +4,18 @@
 
 ### Added
 
+- `tg.provider`, a built-in conversation-scoped document holding the provider-facing `sessionId` of a
+  conversation. The creation hook seeds it with a UUIDv7 before the first request, so every request of one
+  conversation carries the same identity and providers that key prompt caches on it reuse the cache. A fork
+  starts with a fresh identity instead of copying its parent's. A conversation that predates the document gets
+  one migration commit before its next request.
+- `ToolExecutionApi.models` and `HookApi.models` expose the `HarnessOptions.models` catalog, its credentials, and
+  its request transforms, by reference, to tools and hooks. A tool that needs to list or resolve a model no longer
+  has to close over its own copy.
+- The `tg.tool-result` message records `durationMs`: the execution time of that attempt, measured with the
+  monotonic `performance.now()` clock around `execute()`. A call that throws carries the time it spent, and
+  a call that never reached `execute()` (invalid arguments, a blocked `beforeTool`, a tool the request did
+  not offer) has no value. A rerun after recovery measures only itself.
 - `projectUsage(storage, context)` sums every conversation's `tg.usage` ledger in the storage's
   project and returns `{ conversations, usage }`. The fold happens at read time on purpose: the
   per-conversation ledger stays the only write path, so no second ledger can drift from it. A storage
@@ -27,6 +39,15 @@
 
 ### Changed
 
+- `HarnessSettings.progress` makes the progress cadence configurable: `partialIntervalMs` (default 100 ms) is the
+  pause between commits of the answer being generated, `outputIntervalMs` (default 100 ms) the pause between
+  commits of running tool output. Each field falls back to its default on its own, so an explicitly `undefined`
+  interval keeps the default. A commit also buys a pause proportional to what it wrote, at 100 KiB/s.
+- `ToolExecutionApi.outputWindow` tells a tool the tail its output keeps and the pace its progress commits, for
+  `ShellExecOptions.window`; it is `undefined` for a tool that keeps the head of its output, because head retention
+  cannot accept skipped output. `ToolExecutionApi.output(chunk, skipped?)` counts output the environment omitted
+  before the chunk, measured on the decoded text. `ShellOutputWindow`, `ShellOutputSkip`, and `ShellOutputInfo`
+  describe both sides of that contract.
 - SQLite schema version 3 adds `durable_metadata.deleted_conversations`, an append-only JSON array
   holding one audit event per `deleteConversation` (`{v, conversationId, projectId, deletedAt,
   counts}`). The migration is a single `ALTER TABLE` on `durable_metadata`; no data table changes.
@@ -51,6 +72,12 @@ rewritten in place before it can be opened.
 
 ### Fixed
 
+- The derived model context leads with its baseline system message when only user messages precede it.
+  A run's input is committed before generation renders the system prompt, so a transcript, or the range
+  after a compaction or reset, started with user messages followed by the system baseline. Providers
+  treat only a leading system message as the initial prompt and tool set, so a later tool change
+  rewrote the request's tool list and invalidated the whole prompt cache. User messages keep their
+  relative order, and a system message that is not preceded only by user messages stays in place.
 - Fork-history reads treat a missing ancestor conversation as the end of visible history instead of
   faulting. The ancestor walks asserted the parent row existed; deleting a fork parent would have made
   `scanEntries`, the two-argument `entry()`, and `findLatestHeadMarker` throw `TypeError` once the

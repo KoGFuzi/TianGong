@@ -24,6 +24,7 @@ import {
 	MemoryStorage,
 	type SubmissionId,
 	section,
+	type ToolExecutionApi,
 	type ToolRegistration,
 	ToolResultEntry,
 	ToolTask,
@@ -33,6 +34,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { NodeExecutionEnv } from "../src/env/node.ts";
+import { PROGRESS_BYTES_PER_SECOND } from "../src/harness/output.ts";
 import { createBashTool, createEditTool, createReadTool } from "../src/tools/index.ts";
 import { allEntries, type ChatSetup, chatSetup, openChat, textOf } from "./chat-support.ts";
 import { addHooks, addTask, addTool, type Installed } from "./harness-support.ts";
@@ -108,6 +110,31 @@ describe("tool round", () => {
 		// The second request sees the tool result right after its call.
 		expect(setup.faux.state.callCount).toBe(2);
 		expect(await harness.snapshot(LiveDoc, root.id, context)).toEqual({});
+		await harness.close(context);
+	});
+
+	// #10395
+	it("gives tools and hooks the Harness's models", async () => {
+		const setup = chatSetup();
+		const seen: unknown[] = [];
+		addTool(
+			setup.registry,
+			tool("echo", async (_args, api) => {
+				seen.push(api.models);
+				return { content: [] };
+			}),
+		);
+		addHooks(setup.registry, ToolTask, {
+			beforeTool: (_call, api) => {
+				seen.push(api.models);
+				return undefined;
+			},
+		});
+		const { harness, status } = await run(setup, [calls(["echo", {}, "c1"]), DONE]);
+		expect(status).toBe("done");
+		// The one catalog, by reference: credentials and request transforms are part of it.
+		expect(seen).toEqual([setup.models, setup.models]);
+		expect(seen.every((models) => models === setup.models)).toBe(true);
 		await harness.close(context);
 	});
 
@@ -564,6 +591,62 @@ describe("tool results", () => {
 		]);
 		await first.harness.close(context);
 	});
+
+	it("stamps the tool result with the execution time of the attempt, including one that throws", async () => {
+		const setup = chatSetup();
+		addTool(
+			setup.registry,
+			tool("slow", async () => {
+				await new Promise((resolve) => setTimeout(resolve, 120));
+				return { content: [{ type: "text", text: "slow" }] };
+			}),
+		);
+		addTool(
+			setup.registry,
+			tool("boom", async () => {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				throw new Error("boom");
+			}),
+		);
+		const { harness, entries } = await run(setup, [calls(["slow", {}, "c1"], ["boom", {}, "c2"]), DONE]);
+		const byId = new Map(results(entries).map((result) => [result.toolCallId, result]));
+		// Measured with the monotonic clock around `execute()`, so a throw still carries the time it spent.
+		expect(byId.get("c1")!.durationMs).toBeGreaterThanOrEqual(100);
+		expect(byId.get("c2")!.durationMs).toBeGreaterThanOrEqual(10);
+		expect(byId.get("c2")!.isError).toBe(true);
+		await harness.close(context);
+	});
+
+	it("leaves the execution time unset on a call that never reached execute()", async () => {
+		const setup = chatSetup();
+		let executed = false;
+		addTool(
+			setup.registry,
+			tool("echo", async () => {
+				executed = true;
+				return { content: [] };
+			}),
+		);
+		addHooks(setup.registry, ToolTask, {
+			beforeTool: (call) => (call.id === "blocked" ? { block: "not today" } : {}),
+		});
+		const { harness, entries } = await run(setup, [
+			calls(
+				["echo", {}, "blocked"],
+				["echo", { text: { not: "a string" } }, "invalid"],
+				["ghost", {}, "unavailable"],
+				["echo", {}, "ok"],
+			),
+			DONE,
+		]);
+		const byId = new Map(results(entries).map((result) => [result.toolCallId, result]));
+		for (const id of ["blocked", "invalid", "unavailable"]) {
+			expect(byId.get(id)!.durationMs).toBeUndefined();
+		}
+		expect(byId.get("ok")!.durationMs).toEqual(expect.any(Number));
+		expect(executed).toBe(true);
+		await harness.close(context);
+	});
 });
 
 describe("generation hooks", () => {
@@ -693,6 +776,33 @@ describe("generation hooks", () => {
 });
 
 describe("tool execution api", () => {
+	it("offers the output window only to a tool that keeps the tail of its output", async () => {
+		const setup = chatSetup();
+		const seen: ToolExecutionApi["outputWindow"][] = [];
+		const capture = (name: string, limits: ToolRegistration["outputLimits"]) =>
+			tool(
+				name,
+				async (_args, api) => {
+					seen.push(api.outputWindow);
+					return { content: [] };
+				},
+				{ outputLimits: limits },
+			);
+		addTool(setup.registry, capture("tailed", { retain: "tail", maxBytes: 4096, maxLines: 8 }));
+		addTool(setup.registry, capture("headed", { retain: "head" }));
+		setup.settings.progress = { outputIntervalMs: 250 };
+		const { harness } = await run(setup, [calls(["tailed", {}, "c1"], ["headed", {}, "c2"]), DONE]);
+		// Head retention keeps the start of the output, which cannot accept skips, so it gets no window.
+		expect(seen.some((window) => window === undefined)).toBe(true);
+		expect(seen.find((window) => window !== undefined)).toEqual({
+			maxBytes: 4096,
+			maxLines: 8,
+			minIntervalMs: 250,
+			bytesPerSecond: PROGRESS_BYTES_PER_SECOND,
+		});
+		await harness.close(context);
+	});
+
 	it("builds the environment per call from the conversation's cwd and runs commits, memos, and child tasks", async () => {
 		const setup = chatSetup();
 		const child = defineTask<{ n: number }, { phase: "run" }, number>({

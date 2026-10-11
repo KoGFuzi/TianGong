@@ -25,6 +25,7 @@ import { createCompaction } from "./compaction.ts";
 import { readContext } from "./context.ts";
 import { InboxDoc, withdrawQueuedInputs } from "./inbox.ts";
 import { LiveDoc, settleSchedulerOutcome } from "./live.ts";
+import { ProviderDoc } from "./provider.ts";
 import { BUILTIN_TASKS } from "./registry.ts";
 import { type InvocationBinding, TaskScheduler } from "./scheduler.ts";
 import { Submissions } from "./submissions.ts";
@@ -349,12 +350,14 @@ class HarnessImpl<Tool extends ToolRegistration> extends SessionImpl implements 
 
 	/**
 	 * The built-in creation hook, in every commit that creates or forks a conversation: empty `tg.live`, `tg.inbox`, and
-	 * `tg.usage`, the conversation's `tg.agent` (see `createAgent()`), then `HarnessOptions.conversationCreated`.
+	 * `tg.usage`, a fresh `tg.provider`, the conversation's `tg.agent` (see `createAgent()`), then
+	 * `HarnessOptions.conversationCreated`.
 	 */
 	protected override async conversationCreated(tx: Transaction, record: ConversationRecord): Promise<void> {
 		await tx.doc(LiveDoc, record.id);
 		await tx.doc(InboxDoc, record.id);
 		await tx.doc(UsageDoc, record.id);
+		await tx.doc(ProviderDoc, record.id);
 		await createAgent(tx, record);
 		await this.#options.conversationCreated?.(tx, record);
 	}

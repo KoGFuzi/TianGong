@@ -1,5 +1,6 @@
 import {
 	type AssistantMessage,
+	type FauxResponseFactory,
 	fauxAssistantMessage,
 	type Message,
 	type Models,
@@ -19,6 +20,7 @@ import {
 	LiveDoc,
 	type LiveState,
 	MemoryStorage,
+	ProviderDoc,
 	type RegistrySnapshot,
 	type TaskId,
 	UserEntry,
@@ -378,6 +380,41 @@ describe("generation", () => {
 		await harness.close(context);
 	});
 
+	// #10424
+	it("reuses one provider session id per conversation across its requests", async () => {
+		const setup = chatSetup();
+		const forwarded: (string | undefined)[] = [];
+		const capture =
+			(text: string): FauxResponseFactory =>
+			(_context, options) => {
+				forwarded.push(options?.sessionId);
+				return fauxAssistantMessage(text);
+			};
+		setup.faux.setResponses([capture("one"), capture("two")]);
+		const { harness, root } = await openChat(new MemoryStorage(), setup);
+		harness.resume();
+		await (await root.submit({ type: "input", content: "a" }, context)).wait(context);
+		await (await root.submit({ type: "input", content: "b" }, context)).wait(context);
+		// The creation hook seeded the document before the first request, so both requests reuse its value.
+		const provider = await harness.snapshot(ProviderDoc, root.id, context);
+		expect(provider).toEqual({ sessionId: expect.any(String) });
+		expect(forwarded).toEqual([provider!.sessionId, provider!.sessionId]);
+		await harness.close(context);
+	});
+
+	it("gives a fork its own provider session id", async () => {
+		const setup = chatSetup();
+		setup.faux.setResponses([fauxAssistantMessage("one"), fauxAssistantMessage("two")]);
+		const { harness, root } = await openChat(new MemoryStorage(), setup);
+		harness.resume();
+		const first = await (await root.submit({ type: "input", content: "a" }, context)).wait(context);
+		const child = await root.fork(first.answer!, { ownership: { kind: "ownerless" } }, context);
+		const parent = await harness.snapshot(ProviderDoc, root.id, context);
+		const forked = await harness.snapshot(ProviderDoc, child.id, context);
+		expect(forked!.sessionId).not.toBe(parent!.sessionId);
+		await harness.close(context);
+	});
+
 	it("reads settings through getters at every decision", async () => {
 		const setup = chatSetup();
 		let timeoutMs = 111;
@@ -418,6 +455,7 @@ describe("generation", () => {
 			stream: {},
 			retry: { enabled: true, maxRetries: 3, baseDelayMs: 2000, maxAgentDelayMs: 60000 },
 			compaction: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000, backgroundTokens: 32768 },
+			progress: { partialIntervalMs: 100, outputIntervalMs: 100 },
 			toolExecution: "parallel",
 			steeringMode: "one-at-a-time",
 			followUpMode: "one-at-a-time",
@@ -425,6 +463,15 @@ describe("generation", () => {
 		expect(resolveSettings({ retry: { enabled: false }, compaction: { backgroundTokens: 0 } })).toMatchObject({
 			retry: { enabled: false, maxRetries: 3, baseDelayMs: 2000 },
 			compaction: { enabled: true, backgroundTokens: 0 },
+		});
+		// Each interval falls back on its own, so an explicitly undefined one keeps its default.
+		expect(resolveSettings({ progress: { outputIntervalMs: 250 } }).progress).toEqual({
+			partialIntervalMs: 100,
+			outputIntervalMs: 250,
+		});
+		expect(resolveSettings({ progress: { partialIntervalMs: undefined } }).progress).toEqual({
+			partialIntervalMs: 100,
+			outputIntervalMs: 100,
 		});
 	});
 

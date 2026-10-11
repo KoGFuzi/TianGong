@@ -60,6 +60,11 @@
   implementations that stream or scan files the same way `NodeExecutionEnv` does.
 - `registerEnvConformance(runner, name, withEnv, options?)` and `createEnvConformance(options)` run the
   environment-independent cases against any `ExecutionEnv`.
+- `HarnessSettings.contextRetentionMs` (`Settings.contextRetentionMs`, default `600_000`): how long an idle
+  conversation keeps its last context read in memory, so its next run reads only newer entries. A busy
+  conversation always keeps it; `0` drops it as soon as the conversation is idle. The range is derived and never
+  persisted, and a host whose `settings()` throws keeps nothing rather than failing the commit listener, the
+  reconciliation, or the expiry timer that maintains it.
 
 - `tg.provider`, a built-in conversation-scoped document holding the provider-facing `sessionId` of a
   conversation. The creation hook seeds it with a UUIDv7 before the first request, so every request of one
@@ -96,6 +101,13 @@
 
 ### Changed
 
+- A task's context reads are incremental: the view a task's first read derived is extended by the entries that
+  arrived since, instead of rescanning the transcript. Entries at or below a read's tail are immutable, so the
+  extension derives only what the new entries contribute; a new edit, a new head marker, or an earlier cutoff
+  derives the range again. A read returns the same view as before, with its own arrays, and the kept range is
+  frozen, so a provider or caller cannot rewrite what the next read extends. Over a 21-entry conversation a
+  generation turn scans the transcript once and later turns scan only their own new entries, until
+  `settings.contextRetentionMs` passes.
 - `HarnessSettings.progress` makes the progress cadence configurable: `partialIntervalMs` (default 100 ms) is the
   pause between commits of the answer being generated, `outputIntervalMs` (default 100 ms) the pause between
   commits of running tool output. Each field falls back to its default on its own, so an explicitly `undefined`

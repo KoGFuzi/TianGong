@@ -22,6 +22,7 @@ import {
 	MemoryStorage,
 	ProviderDoc,
 	type RegistrySnapshot,
+	type Storage,
 	type TaskId,
 	UserEntry,
 	wrapSection,
@@ -30,7 +31,7 @@ import { describe, expect, it } from "vitest";
 import { resolveSettings } from "../src/harness/agent.ts";
 import type { SessionImpl } from "../src/session/session.ts";
 import { allEntries, type ChatSetup, chatSetup, openChat, textOf, unanswered, waitFor } from "./chat-support.ts";
-import { addSection } from "./harness-support.ts";
+import { addSection, assistant, user } from "./harness-support.ts";
 import { ControlledStorage, context } from "./session-support.ts";
 
 const ERROR_503 = fauxAssistantMessage([], { stopReason: "error", errorMessage: "503 Service Unavailable" });
@@ -415,6 +416,57 @@ describe("generation", () => {
 		await harness.close(context);
 	});
 
+	it("reads only newer entries in later turns, and the whole transcript once the retention passes", async () => {
+		// Rows scanned per turn, over a 21-entry transcript. The first turn reads all of it once; later turns read the
+		// bounds probe plus their own new entries; a turn that starts after the retention passed reads it all again.
+		const scanned = { rows: 0 };
+		const memory = new MemoryStorage();
+		const storage = new Proxy<Storage>(memory, {
+			get(target, key) {
+				const value: unknown = Reflect.get(target, key, target);
+				if (key === "scanEntries") {
+					return async (...args: Parameters<Storage["scanEntries"]>) => {
+						const page = await target.scanEntries(...args);
+						scanned.rows += page.items.length;
+						return page;
+					};
+				}
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		let clock = 1_000_000;
+		const setup = chatSetup();
+		setup.now = () => clock;
+		setup.faux.setResponses([
+			fauxAssistantMessage("one"),
+			fauxAssistantMessage("two"),
+			fauxAssistantMessage("three"),
+			fauxAssistantMessage("four"),
+		]);
+		const { harness, root } = await openChat(storage, setup);
+		for (let index = 0; index < 20; index++) {
+			await root.commit(
+				(tx) =>
+					tx.appendEntry(index % 2 === 0 ? UserEntry : AssistantEntry, root.id, {
+						model: [index % 2 === 0 ? user(`q${index}`) : assistant(`a${index}`)],
+					}),
+				context,
+			);
+		}
+		const turns: number[] = [];
+		for (const [step, text] of ["one", "two", "three", "four"].entries()) {
+			// The conversation has been idle for the default retention before the third turn.
+			if (step === 2) clock += 600_000;
+			const before = scanned.rows;
+			const settled = await (await root.submit({ type: "input", content: text }, context)).wait(context);
+			expect(settled, text).toMatchObject({ status: "done" });
+			await root.waitForIdle(context);
+			turns.push(scanned.rows - before);
+		}
+		expect(turns).toEqual([23, 4, 27, 4]);
+		await harness.close(context);
+	});
+
 	it("reads settings through getters at every decision", async () => {
 		const setup = chatSetup();
 		let timeoutMs = 111;
@@ -459,6 +511,7 @@ describe("generation", () => {
 			toolExecution: "parallel",
 			steeringMode: "one-at-a-time",
 			followUpMode: "one-at-a-time",
+			contextRetentionMs: 600_000,
 		});
 		expect(resolveSettings({ retry: { enabled: false }, compaction: { backgroundTokens: 0 } })).toMatchObject({
 			retry: { enabled: false, maxRetries: 3, baseDelayMs: 2000 },

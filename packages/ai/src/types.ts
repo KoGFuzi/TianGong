@@ -571,6 +571,11 @@ export interface AssistantMessage {
 	 * Preserved for debugging and does not currently affect agent control flow.
 	 */
 	endTurn?: boolean;
+	/**
+	 * Elapsed time of the provider request that produced this message, in milliseconds, measured with
+	 * the monotonic `performance.now()` clock. Omitted when the producer did not stamp it.
+	 */
+	durationMs?: number;
 	timestamp: number; // Unix timestamp in milliseconds
 }
 

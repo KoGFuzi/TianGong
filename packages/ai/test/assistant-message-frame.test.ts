@@ -71,6 +71,21 @@ describe("assistant message frames", () => {
 		expect(reduceAssistantMessageFrames([start])?.providerThinkingLevel).toBe("high");
 	});
 
+	it("carries durationMs through the start frame and leaves an unstamped message without it", () => {
+		// Regression for the start-frame clones hard-coded field list (docs/upstream-1.1.0-port-plan.md
+		// B2-1): a message-level field the list does not name is silently dropped on re-encode.
+		const stamped = seed();
+		stamped.durationMs = 1_234;
+		const stampedStart = frame(new AssistantMessageFrameEncoder(), { type: "start", partial: stamped });
+
+		expect(stampedStart).toMatchObject({ type: "start", partial: { durationMs: 1_234 } });
+		expect(reduceAssistantMessageFrames([stampedStart])?.durationMs).toBe(1_234);
+
+		// A message that was never stamped must not gain an explicit `undefined` key either.
+		const unstampedStart = frame(new AssistantMessageFrameEncoder(), { type: "start", partial: seed() });
+		expect(reduceAssistantMessageFrames([unstampedStart])).not.toHaveProperty("durationMs");
+	});
+
 	it("preserves initial and final thinking metadata, including redaction", () => {
 		const partial = seed();
 		const encoder = new AssistantMessageFrameEncoder();

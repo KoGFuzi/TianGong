@@ -85,6 +85,7 @@ function cloneStartMessage(message: AssistantMessage): AssistantMessage {
 		...(message.responseId === undefined ? {} : { responseId: message.responseId }),
 		...(message.providerThinkingLevel === undefined ? {} : { providerThinkingLevel: message.providerThinkingLevel }),
 		...(message.diagnostics === undefined ? {} : { diagnostics: structuredClone(message.diagnostics) }),
+		...(message.durationMs === undefined ? {} : { durationMs: message.durationMs }),
 		usage: structuredClone(message.usage),
 		stopReason: "pending",
 		timestamp: message.timestamp,

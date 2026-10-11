@@ -76,6 +76,10 @@
 
 ### Fixed
 
+- The assistant message frame codec no longer swallows message-level fields it does not name.
+  `cloneStartMessage` rebuilds the start frame from a hard-coded field list, so `durationMs` was
+  dropped on the encode/reduce round trip. The field is now carried through, and a message that was
+  never stamped stays without the key instead of gaining an explicit `undefined`.
 - Transient provider failures are retried by default. `maxRetries` previously defaulted to 0, so a
   caller who left it unset got exactly one attempt: the adapters pass the option straight through
   without a fallback, and the provider SDKs are invoked with `maxRetries: 0` so their own default of

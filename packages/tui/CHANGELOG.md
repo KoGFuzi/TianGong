@@ -10,6 +10,10 @@
 - Self-referencing imports now use `@OnePanda-TgSec/tg-tui`.
 - README development instructions target the Bun workspace root (`bun install`, `bun run check`,
   `bun run test`).
+- `Home`/`End` now always move the editor cursor to the line start/end, as their descriptions say. Fullscreen
+  transcript top/bottom moved to `Ctrl+Home`/`Ctrl+End`, which no longer move the editor cursor: in fullscreen
+  the alt screen consumed `Home`/`End` first, so the editor could never reach its own line start or end. A host
+  that binds `tui.altScreen.top` / `tui.altScreen.bottom` keeps its own keys.
 
 ### Changed: environment variables
 

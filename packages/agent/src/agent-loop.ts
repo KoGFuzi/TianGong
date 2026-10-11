@@ -519,6 +519,7 @@ async function failToolCallsFromTruncatedMessage(
 ): Promise<ExecutedToolCallBatch> {
 	const messages: ToolResultMessage[] = [];
 	for (const toolCall of toolCalls) {
+		const startedAt = performance.now();
 		await emit({
 			type: "tool_execution_start",
 			toolCallId: toolCall.id,
@@ -534,6 +535,7 @@ async function failToolCallsFromTruncatedMessage(
 					`Tool call "${toolCall.name}" was not executed: the response hit the output token limit, so its arguments may be truncated. Re-issue the tool call with complete arguments.`,
 				),
 				isError: true,
+				durationMs: performance.now() - startedAt,
 			}),
 			(outcome) => outcome.isError,
 		);
@@ -584,6 +586,7 @@ async function executeToolCallsSequential(
 	const messages: ToolResultMessage[] = [];
 
 	for (const toolCall of toolCalls) {
+		const startedAt = performance.now();
 		await emit({
 			type: "tool_execution_start",
 			toolCallId: toolCall.id,
@@ -601,6 +604,7 @@ async function executeToolCallsSequential(
 						toolCall,
 						result: preparation.result,
 						isError: preparation.isError,
+						durationMs: performance.now() - startedAt,
 					};
 				}
 				const executed = await executePreparedToolCall(
@@ -615,6 +619,7 @@ async function executeToolCallsSequential(
 					executed,
 					config,
 					signal,
+					startedAt,
 				);
 			},
 			(outcome) => outcome.isError,
@@ -649,6 +654,7 @@ async function executeToolCallsParallel(
 	const finalizedCalls: FinalizedToolCallEntry[] = [];
 
 	for (const toolCall of toolCalls) {
+		const startedAt = performance.now();
 		await emit({
 			type: "tool_execution_start",
 			toolCallId: toolCall.id,
@@ -665,6 +671,7 @@ async function executeToolCallsParallel(
 					toolCall,
 					result: preparation.result,
 					isError: preparation.isError,
+					durationMs: performance.now() - startedAt,
 				}),
 				(outcome) => outcome.isError,
 			);
@@ -686,6 +693,7 @@ async function executeToolCallsParallel(
 							toolCall,
 							result: createErrorToolResult("Operation aborted"),
 							isError: true,
+							durationMs: performance.now() - startedAt,
 						};
 					}
 					const executed = await executePreparedToolCall(
@@ -700,6 +708,7 @@ async function executeToolCallsParallel(
 						executed,
 						config,
 						signal,
+						startedAt,
 					);
 				},
 				(outcome) => outcome.isError,
@@ -951,16 +960,30 @@ export interface RunToolCallOptions extends ToolCallHooks {
  */
 export async function runToolCall(toolCall: AgentToolCall, options: RunToolCallOptions): Promise<AgentToolCallOutcome> {
 	const { assistantMessage, context, signal } = options;
+	const startedAt = performance.now();
 	return await traceToolCall(
 		agentSpanStarter(options.telemetryContext),
 		toolCall.name,
 		async (): Promise<AgentToolCallOutcome> => {
 			const preparation = await prepareToolCall(context, assistantMessage, toolCall, options, signal, options.tools);
 			if (preparation.kind === "immediate") {
-				return { toolCall, result: preparation.result, isError: preparation.isError };
+				return {
+					toolCall,
+					result: preparation.result,
+					isError: preparation.isError,
+					durationMs: performance.now() - startedAt,
+				};
 			}
 			const executed = await executePreparedToolCall(preparation, signal, options.onUpdate ?? (() => {}));
-			return await finalizeExecutedToolCall(context, assistantMessage, preparation, executed, options, signal);
+			return await finalizeExecutedToolCall(
+				context,
+				assistantMessage,
+				preparation,
+				executed,
+				options,
+				signal,
+				startedAt,
+			);
 		},
 		(outcome) => outcome.isError,
 	);
@@ -1006,6 +1029,7 @@ async function finalizeExecutedToolCall(
 	executed: ExecutedToolCallOutcome,
 	config: ToolCallHooks,
 	signal: AbortSignal | undefined,
+	startedAt: number,
 ): Promise<FinalizedToolCallOutcome> {
 	let result = executed.result;
 	let isError = executed.isError;
@@ -1048,6 +1072,9 @@ async function finalizeExecutedToolCall(
 		toolCall: prepared.toolCall,
 		result,
 		isError,
+		// Measured from the caller's `tool_execution_start` so the window covers preparation,
+		// permission checks, execution, and the `afterToolCall` hook.
+		durationMs: performance.now() - startedAt,
 	};
 }
 
@@ -1065,6 +1092,7 @@ async function emitToolExecutionEnd(finalized: FinalizedToolCallOutcome, emit: A
 		toolName: finalized.toolCall.name,
 		result: finalized.result,
 		isError: finalized.isError,
+		...(finalized.durationMs === undefined ? {} : { durationMs: finalized.durationMs }),
 	});
 }
 
@@ -1079,6 +1107,7 @@ function createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolResul
 		details: finalized.result.details,
 		usage: finalized.result.usage,
 		isError: finalized.isError,
+		...(finalized.durationMs === undefined ? {} : { durationMs: finalized.durationMs }),
 		timestamp: Date.now(),
 	};
 }

@@ -480,6 +480,13 @@ export interface AgentToolResult<T = JsonValue | undefined> {
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.
 	 */
 	terminate?: boolean;
+	/**
+	 * Elapsed time the tool reports for its own work, in milliseconds, when it chooses to measure it.
+	 * This is the tool's own figure, like `usage`; the agent loop's independent measurement of the
+	 * full call window lives on `AgentToolCallOutcome.durationMs` and on the `tool_execution_end`
+	 * event.
+	 */
+	durationMs?: number;
 }
 
 /** Final outcome of a tool call after hooks ran. */
@@ -487,6 +494,13 @@ export interface AgentToolCallOutcome {
 	toolCall: AgentToolCall;
 	result: AgentToolResult<any>;
 	isError: boolean;
+	/**
+	 * Elapsed time of the call, in milliseconds, measured by the agent loop with the monotonic
+	 * `performance.now()` clock over the full window from `tool_execution_start` to
+	 * `tool_execution_end`: preparation, permission checks, `execute`, and `afterToolCall` are all
+	 * inside it. Omitted when no window was measured.
+	 */
+	durationMs?: number;
 }
 
 /**
@@ -563,4 +577,11 @@ export type AgentEvent =
 	// Tool execution lifecycle
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }
 	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }
-	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean };
+	| {
+			type: "tool_execution_end";
+			toolCallId: string;
+			toolName: string;
+			result: any;
+			isError: boolean;
+			durationMs?: number;
+	  };

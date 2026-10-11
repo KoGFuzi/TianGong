@@ -711,11 +711,36 @@ describe("agentLoop with AgentMessage", () => {
 			}
 			return event.toolResults.map((toolResult) => toolResult.toolCallId);
 		});
+		const endEvents = events.filter(
+			(event): event is Extract<AgentEvent, { type: "tool_execution_end" }> => event.type === "tool_execution_end",
+		);
+		const toolResultMessages = events.flatMap((event) =>
+			event.type === "message_end" && event.message.role === "toolResult" ? [event.message] : [],
+		);
 
 		expect(parallelObserved).toBe(true);
 		expect(toolExecutionEndIds).toEqual(["tool-2", "tool-1"]);
 		expect(toolResultIds).toEqual(["tool-1", "tool-2"]);
 		expect(turnToolResultIds).toEqual(["tool-1", "tool-2"]);
+
+		// The measured window runs from `tool_execution_start` to `tool_execution_end`, so a call
+		// held inside `execute()` reports the time it was held, including time spent queued behind
+		// its parallel sibling. `tool-1` waits on a 20ms timer; `tool-2` returns immediately.
+		for (const event of endEvents) {
+			expect(Number.isFinite(event.durationMs)).toBe(true);
+			expect(event.durationMs).toBeGreaterThanOrEqual(0);
+		}
+		const held = endEvents.find((event) => event.toolCallId === "tool-1");
+		const immediate = endEvents.find((event) => event.toolCallId === "tool-2");
+		expect(held?.durationMs).toBeGreaterThanOrEqual(10);
+		expect(immediate?.durationMs).toBeLessThan(held?.durationMs ?? 0);
+
+		// The persisted tool result carries the same window as the event that announced it.
+		for (const message of toolResultMessages) {
+			expect(message.durationMs).toBe(
+				endEvents.find((event) => event.toolCallId === message.toolCallId)?.durationMs,
+			);
+		}
 	});
 
 	it("should inject queued messages after all tool calls complete", async () => {
@@ -2189,5 +2214,25 @@ describe("runToolCall", () => {
 			seen.push(outcome.result.structuredContent);
 		}
 		expect(seen).toEqual([undefined, { value: "replaced" }, { value: "both" }, { value: "original" }]);
+	});
+
+	it("reports a non-negative elapsed window on both executed and immediate outcomes", async () => {
+		const executed = await runToolCall(call("a", "echo", { value: "a" }), {
+			tools: [echo],
+			assistantMessage,
+			context: { messages: [] },
+		});
+		expect(Number.isFinite(executed.durationMs)).toBe(true);
+		expect(executed.durationMs).toBeGreaterThanOrEqual(0);
+
+		// An unknown tool resolves without executing anything; the window still has to be a number.
+		const immediate = await runToolCall(call("b", "missing", {}), {
+			tools: [echo],
+			assistantMessage,
+			context: { messages: [] },
+		});
+		expect(immediate.isError).toBe(true);
+		expect(Number.isFinite(immediate.durationMs)).toBe(true);
+		expect(immediate.durationMs).toBeGreaterThanOrEqual(0);
 	});
 });

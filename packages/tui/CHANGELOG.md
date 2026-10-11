@@ -22,6 +22,10 @@
   component and lose its render cache and subtree state. The new setters drop the render cache with the
   padding.
 
+- `TuiAltScreen.resetTextSelection()` drops the active text selection and the multi-click history. A host that
+  replaces the transcript had no way to clear either: the old selection's coordinates then landed on new text,
+  and a leftover click count made the next single click read as the second click of a double click.
+
 ### Changed: environment variables
 
 Every variable this package reads is now `TG_*`: `TG_TUI_WRITE_LOG`, `TG_TUI_DEBUG`,

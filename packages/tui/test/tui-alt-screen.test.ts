@@ -1451,6 +1451,49 @@ describe("TuiAltScreen", () => {
 		tui.stop();
 	});
 
+	it("resets the text selection and the multi-click history on request", async () => {
+		const terminal = new RecordingTerminal(20, 4);
+		const copied: string[] = [];
+		const tui = new TuiAltScreen(terminal, undefined, undefined, {
+			copyOnSelect: false,
+			copySelection: async (text) => {
+				copied.push(text);
+				return true;
+			},
+		});
+		tui.addChild(new Text("alpha beta\ngamma", 0, 0));
+		tui.start();
+		await terminal.waitForRender();
+
+		const click = async (): Promise<void> => {
+			terminal.sendInput("\x1b[<0;2;1M");
+			terminal.sendInput("\x1b[<0;2;1m");
+			await terminal.waitForRender();
+		};
+		const selection = async (): Promise<string | undefined> => {
+			copied.length = 0;
+			await tui.copyActiveSelectionToClipboard();
+			return copied[0];
+		};
+
+		// A click selects nothing; a second click on the same word within the double-click interval selects the word.
+		await click();
+		assert.strictEqual(tui.hasActiveSelection(), false);
+		await click();
+		assert.strictEqual(await selection(), "alpha");
+
+		tui.resetTextSelection();
+		assert.strictEqual(tui.hasActiveSelection(), false);
+
+		// Without the multi-click history, the next click is a first click instead of a third one, which would
+		// select the whole line.
+		await click();
+		assert.strictEqual(tui.hasActiveSelection(), false);
+		assert.strictEqual(await selection(), undefined);
+
+		tui.stop();
+	});
+
 	it("flashes an error when the injected copySelection handler fails", async () => {
 		const terminal = new RecordingTerminal(20, 4);
 		const tui = new TuiAltScreen(terminal, undefined, undefined, {

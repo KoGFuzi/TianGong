@@ -49,6 +49,16 @@
 3. **提交粒度（可编译性修正）**：第 7 条（frame 保字段）必须先有 `AssistantMessage.durationMs` 类型才可编译，
    故第 7 条含「`AssistantMessage.durationMs` 类型 + `cloneStartMessage` 保字段 + 往返测试」；第 8 条含
    「`ToolResultMessage.durationMs` 类型 + 22 处打点 + faux/tg-messages/lazy」。两条各自独立可 revert。
+4. **B3-1 合并点实现形态**：本档第 340 行要求「解析出等级参数并以 … 的优先级并入三处合并点（建议收口为
+   单一辅助函数）」。落地把收口点放在 `buildBaseOptions()`：新增内部函数
+   `resolveSamplingParams(model, level, requestParams)`，先把模型默认值与等级参数并入返回的
+   `StreamOptions.samplingParams`，于是三处合并点
+   （`Object.assign(params, model.samplingParams, options?.samplingParams)`）**原文不动**即自然满足
+   「模型 < 等级 < 请求」的优先级——三处消费的正是 `options.samplingParams`，而 `buildBaseOptions()` 是它的
+   唯一构造点，改一个构造点比改三处消费点更不易漏。等级键取 `clampThinkingLevel()` 的钳制结果并以 `"off"`
+   兜底（`clampedReasoning ?? "off"`）：`SimpleStreamOptions.reasoning` 是 `ThinkingLevel`、不含 `"off"`，
+   非推理模型与「未指定等级」两种情形都经钳制落到 `"off"`；直接 `stream()` 调用不可见等级，故不解析等级
+   参数（该界限已由测试钉住）。新增导出仍留在内部模块 `api/simple-options.ts`，不进包根。
 
 ---
 

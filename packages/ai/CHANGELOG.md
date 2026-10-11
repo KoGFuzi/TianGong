@@ -81,6 +81,13 @@
   abort messages it builds after a signal fires mid-stream. A setup failure that happens before any
   request gets `durationMs: 0` rather than a fabricated window.
 
+- `Model.samplingParamsByThinkingLevel` overrides sampling parameters per thinking level, resolved by
+  `streamSimple()` for the request's clamped level with `Model.samplingParams` below it and
+  `StreamOptions.samplingParams` above it, per key. A level with no entry keeps the model default, and
+  `"off"` covers a request that ends up with thinking disabled, including every request to a
+  non-reasoning model. Only the OpenAI-compatible adapters (completions, responses, Azure responses)
+  apply it; a direct `stream()` call has no thinking level to resolve.
+
 ### Fixed
 
 - The assistant message frame codec no longer swallows message-level fields it does not name.

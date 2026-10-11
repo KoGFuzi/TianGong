@@ -206,8 +206,9 @@ export interface StreamOptions extends ProviderRequestOptions<Model<Api>> {
 	 * Arbitrary sampling parameters merged into the request body as-is, after the named request
 	 * fields, so keys here override them. Lets custom OpenAI-compatible servers (llama.cpp, vLLM,
 	 * SGLang, ...) receive parameters TianGong does not model, e.g. `top_p`, `top_k`, `min_p`,
-	 * `repetition_penalty`. Merged over `Model.samplingParams` per key. Only applied by
-	 * OpenAI-compatible adapters (completions, responses, Azure responses); other APIs ignore it.
+	 * `repetition_penalty`. Merged over `Model.samplingParams` and any matching
+	 * `Model.samplingParamsByThinkingLevel` entry, per key. Only applied by OpenAI-compatible
+	 * adapters (completions, responses, Azure responses); other APIs ignore it.
 	 */
 	samplingParams?: Record<string, unknown>;
 	maxTokens?: number;
@@ -1140,8 +1141,21 @@ export interface Model<TApi extends Api> extends BaseModel<TApi> {
 	promptCache?: ModelPromptCache;
 	contextWindow: number;
 	maxTokens: number;
-	/** Default sampling parameters for this model. See {@link StreamOptions.samplingParams}; per-request keys override these. */
+	/**
+	 * Default sampling parameters for this model. See {@link StreamOptions.samplingParams}. Ranked
+	 * below {@link samplingParamsByThinkingLevel} and below per-request keys.
+	 */
 	samplingParams?: Record<string, unknown>;
+	/**
+	 * Sampling parameter overrides per thinking level. Resolved for the request's clamped thinking
+	 * level, ranked above {@link samplingParams} and below `StreamOptions.samplingParams`: model
+	 * defaults, then these level overrides, then request parameters.
+	 *
+	 * Applied by the OpenAI-compatible adapters (completions, responses, Azure responses) on the
+	 * `streamSimple()` path, which is where the thinking level is known. `"off"` covers a request
+	 * that ends up with thinking disabled, including every request to a non-reasoning model.
+	 */
+	samplingParamsByThinkingLevel?: Partial<Record<ModelThinkingLevel, Record<string, unknown>>>;
 	/** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
 	compat?: TApi extends "openai-completions"
 		? OpenAICompletionsCompat

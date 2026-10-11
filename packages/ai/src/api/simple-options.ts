@@ -1,6 +1,7 @@
 import type {
 	Api,
 	Model,
+	ModelThinkingLevel,
 	SimpleStreamOptions,
 	StreamOptions,
 	ThinkingBudgets,
@@ -18,15 +19,35 @@ export function clampMaxTokensToContext(model: Model<Api>, context: TranscriptCo
 	return Math.min(maxTokens, Math.max(MIN_MAX_TOKENS, available));
 }
 
+/**
+ * Resolve the sampling parameters a request body starts from.
+ *
+ * Precedence, lowest to highest: `Model.samplingParams`, the entry selected by the request's
+ * clamped thinking level in `Model.samplingParamsByThinkingLevel`, then `requestParams`. Passing an
+ * undefined level means the caller does not know the thinking level, and the request parameters are
+ * returned untouched; only the adapters that go through `streamSimple()` resolve a level.
+ */
+export function resolveSamplingParams(
+	model: Model<Api>,
+	level: ModelThinkingLevel | undefined,
+	requestParams?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+	if (level === undefined) return requestParams;
+	const levelParams = model.samplingParamsByThinkingLevel?.[level];
+	if (!model.samplingParams && !levelParams && !requestParams) return undefined;
+	return { ...model.samplingParams, ...levelParams, ...requestParams };
+}
+
 export function buildBaseOptions(
 	model: Model<Api>,
 	context: TranscriptContext,
 	options?: SimpleStreamOptions,
 	apiKey?: string,
+	thinkingLevel?: ModelThinkingLevel,
 ): StreamOptions {
 	return {
 		temperature: options?.temperature,
-		samplingParams: options?.samplingParams,
+		samplingParams: resolveSamplingParams(model, thinkingLevel, options?.samplingParams),
 		maxTokens: clampMaxTokensToContext(model, context, options?.maxTokens ?? model.maxTokens),
 		signal: options?.signal,
 		telemetryContext: options?.telemetryContext,

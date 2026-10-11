@@ -169,6 +169,11 @@
   never reached the catalog and long-context requests were billed at the short-context rate. The
   catalog data is regenerated with `bun run generate:models`. Ported from upstream pi 1.1.0.
 
+- Bedrock requests that fail with `The pending stream has been canceled` after a stalled HTTP/2
+  connection are retried again. The provider error classifier now recognizes Node's
+  `ERR_HTTP2_STREAM_CANCEL` wording, which the Bedrock SDK raises once its HTTP/2 session times out.
+  Ported from upstream pi 1.0.4 (#10379).
+
 ## [2.0.1] - 2026-10-03
 
 ### Added

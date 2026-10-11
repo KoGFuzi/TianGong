@@ -80,6 +80,11 @@
    `AZURE_DEEPSEEK_V4_THINKING_LEVEL_MAP` 与 `azureDeepSeekModels`（把 `deepseek-v4-pro` 克隆为
    `provider:"azure"` / `api:"openai-completions"`，Azure 价与 compat），加 `test/azure-openai-completions.test.ts`。
    (e) 凭据按本档倾向采纳「接受重新登录」：不做键重写，Breaking 条目在 CHANGELOG 写明。
+7. **B4-2 落点勘误（本档 §5 定位有误）**：1.0.4 的 `packages/ai` 实际改动只有 `src/utils/retry.ts`
+   （可重试错误模式表加入 `"pending stream has been canceled"` 及 2 行注释）与 `test/retry.test.ts`
+   （`it.each` 两条断言）。`api/bedrock-converse-stream.ts` 在 1.0.4 **未改**：第 409 行指向的
+   `bedrock-converse-stream.ts` 变化发生在 1.1.0，是 thinking payload 的另一处（批次 2 已落地范围），与本条
+   无关。故 B4-2 实为「错误分类表 +1 模式」的一行修复，不涉及第 410 行推测的重试前置条件判断。
 
 ---
 

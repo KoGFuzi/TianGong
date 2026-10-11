@@ -59,6 +59,12 @@
    兜底（`clampedReasoning ?? "off"`）：`SimpleStreamOptions.reasoning` 是 `ThinkingLevel`、不含 `"off"`，
    非推理模型与「未指定等级」两种情形都经钳制落到 `"off"`；直接 `stream()` 调用不可见等级，故不解析等级
    参数（该界限已由测试钉住）。新增导出仍留在内部模块 `api/simple-options.ts`，不进包根。
+5. **B3-2 测试面（本档只给落点）**：`anthropic-adaptive-thinking-models.test.ts` 的第二个断言要求「全部已标记
+   模型必须命中允许集正则」，故加入 `haiku-5` 的同时必须把 `haiku[-.]5` 加进该正则，否则该断言反转失败；
+   期望表补入实测新标记的 6 个条目（`anthropic` / `github-copilot` / `opencode` / `opencode-go` /
+   `openrouter` / `vercel-ai-gateway`）。实测新标记的 `anthropic-messages` haiku-5 条目
+   `thinkingLevelMap` 仍为 `undefined`——第 353 行的「自动跟随」指晋升判定本身；`openrouter` 那条的等级表
+   此前已由 models.dev `reasoning_options` 提供，本次只为它新增 `forceAdaptiveThinking`。
 
 ---
 

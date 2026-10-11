@@ -88,6 +88,11 @@
   non-reasoning model. Only the OpenAI-compatible adapters (completions, responses, Azure responses)
   apply it; a direct `stream()` call has no thinking level to resolve.
 
+- Claude Haiku 5.5 is now marked as an adaptive thinking model, in both id spellings, so its reasoning
+  effort is sent as a direct effort level instead of a thinking-token budget, matching the other
+  adaptive-thinking Claude models. The generator's name list drives this; the catalog data is
+  regenerated with `bun run generate:models`.
+
 ### Fixed
 
 - The assistant message frame codec no longer swallows message-level fields it does not name.

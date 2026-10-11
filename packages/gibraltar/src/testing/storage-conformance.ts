@@ -524,6 +524,29 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 			expect(third.items.map(({ id }) => id)).toEqual([rootFirst]);
 			expect(third.next).toBeUndefined();
 
+			// Oldest first: the root's segment, then each fork's, each capped at the next fork point.
+			const ascending = { conversationId: grandchildId, order: "ascending" } as const;
+			const firstUp = await storage.scanEntries(ascending, 2, undefined, context);
+			expect(firstUp.items.map(({ id }) => id)).toEqual([rootFirst, rootForkPoint]);
+			const secondUp = await storage.scanEntries(ascending, 2, firstUp.next, context);
+			expect(secondUp.items.map(({ id }) => id)).toEqual([childForkPoint, grandchildHead]);
+			const thirdUp = await storage.scanEntries({ conversationId: grandchildId }, 2, secondUp.next, context);
+			expect(thirdUp.items.map(({ id }) => id)).toEqual([grandchildTail]);
+			expect(thirdUp.next).toBeUndefined();
+			expect(
+				(
+					await storage.scanEntries(
+						{ ...ascending, minEntryId: rootForkPoint, maxEntryId: childForkPoint },
+						10,
+						undefined,
+						context,
+					)
+				).items.map(({ id }) => id),
+			).toEqual([rootForkPoint, childForkPoint]);
+			await expect(
+				storage.scanEntries({ conversationId: grandchildId, order: "descending" }, 2, firstUp.next, context),
+			).rejects.toThrow("cursor");
+
 			const currentMarker = await storage.findLatestHeadMarker(grandchildId, undefined, context);
 			expect(currentMarker?.id).toBe(grandchildHead);
 			expect(currentMarker?.head).toBe(grandchildHead);

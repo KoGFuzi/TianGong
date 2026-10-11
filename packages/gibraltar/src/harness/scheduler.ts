@@ -1167,8 +1167,10 @@ export class TaskScheduler {
 					return token === undefined || entry?.kind === token.kind ? entry : undefined;
 				});
 			}) as ErasedRuntime["entry"],
-			context: (conversationId, context, at) =>
-				this.#read(invocation, () => readContext(this.#session, this.#storage, conversationId, context, at)),
+			context: (conversationId, context, options) =>
+				this.#read(invocation, () =>
+					readContext(this.#session, this.#storage, conversationId, context, options?.at),
+				),
 			now: () => {
 				if (invocation.ended) throw endedError(invocation);
 				return this.#now();

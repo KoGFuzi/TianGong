@@ -41,8 +41,9 @@ describe("durable storage runtime boundaries", () => {
 
 	it("keeps storage as the only file backend", async () => {
 		// SQLite is the single production source. JSONL was removed rather than kept as a second
-		// file format, so there is no portable file subpath to keep Node-free.
+		// file format, so there is no portable file subpath to keep Node-free. `scan.ts` is the
+		// shared scan-order and cursor helper both backends import, not a backend of its own.
 		const entries = await readdir(resolve(sourceRoot, "storage"), { withFileTypes: true });
-		expect(entries.map((entry) => entry.name).sort()).toEqual(["memory.ts", "sqlite"]);
+		expect(entries.map((entry) => entry.name).sort()).toEqual(["memory.ts", "scan.ts", "sqlite"]);
 	});
 });

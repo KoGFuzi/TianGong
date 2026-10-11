@@ -2,7 +2,35 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `TaskRuntime.context(conversationId, context, at?)` takes its cutoff as `options?: { at?: EntryId }` instead of a
+  bare entry ID. Pass `{ at }`, or nothing for the whole conversation. The shape is the one that lets the next
+  cutoff options arrive without another break.
+
+- `ConversationQuery`, `EntryQuery`, `TaskQuery`, and `SubmissionQuery` take an optional `order: "ascending" |
+  "descending"`, and a scan's cursor now carries the order it was created with: a scan given a cursor continues in
+  that order, whether the query repeats it or omits it, and rejects a different `order` with a `TypeError`.
+  Defaults are unchanged — conversations, tasks, and submissions ascending, entries newest first — so every
+  existing call site behaves exactly as before, and a cursor written before this change (which carries only
+  `after`) continues in its scan's default order. A `Storage` or `Tx` implementation must honour `order`; a
+  query value outside the two orders, or a cursor whose `after` is not a safe integer, is a `TypeError`.
+- `scanEntries` with `order: "ascending"` reads one conversation's visible history oldest first, walking the
+  fork chain's segments from the root conversation forward, each capped at the next fork point, so a cursor
+  narrows the lower bound the way a descending scan narrows the upper one. A missing ancestor still ends the
+  visible history rather than throwing.
+
 ### Added
+
+- `ScanOrder` is exported. `scanTasks({ order: "descending" }, limit, cursor)` pages the newest tasks first;
+  `Conversation.entries({ order })` forwards the order to `scanEntries`.
+- `Conversation.context(context, { at })` reads the context as of a visible entry: the same view `fork(at)` would
+  start with, without creating a conversation. An entry not visible from the conversation throws.
+- A task record carries `startedAt` (wall-clock milliseconds of the first change to `running`) and `endedAt` (the
+  change to `terminal`). `startedAt` survives waits, recovery, and close and reopen, so the span between them includes
+  the time the task was not running. Both are optional: a record written by an earlier version lacks them. Pass
+  `HarnessOptions.now` to stamp them from a test clock; the default is `Date.now`. `createSession(storage, { now })`
+  exposes the same clock to a Session opened directly.
 
 - `tg.provider`, a built-in conversation-scoped document holding the provider-facing `sessionId` of a
   conversation. The creation hook seeds it with a UUIDv7 before the first request, so every request of one

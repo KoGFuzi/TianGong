@@ -289,6 +289,16 @@ describe("builtin providers", () => {
 		}
 	});
 
+	// models.dev publishes a 100k-context tier for Claude Haiku 5.5. The Anthropic generation
+	// branch used to hand-build `cost` and drop models.dev `tiers`, so long-context requests were
+	// billed at the short-context rate (see docs/upstream-1.1.0-port-plan.md B1-6).
+	it("keeps the models.dev long-context pricing tier for Claude Haiku 5.5", () => {
+		const models = builtinModels();
+		expect(models.getModel("anthropic", "claude-haiku-5-5")?.cost.tiers).toEqual([
+			{ inputTokensAbove: 100_000, input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.625 },
+		]);
+	});
+
 	it("resolves Anthropic bearer auth from env with auth token precedence", async () => {
 		const models = createModels({
 			authContext: fakeAuthContext({

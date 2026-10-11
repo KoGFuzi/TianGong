@@ -117,6 +117,11 @@
   into it. Overlaying left models the gateway had withdrawn visible indefinitely; the static catalog
   is now only a fallback while no gateway catalog has been fetched.
 
+- The model generator preserves models.dev pricing tiers for Anthropic and OpenAI models. Both
+  branches hand-built `cost` and dropped the `tiers` field, so Claude Haiku 5.5's 100k-context tier
+  never reached the catalog and long-context requests were billed at the short-context rate. The
+  catalog data is regenerated with `bun run generate:models`. Ported from upstream pi 1.1.0.
+
 ## [2.0.1] - 2026-10-03
 
 ### Added

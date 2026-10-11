@@ -1820,12 +1820,8 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl: "https://api.anthropic.com",
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					// Includes models.dev pricing tiers, e.g. Claude Haiku 5.5's 100k-context tier.
+					cost: getModelsDevCost(m.cost),
 					contextWindow: m.limit?.context || 4096,
 					maxTokens: m.limit?.output || 4096,
 				});
@@ -1851,12 +1847,9 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					baseUrl: "https://api.openai.com/v1",
 					reasoning: m.reasoning === true,
 					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-					cost: {
-						input: m.cost?.input || 0,
-						output: m.cost?.output || 0,
-						cacheRead: m.cost?.cache_read || 0,
-						cacheWrite: m.cost?.cache_write || 0,
-					},
+					// Includes models.dev pricing tiers. The short/long-context overrides below keep
+					// replacing these for the ids OpenAI prices through a hard-coded 272k tier.
+					cost: getModelsDevCost(m.cost),
 					contextWindow: m.limit?.context || 4096,
 					maxTokens: m.limit?.output || 4096,
 				});

@@ -108,6 +108,24 @@ describe("OpenAI ChatGPT OAuth", () => {
 		});
 	});
 
+	it("sends the app-supplied agent name on the consent screen", async () => {
+		let authorizeUrl: URL | undefined;
+		stubTokenEndpoint(tokenResponse());
+
+		await openaiChatGPTOAuth.login(
+			loginInteraction({
+				callbackClientId: "oaiapp_issued",
+				onAuthorize: (url) => {
+					authorizeUrl = url;
+				},
+			}),
+			{ getDeviceId: () => DEVICE_ID, agentName: "Acme Agent" },
+		);
+
+		// The default, when the app sets none, is asserted by the test above.
+		expect(authorizeUrl?.searchParams.get("agent_name_hint")).toBe("Acme Agent");
+	});
+
 	it("rejects registration without an issued client ID", async () => {
 		const fetchMock = stubTokenEndpoint(tokenResponse());
 

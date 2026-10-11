@@ -206,6 +206,12 @@ export interface LoginOptions {
 	 * the ID on first use and must return the same ID on every later call.
 	 */
 	getDeviceId?: () => string;
+	/**
+	 * Product name this app shows on the provider's consent screen, e.g. OpenAI's
+	 * `agent_name_hint`. Defaults to the name of the package itself; login flows with no
+	 * such field ignore it.
+	 */
+	agentName?: string;
 }
 
 /**

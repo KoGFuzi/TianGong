@@ -64,7 +64,7 @@ async function login(providerId: string): Promise<void> {
 					}
 				},
 			},
-			{ getDeviceId: randomUUID },
+			{ getDeviceId: randomUUID, agentName: "TianGong" },
 		);
 		// `modify` is the store's only write path, so the login lands through the same
 		// cross-process exclusion every later refresh depends on.

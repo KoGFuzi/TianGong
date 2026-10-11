@@ -93,6 +93,10 @@
   adaptive-thinking Claude models. The generator's name list drives this; the catalog data is
   regenerated with `bun run generate:models`.
 
+- `LoginOptions.agentName` lets an app put its own product name on the provider's consent screen. The
+  Sign in with ChatGPT flow sends it as `agent_name_hint` and falls back to the package's own name,
+  which is what the dev CLI now passes explicitly.
+
 ### Fixed
 
 - The assistant message frame codec no longer swallows message-level fields it does not name.

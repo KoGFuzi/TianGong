@@ -12,7 +12,10 @@ export interface ContextUsageEstimate {
 	lastUsageIndex: number | null;
 }
 
-const CHARS_PER_TOKEN = 4;
+// Characters per token for the fallback estimate. 3.5 matches upstream #10497: 4 systematically
+// undercounted long transcripts and let `clampMaxTokensToContext` hand out a maxTokens that
+// overflowed the window.
+const CHARS_PER_TOKEN = 3.5;
 const ESTIMATED_IMAGE_CHARS = 4800;
 
 export function calculateContextTokens(usage: Usage): number {

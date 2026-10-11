@@ -109,6 +109,10 @@
   other providers carries non-transient finish reasons (`SAFETY`, `RECITATION`, ...) and stays
   terminal. Ported from upstream pi 1.1.0 (#10487).
 
+- The fallback context estimate now uses 3.5 characters per token instead of 4. The previous ratio
+  systematically undercounted long transcripts, which let `clampMaxTokensToContext` hand out a
+  `maxTokens` that overflowed the context window. Ported from upstream pi 1.1.0 (#10497).
+
 ## [2.0.1] - 2026-10-03
 
 ### Added

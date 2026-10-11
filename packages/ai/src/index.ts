@@ -42,6 +42,9 @@ export * from "./utils/assistant-message-frame.ts";
 export * from "./utils/concurrency-limit.ts";
 export * from "./utils/diagnostics.ts";
 export * from "./utils/event-stream.ts";
+// `./types.ts` re-exports the stream class as a type, and a star export alone would leave the value
+// unreachable from the package root: a type-only alias of the same name shadows it (TS1362).
+export { AssistantMessageEventStream } from "./utils/event-stream.ts";
 export * from "./utils/json-parse.ts";
 export * from "./utils/overflow.ts";
 export * from "./utils/retry.ts";

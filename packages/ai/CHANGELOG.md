@@ -87,6 +87,11 @@
   `cloneStartMessage` rebuilds the start frame from a hard-coded field list, so `durationMs` was
   dropped on the encode/reduce round trip. The field is now carried through, and a message that was
   never stamped stays without the key instead of gaining an explicit `undefined`.
+- `AssistantMessageEventStream` is now reachable as a value from the package root. `./types.ts`
+  re-exported the class through `export type`, and a type-only alias of the same name shadows the
+  value in `index.ts`'s star exports, so `import { AssistantMessageEventStream } from
+  "@OnePanda-TgSec/tg-ai"` resolved to a type-only symbol (`TS1485`/`TS1362`). `index.ts` now
+  carries an explicit value re-export, which wins over the star exports.
 - Transient provider failures are retried by default. `maxRetries` previously defaulted to 0, so a
   caller who left it unset got exactly one attempt: the adapters pass the option straight through
   without a fallback, and the provider SDKs are invoked with `maxRetries: 0` so their own default of

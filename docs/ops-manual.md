@@ -276,6 +276,7 @@ const storage = await openNodeSqliteStorage(path, {
 | `TG_TUI_DEBUG` / `TG_TUI_DEBUG_REDRAW` | `tg-tui` | 主屏调试输出 / 全量重绘追踪 |
 | `TG_TUI_ESC_TIMEOUT` | `tg-tui` | 转义序列消歧窗口，毫秒 |
 | `TG_TRUE_COLOR` / `TG_HYPERLINKS` / `TG_IMAGE_PROTOCOL` | `tg-tui` | 终端能力覆写 |
+| `TG_PROGRAM_STATUS` | `tg-tui` | 覆写 OSC 7501 程序状态探测：`1` 视为终端支持并立即上报，`0` 关闭探测与上报；未设则启动时随键盘协议协商查询一次，仅在终端应答后上报 |
 
 ---
 

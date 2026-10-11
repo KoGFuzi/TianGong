@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `Terminal` implementations must provide `setProgramStatus(status: ProgramStatus)`. A terminal without OSC 7501
+  support can implement it as a no-op. `ProcessTerminal` implements it by reporting only to terminals that
+  confirm support, so a host's own `Terminal` implementations need no status logic.
+
+### Added
+
+- `Terminal.setProgramStatus()` and `formatProgramStatus()` for the Program Status Protocol (OSC 7501), plus the
+  `ProgramStatus` type. `ProcessTerminal` asks the terminal for support at startup and sends reports only if it
+  answers; `TG_PROGRAM_STATUS=1|0` overrides detection. The latest status is re-sent when support is confirmed or
+  the terminal restarts, and `stop()` clears it.
+- `Box.setPaddingX(paddingX)` and `Text.setPaddingX(paddingX)` change horizontal padding at runtime. Both
+  components took it only at construction, so a host that wanted different margins had to rebuild the
+  component and lose its render cache and subtree state. The new setters drop the render cache with the
+  padding.
+- `TuiAltScreen.resetTextSelection()` drops the active text selection and the multi-click history. A host that
+  replaces the transcript had no way to clear either: the old selection's coordinates then landed on new text,
+  and a leftover click count made the next single click read as the second click of a double click.
+
 ### Changed
 
 - Rebranded from `@earendil-works/pi-tui` to `@OnePanda-TgSec/tg-tui`. The package was adopted from
@@ -14,17 +34,6 @@
   transcript top/bottom moved to `Ctrl+Home`/`Ctrl+End`, which no longer move the editor cursor: in fullscreen
   the alt screen consumed `Home`/`End` first, so the editor could never reach its own line start or end. A host
   that binds `tui.altScreen.top` / `tui.altScreen.bottom` keeps its own keys.
-
-### Added
-
-- `Box.setPaddingX(paddingX)` and `Text.setPaddingX(paddingX)` change horizontal padding at runtime. Both
-  components took it only at construction, so a host that wanted different margins had to rebuild the
-  component and lose its render cache and subtree state. The new setters drop the render cache with the
-  padding.
-
-- `TuiAltScreen.resetTextSelection()` drops the active text selection and the multi-click history. A host that
-  replaces the transcript had no way to clear either: the old selection's coordinates then landed on new text,
-  and a leftover click count made the next single click read as the second click of a double click.
 
 ### Fixed
 

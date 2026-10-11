@@ -112,6 +112,17 @@
   and `azureDeploymentName` apply to both APIs, and DeepSeek V4 Pro ships in the built-in catalog with
   Azure's own rates and a thinking-level map the deployment accepts.
 
+- The `openai-decisions` classifier API calls OpenAI's Decisions API (`POST /v1/decisions`), with
+  `gpt-6-luna` as a classifier model of the `openai` provider. It needs an API key, so the provider
+  hides it from `getAvailableOfType("classifier")` while `openai` uses Sign in with ChatGPT. A request
+  is not retried on a 504, which the gateway returns as an HTML page for inputs above roughly 600K
+  tokens. Ported from upstream pi 1.1.0.
+
+- `ClassifierContext.images` lets a classifier judge image blocks together with its state. Only models
+  whose `input` includes `"image"` accept them: `classify()` returns an error result for any other
+  model, and the System One and llama.cpp classifier APIs reject them before sending.
+  Ported from upstream pi 1.1.0.
+
 ### Fixed
 
 - The assistant message frame codec no longer swallows message-level fields it does not name.

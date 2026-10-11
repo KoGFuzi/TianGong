@@ -85,6 +85,16 @@
    （`it.each` 两条断言）。`api/bedrock-converse-stream.ts` 在 1.0.4 **未改**：第 409 行指向的
    `bedrock-converse-stream.ts` 变化发生在 1.1.0，是 thinking payload 的另一处（批次 2 已落地范围），与本条
    无关。故 B4-2 实为「错误分类表 +1 模式」的一行修复，不涉及第 410 行推测的重试前置条件判断。
+8. **B4-3 范围较本档更宽**：除新增 `api/openai-decisions.ts`（+ `.lazy.ts`）与 `ClassifierContext.images` 外，
+   上游同批把 System One 的请求/用量公共层抽到新文件 `api/classifier-shared.ts`（`ClassifierHttpError` /
+   `isRecord` / `requiredNumber` / `postClassifierRequest` / `parseClassifierUsage`），`system-one-shared.ts` 与
+   `typesafe-system-one.ts` / `cloudflare-workers-ai-system-one.ts` 改为引用它；并给 `retryProviderRequest`
+   加 `noRetryStatuses`（504 不重试）、`utils/model-operations.ts` 加 `assertClassifierInputSupported`、
+   `providers/openai.ts` 挂 `filterAllModels`（OAuth 下隐藏 classifier）与 `classifiers` 映射。生成脚本新增
+   `OPENAI_CLASSIFIER_MODELS`（`gpt-6-luna`，api `openai-decisions`，`input:["text","image"]`，922K context，
+   长上下文倍率）。本地裁剪：`postClassifierRequest` 保留本仓既有的 `onRetry` 透传（上游无）。1.1.0 的
+   `api/lazy.ts`「`timestamp: startedAt`」属 durationMs 批次；本仓 B2 以 `durationMs: 0` + `timestamp: Date.now()`
+   落地（自洽），本次不动。
 
 ---
 

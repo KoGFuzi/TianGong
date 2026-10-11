@@ -4,6 +4,15 @@
 
 ### Breaking Changes
 
+- `FileSystem` gains three required methods: `openBinaryReader(path, { noFollow? }, context)`, `openDirReader(path,
+  context)`, and `watch(targets, onChange, context)`. A custom environment must implement them; `NodeExecutionEnv` does.
+- `Shell.exec(command, ...)` accepts `string | readonly string[]`. An array runs `command[0]` directly with the rest as
+  its arguments, without a shell, so they reach the program unparsed; a string still runs through the environment's
+  shell. An empty array is a `spawn_error`.
+- `ShellExecOptions.onOutput` is called with a third argument, `{ stream, skipped? }`. Existing two-argument callbacks
+  keep working; a third parameter is now required at the call site the environment makes.
+- `ShellExecOptions.window` is honoured by `NodeExecutionEnv`: output outside the retained tail may be omitted and
+  reported through `info.skipped`.
 - `TaskRuntime.context(conversationId, context, at?)` takes its cutoff as `options?: { at?: EntryId }` instead of a
   bare entry ID. Pass `{ at }`, or nothing for the whole conversation. The shape is the one that lets the next
   cutoff options arrive without another break.
@@ -31,6 +40,26 @@
   the time the task was not running. Both are optional: a record written by an earlier version lacks them. Pass
   `HarnessOptions.now` to stamp them from a test clock; the default is `Date.now`. `createSession(storage, { now })`
   exposes the same clock to a Session opened directly.
+
+- `openBinaryReader` returns a `BinaryReader`: positional reads of one opened regular file, its `info()`, and
+  `scanLines({ startLine, endLine? })`, which locates a line range in one pass and reports the file's line count and
+  the decoded byte sizes of the selection. The reader keeps reading the opened file after its path is replaced.
+- `openDirReader` returns a `DirReader` that pages one directory's entries, so a very large directory is read without
+  holding every entry at once. An entry that disappears between enumeration and its metadata is skipped.
+- `watch(targets, onChange, context)` reports changes to files and directories: `paths` for what may have changed
+  (a directory covers its subtree), `overflow` when coverage was uncertain, `error` when the watcher stopped. The
+  returned `FileWatcher.mode` says whether it is `native` or `polling`. `NodeExecutionEnv` polls on Windows and on
+  file systems that do not report remote changes; `watch: { mode, pollIntervalMs, maxDirectories }` in its
+  constructor overrides that. Symbolic links are not followed below a recursive target, and `exclude: { hidden,
+  names }` keeps entries out of both watching and reporting.
+- `createPowerShellTool({ commandPrefix?, prepare?, programs? })` runs a PowerShell command as one argv entry, trying
+  `pwsh` then `powershell` and skipping a program that cannot start. It is not part of `CodingTools`; add it
+  explicitly. `createBashTool` and it now share one execution path, and both forward the retained output window to
+  the environment and report what it skipped.
+- `LineScanner`, `StreamDecoder`, `rangeDecoder`, and `startsWithBom` are exported from `./env` for environment
+  implementations that stream or scan files the same way `NodeExecutionEnv` does.
+- `registerEnvConformance(runner, name, withEnv, options?)` and `createEnvConformance(options)` run the
+  environment-independent cases against any `ExecutionEnv`.
 
 - `tg.provider`, a built-in conversation-scoped document holding the provider-facing `sessionId` of a
   conversation. The creation hook seeds it with a UUIDv7 before the first request, so every request of one
@@ -100,7 +129,21 @@ rewritten in place before it can be opened.
 
 ### Fixed
 
-- The derived model context leads with its baseline system message when only user messages precede it.
+- A byte-order mark is dropped only where it is one. Node's streaming decoder with BOM handling drops any U+FEFF that
+  follows a chunk boundary, so shell output and the text line reader could lose a character from the middle of a
+  stream. Both now decode with BOM handling off and drop a leading mark themselves; the retained output tail behaves
+  the same way, so a U+FEFF can no longer sit at the window's start.
+- The tail an environment keeps no longer depends on progress commit timing. A progress snapshot used to replace the
+  stored output with the already-bounded window, so the first line of a later window drifted with commit timing
+  instead of with the output. Snapshots now keep the shortest suffix longer than the window by a byte or a line.
+- `flushFile` on a directory reports `is_directory` on Windows, which opens a directory for writing where POSIX
+  refuses.
+- The `read` tool reads only the bounded range it shows: one `scanLines` pass locates the lines, then the selection and
+  its first line are read. Its output is unchanged, including truncation diagnostics. A file that grew while it was
+  read — an active log — no longer fails on the changed size; one that shrank or was rewritten in place is read again
+  once, and a second change is reported instead of read as garbage.
+- Design-document links in the README now point at the in-repo `docs/` files instead of upstream
+  GitHub URLs.
   A run's input is committed before generation renders the system prompt, so a transcript, or the range
   after a compaction or reset, started with user messages followed by the system baseline. Providers
   treat only a leading system message as the initial prompt and tool set, so a later tool change

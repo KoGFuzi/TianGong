@@ -95,6 +95,29 @@ function checkSeed(seed: number): void {
 }
 
 describe("OutputBuffer skipped output", () => {
+	// A snapshot is a progress commit: it must not change what a later window keeps, or the first line of the
+	// window drifts with the commit timing instead of with the output.
+	it("keeps the same tail whenever progress snapshots happen", () => {
+		for (let seed = 1; seed <= 3000; seed++) {
+			const next = random(seed);
+			const limits: OutputLimits = {
+				maxBytes: 1 + Math.floor(next() * 40),
+				maxLines: 1 + Math.floor(next() * 5),
+				retain: "tail",
+			};
+			const plain = new OutputBuffer(limits);
+			const sampled = new OutputBuffer(limits);
+			const chunks = Math.floor(next() * 30);
+			for (let index = 0; index < chunks; index++) {
+				const chunk = randomChunk(next);
+				plain.push(chunk);
+				sampled.push(chunk);
+				if (next() < 0.4) sampled.snapshot();
+			}
+			expect(sampled.snapshot(), `seed ${seed}`).toEqual(plain.snapshot());
+		}
+	});
+
 	it("matches the full stream for every legal skip pattern", () => {
 		for (let seed = 1; seed <= 3000; seed++) checkSeed(seed);
 	});

@@ -24,11 +24,19 @@ import {
 	type Result,
 	type ShellExecOptions,
 	type ShellExecResult,
+	type ShellOutputSkip,
+	type ShellOutputWindow,
 } from "../src/env/index.ts";
 import { NodeExecutionEnv } from "../src/env/node.ts";
 import { withFileMutationQueue } from "../src/tools/file-mutation-queue.ts";
 import { detectSupportedImageMimeType } from "../src/tools/image.ts";
-import { createBashTool, createEditTool, createReadTool, createWriteTool } from "../src/tools/index.ts";
+import {
+	createBashTool,
+	createEditTool,
+	createPowerShellTool,
+	createReadTool,
+	createWriteTool,
+} from "../src/tools/index.ts";
 import { DEFAULT_MAX_LINES } from "../src/truncate.ts";
 
 const tempDirs: string[] = [];
@@ -177,7 +185,7 @@ class TimeoutOutputExecutionEnv extends NodeExecutionEnv {
 		const output = `${Array.from({ length: TRUNCATED_OUTPUT_LINES }, (_, index) => `line-${index + 1}`).join("\n")}\n`;
 		const spillPath = getOrThrow(await this.createTempFile({ prefix: "timeout-", suffix: ".log" }, context));
 		getOrThrow(await this.writeFile(spillPath, output, context));
-		options?.onOutput?.(output, context);
+		options?.onOutput?.(output, context, { stream: "stdout" });
 		const error = new ExecutionError("timeout", `timeout:${options?.timeout}`);
 		error.spillPath = spillPath;
 		return err(error);
@@ -518,7 +526,109 @@ describe("durable tools", () => {
 		});
 	});
 
+	describe("powershell", () => {
+		/** An environment where only the listed programs exist; it records each command and prints `output`. */
+		function programsEnv(installed: readonly string[], output: string, exitCode = 0) {
+			const commands: (string | readonly string[])[] = [];
+			class ProgramsEnv extends NodeExecutionEnv {
+				override async exec(
+					command: string | readonly string[],
+					options: ShellExecOptions | undefined,
+					context: Context,
+				): Promise<Result<ShellExecResult, ExecutionError>> {
+					commands.push(command);
+					if (typeof command === "string" || !installed.includes(command[0]!)) {
+						return err(new ExecutionError("spawn_error", `spawn ${command[0]} ENOENT`));
+					}
+					options?.onOutput?.(output, context, { stream: "stdout" });
+					return { ok: true, value: { exitCode } };
+				}
+			}
+			return { env: new ProgramsEnv({ cwd: createTempDir() }), commands };
+		}
+
+		// The command is one argv entry: no other shell parses `$`, pipes or quotes on the way to the program.
+		it("runs the command with pwsh as one argument, forcing UTF-8 output", async () => {
+			const { env, commands } = programsEnv(["pwsh"], "héllo\n");
+			const result = await run(
+				createPowerShellTool(),
+				{ command: "Write-Output 'héllo' | ForEach-Object { $x }" },
+				env,
+			);
+			expect(result.output.join("")).toBe("héllo\n");
+			expect(commands).toEqual([
+				[
+					"pwsh",
+					"-NoProfile",
+					"-NonInteractive",
+					"-ExecutionPolicy",
+					"Bypass",
+					"-Command",
+					"try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}\nWrite-Output 'héllo' | ForEach-Object { $x }",
+				],
+			]);
+		});
+
+		it("falls back to Windows PowerShell and reports the last start failure", async () => {
+			const windowsOnly = programsEnv(["powershell"], "ok");
+			const result = await run(
+				createPowerShellTool({ commandPrefix: "$x = 1" }),
+				{ command: "$x" },
+				windowsOnly.env,
+			);
+			expect(result.output.join("")).toBe("ok");
+			expect(windowsOnly.commands.map((command) => command[0])).toEqual(["pwsh", "powershell"]);
+			expect(String(windowsOnly.commands[1]?.at(-1))).toMatch(/\n\$x = 1\n\$x$/);
+
+			const none = programsEnv([], "");
+			const failed = await runFailing(createPowerShellTool(), { command: "1" }, none.env);
+			expect(failed.error.message).toBe("spawn powershell ENOENT");
+		});
+
+		it("throws on a nonzero exit after streaming the output", async () => {
+			const { env } = programsEnv(["pwsh"], "partial", 3);
+			const failed = await runFailing(createPowerShellTool(), { command: "exit 3" }, env);
+			expect(failed.error.message).toBe("Command exited with code 3");
+			expect(failed.output.join("")).toBe("partial");
+		});
+
+		it.runIf(process.platform === "win32")("runs real PowerShell with UTF-8 output", async () => {
+			const result = await run(
+				createPowerShellTool(),
+				{ command: "Write-Output ('h' + [char]0xe9 + 'llo'); exit 0" },
+				createEnv(),
+			);
+			expect(result.output.join("").trim()).toBe("héllo");
+		});
+	});
+
 	describe("bash", () => {
+		it("passes the retained window to the environment and forwards what it skipped", async () => {
+			const window: ShellOutputWindow = { maxBytes: 4, maxLines: 1, minIntervalMs: 100, bytesPerSecond: 1024 };
+			const skipped: ShellOutputSkip = { bytes: 6, newlines: 2, endsWithNewline: true };
+			let received: ShellOutputWindow | undefined;
+			class SkippingEnv extends NodeExecutionEnv {
+				override async exec(
+					_command: string | readonly string[],
+					options: ShellExecOptions | undefined,
+					context: Context,
+				): Promise<Result<ShellExecResult, ExecutionError>> {
+					received = options?.window;
+					options?.onOutput?.("tail\n", context, { stream: "stdout", skipped });
+					return { ok: true, value: { exitCode: 0 } };
+				}
+			}
+			const calls: [string, ShellOutputSkip | undefined][] = [];
+			const api = {
+				...fakeApi(new SkippingEnv({ cwd: createTempDir() })).api,
+				outputWindow: window,
+				output: (chunk: string | Uint8Array, skip?: ShellOutputSkip) => calls.push([String(chunk), skip]),
+			} as ToolExecutionApi;
+			await createBashTool().execute({ command: "anything" }, api, BACKGROUND_CONTEXT);
+			expect(received).toEqual(window);
+			expect(calls).toEqual([["tail\n", skipped]]);
+		});
+
 		it("streams combined stdout and stderr and returns no content of its own", async () => {
 			const result = await run(createBashTool(), { command: "printf out; printf err >&2" }, createEnv());
 			expect(result.output.join("")).toContain("out");

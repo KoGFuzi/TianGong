@@ -28,10 +28,13 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
 ]);
 
 const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
-	// Generic provider load, HTTP status, and server-side transient failures.
+	// Generic provider load, HTTP status, and server-side transient failures. Capacity and
+	// server-busy wording is broad ("at capacity" covers the previous "model is at capacity"),
+	// and 529 is Cloudflare's "site is overloaded" — all transient, none may end a turn (#10543).
 	"overloaded",
 	"currently experiencing high demand",
-	"model is at capacity",
+	"at capacity",
+	"server.?busy",
 	"rate.?limit",
 	"too many requests",
 	"429",
@@ -41,6 +44,7 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"504",
 	"520",
 	"524",
+	"529",
 	"service.?unavailable",
 	"server.?error",
 	"internal.?error",

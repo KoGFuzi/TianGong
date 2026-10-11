@@ -97,6 +97,12 @@
   starts and never after `fn` returns; the caller still observes the cancellation through
   `raceWithAbortSignal`. Ported from upstream pi 1.0.3.
 
+- Capacity and server-busy provider errors are classified as retryable instead of ending the turn.
+  `server_busy`, spaced "server busy", generic "at capacity" wording (which subsumes the previous
+  "model is at capacity"), and HTTP 529 now match `RETRYABLE_PROVIDER_ERROR_PATTERN`, and the OpenAI
+  Codex adapter's own transport classifier matches server-busy text too. Ported from upstream pi 1.1.0
+  (#10543).
+
 ## [2.0.1] - 2026-10-03
 
 ### Added

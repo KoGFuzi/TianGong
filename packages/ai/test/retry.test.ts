@@ -77,6 +77,17 @@ describe("provider retry classification", () => {
 		).toBe(true);
 	});
 
+	it.each([
+		"server_busy",
+		"SERVER_BUSY: the model server is busy",
+		"server busy, please retry",
+		"The model is at capacity right now",
+		"529 status code (no body)",
+	])("classifies capacity and server-busy errors as retryable: %s", (errorMessage) => {
+		// Regression for #10543: capacity errors must restart the turn, not terminate it.
+		expect(isRetryableAssistantError(fauxAssistantMessage("", { stopReason: "error", errorMessage }))).toBe(true);
+	});
+
 	it("keeps provider limit errors non-retryable", () => {
 		expect(
 			isRetryableAssistantError(

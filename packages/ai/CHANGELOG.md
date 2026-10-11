@@ -113,6 +113,10 @@
   systematically undercounted long transcripts, which let `clampMaxTokensToContext` hand out a
   `maxTokens` that overflowed the context window. Ported from upstream pi 1.1.0 (#10497).
 
+- The Radius provider's gateway catalog replaces the static public catalog instead of being merged
+  into it. Overlaying left models the gateway had withdrawn visible indefinitely; the static catalog
+  is now only a fallback while no gateway catalog has been fetched.
+
 ## [2.0.1] - 2026-10-03
 
 ### Added

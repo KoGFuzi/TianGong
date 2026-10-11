@@ -49,7 +49,7 @@ describe("Radius provider catalogs", () => {
 		expect(provider.getModels()).toEqual([]);
 	});
 
-	it("overlays refreshed models on the static public catalog", async () => {
+	it("replaces the static public catalog with the refreshed models", async () => {
 		vi.spyOn(globalThis, "fetch").mockResolvedValue(
 			new Response(JSON.stringify(radiusConfig()), {
 				status: 200,
@@ -70,7 +70,13 @@ describe("Radius provider catalogs", () => {
 			contextWindow: 424242,
 		});
 		expect(models.getModel("radius", "organization-only")).toBeDefined();
-		expect(models.getModels("radius").length).toBeGreaterThan(radiusConfig().models.length);
+		// The gateway catalog is authoritative: exactly its models, no residue from the baseline.
+		expect(
+			models
+				.getModels("radius")
+				.map((entry) => entry.id)
+				.sort(),
+		).toEqual(["balanced", "organization-only"]);
 	});
 
 	it("overlays a cached effective catalog without network access", async () => {

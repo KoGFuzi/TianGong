@@ -38,13 +38,10 @@ export function radiusProvider(options: RadiusProviderOptions = {}): Provider<"t
 			oauth: lazyOAuth({ name, load: () => loadRadiusOAuth({ name, gateway }) }),
 		},
 		getModels: () => {
-			const merged = [...baselineModels];
-			for (const model of dynamicModels) {
-				const index = merged.findIndex((entry) => entry.id === model.id);
-				if (index >= 0) merged[index] = model;
-				else merged.push(model);
-			}
-			return merged;
+			// The gateway catalog is authoritative once it has been refreshed: overlaying it on the
+			// static baseline kept withdrawn models visible forever. Fall back to the baseline only
+			// while no catalog has been fetched, so an unreachable gateway never hides every model.
+			return dynamicModels.length > 0 ? [...dynamicModels] : [...baselineModels];
 		},
 		refreshModels: async (context) => {
 			const stored = context.stored;

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- The Azure provider is now named `azure`, not `azure-openai-responses`, because it serves Chat
+  Completions as well as the Responses API. `getModel("azure", ...)` replaces the old provider id, and
+  the provider factory is `azureProvider` (with `AZURE_MODELS`, `AZURE_IMAGE_MODELS`, and
+  `AZURE_CLASSIFIER_MODELS`) from the `./providers/azure` subpath. The `azure-openai-responses` api id
+  and the `AZURE_OPENAI_*` environment variables are unchanged. Credentials stored under the old
+  provider id are orphaned: sign in to Azure again.
+
 ### Changed
 
 - Rebranded from `@earendil-works/pi-ai` to `@OnePanda-TgSec/tg-ai`. The package was adopted from
@@ -96,6 +105,12 @@
 - `LoginOptions.agentName` lets an app put its own product name on the provider's consent screen. The
   Sign in with ChatGPT flow sends it as `agent_name_hint` and falls back to the package's own name,
   which is what the dev CLI now passes explicitly.
+
+- The Azure provider serves Foundry deployments over Chat Completions as well as the Responses API: a
+  model under `azure` whose `api` is `openai-completions` streams through chat completions with the
+  endpoint and deployment name the provider resolves per request. `AZURE_OPENAI_DEPLOYMENT_NAME_MAP`
+  and `azureDeploymentName` apply to both APIs, and DeepSeek V4 Pro ships in the built-in catalog with
+  Azure's own rates and a thinking-level map the deployment accepts.
 
 ### Fixed
 

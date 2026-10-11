@@ -65,6 +65,21 @@
    `openrouter` / `vercel-ai-gateway`）。实测新标记的 `anthropic-messages` haiku-5 条目
    `thinkingLevelMap` 仍为 `undefined`——第 353 行的「自动跟随」指晋升判定本身；`openrouter` 那条的等级表
    此前已由 models.dev `reasoning_options` 提供，本次只为它新增 `forceAdaptiveThinking`。
+6. **B4-1 落地形态（细化本档落点）**：(a) 改名只在 **provider** 层——`providers/azure-openai-responses.ts`
+   （+ `.models.ts`）→ `providers/azure.ts`（+ `azure.models.ts`），导出 `azureProvider` 与
+   `AZURE_MODELS` / `AZURE_IMAGE_MODELS` / `AZURE_CLASSIFIER_MODELS`；`azure-openai-responses` **api id、
+   `AZURE_OPENAI_*` 环境变量与 `api/azure-openai-responses.ts`（+ `.lazy.ts`）文件名全部不变**，`types.ts` 的
+   `KnownApi` / `ApiOptionsMap` 与 `index.ts` / `compat.ts` / `legacy-api-aliases.ts` 亦不动（只改
+   `KnownProvider`、`env-api-keys.ts` 的 provider key、`providers/all.ts` 与生成脚本、`models.generated.ts` /
+   `providers/azure.models.ts` 重生成）。(b) 新增 `src/api/azure-openai-config.ts` 承载 `AzureEndpointOptions` /
+   `resolveDeploymentName` / `resolveAzureBaseUrl` / `resolveAzureConfig`，Responses 适配器改为引入；
+   `providers/azure.ts` 用 `azureStreams()` 包装 `openai-completions` 的 lazy api，在 `lazyStream` 内解析
+   endpoint 与 deployment（部署名经 `onPayload` 覆写 `model`）。(c) 第 397 行的「`api/simple-options.ts`
+   合并点」落点**未使用**：改名面不触合并点，本地 B3-1 已把等级参数收口在 `buildBaseOptions`，上游的那处是
+   适配器级 `resolveSamplingParams`，两种形态等价，本次不引入 churn。(d) Foundry 增量 = 生成脚本新增
+   `AZURE_DEEPSEEK_V4_THINKING_LEVEL_MAP` 与 `azureDeepSeekModels`（把 `deepseek-v4-pro` 克隆为
+   `provider:"azure"` / `api:"openai-completions"`，Azure 价与 compat），加 `test/azure-openai-completions.test.ts`。
+   (e) 凭据按本档倾向采纳「接受重新登录」：不做键重写，Breaking 条目在 CHANGELOG 写明。
 
 ---
 

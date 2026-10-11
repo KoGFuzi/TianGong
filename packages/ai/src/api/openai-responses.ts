@@ -134,6 +134,7 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 
 	// Start async processing
 	(async () => {
+		const startedAt = performance.now();
 		const output: AssistantMessage = {
 			role: "assistant",
 			content: [],
@@ -210,6 +211,7 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 				throw new Error(output.errorMessage || "An unknown error occurred");
 			}
 
+			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -228,6 +230,7 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 			output.errorMessage = errorMessage.includes("subscription_sharing_usage_limit_exceeded")
 				? `${errorMessage}\nCheck your ChatGPT usage: ${CHATGPT_USAGE_URL}`
 				: errorMessage;
+			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

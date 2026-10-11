@@ -245,6 +245,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 	const normalizedContext = resolveTranscript(context, model.compat?.supportsMidConvoSystemMessages);
 
 	(async () => {
+		const startedAt = performance.now();
 		const output: AssistantMessage = {
 			role: "assistant",
 			content: [],
@@ -481,6 +482,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 			}
 
 			assertSuccessfulOutput(output);
+			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -491,6 +493,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatProviderError(normalizeProviderError(error));
+			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

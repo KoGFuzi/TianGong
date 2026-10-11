@@ -305,6 +305,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 	const normalizedContext = resolveTranscript(context, getCompat(model).supportsMidConvoSystemMessages);
 
 	(async () => {
+		const startedAt = performance.now();
 		const output: AssistantMessage = {
 			role: "assistant",
 			content: [],
@@ -698,6 +699,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				throw new Error("Stream ended without finish_reason");
 			}
 
+			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -721,6 +723,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 			if (rawMetadata && !output.errorMessage.includes(String(rawMetadata))) {
 				output.errorMessage += `\n${rawMetadata}`;
 			}
+			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

@@ -74,6 +74,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 	const normalizedContext = collapseSystemMessages(context);
 
 	(async () => {
+		const startedAt = performance.now();
 		const output: AssistantMessage = {
 			role: "assistant",
 			content: [],
@@ -291,6 +292,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 				throw new Error(errorMessage);
 			}
 
+			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -302,6 +304,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatProviderError(normalizeProviderError(error));
+			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

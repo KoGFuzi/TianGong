@@ -130,6 +130,7 @@ export const stream: StreamFunction<"mistral-conversations", MistralOptions> = (
 	const normalizedContext = resolveTranscript(context, model.compat?.supportsMidConvoSystemMessages);
 
 	(async () => {
+		const startedAt = performance.now();
 		const output = createOutput(model);
 
 		try {
@@ -163,6 +164,7 @@ export const stream: StreamFunction<"mistral-conversations", MistralOptions> = (
 				throw new Error(output.errorMessage || "An unknown error occurred");
 			}
 
+			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -172,6 +174,7 @@ export const stream: StreamFunction<"mistral-conversations", MistralOptions> = (
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatMistralError(error);
+			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

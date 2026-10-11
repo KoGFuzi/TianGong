@@ -134,6 +134,7 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 	const normalizedContext = collapseSystemMessages(context);
 
 	(async () => {
+		const startedAt = performance.now();
 		const output: AssistantMessage = {
 			role: "assistant",
 			content: [],
@@ -343,6 +344,7 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 
 			// A stream can settle without stopping every block, so finalize here too.
 			for (const block of output.content) finalizeStreamingBlock(block as Block);
+			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -354,6 +356,7 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 			if (output.stopReason === "error") {
 				appendBedrockFailureDiagnostic(output, error, responseRequestId);
 			}
+			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

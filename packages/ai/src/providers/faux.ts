@@ -305,7 +305,13 @@ function createDeferredMessage(model: Model<string>, handle: DeferredHandle): As
 	};
 }
 
-function createErrorMessage(error: unknown, api: string, provider: string, modelId: string): AssistantMessage {
+function createErrorMessage(
+	error: unknown,
+	api: string,
+	provider: string,
+	modelId: string,
+	startedAt: number,
+): AssistantMessage {
 	return {
 		role: "assistant",
 		content: [],
@@ -315,15 +321,17 @@ function createErrorMessage(error: unknown, api: string, provider: string, model
 		usage: DEFAULT_USAGE,
 		stopReason: "error",
 		errorMessage: error instanceof Error ? error.message : String(error),
+		durationMs: performance.now() - startedAt,
 		timestamp: Date.now(),
 	};
 }
 
-function createAbortedMessage(partial: AssistantMessage): AssistantMessage {
+function createAbortedMessage(partial: AssistantMessage, startedAt: number): AssistantMessage {
 	return {
 		...partial,
 		stopReason: "aborted",
 		errorMessage: "Request was aborted",
+		durationMs: performance.now() - startedAt,
 		timestamp: Date.now(),
 	};
 }
@@ -343,10 +351,11 @@ async function streamWithDeltas(
 	maxTokenSize: number,
 	tokensPerSecond: number | undefined,
 	signal: AbortSignal | undefined,
+	startedAt: number,
 ): Promise<void> {
 	const partial: AssistantMessage = { ...message, content: [], stopReason: "pending" };
 	if (signal?.aborted) {
-		const aborted = createAbortedMessage(partial);
+		const aborted = createAbortedMessage(partial, startedAt);
 		stream.push({ type: "error", reason: "aborted", error: aborted });
 		stream.end(aborted);
 		return;
@@ -356,7 +365,7 @@ async function streamWithDeltas(
 
 	for (let index = 0; index < message.content.length; index++) {
 		if (signal?.aborted) {
-			const aborted = createAbortedMessage(partial);
+			const aborted = createAbortedMessage(partial, startedAt);
 			stream.push({ type: "error", reason: "aborted", error: aborted });
 			stream.end(aborted);
 			return;
@@ -370,7 +379,7 @@ async function streamWithDeltas(
 			for (const chunk of splitStringByTokenSize(block.thinking, minTokenSize, maxTokenSize)) {
 				await scheduleChunk(chunk, tokensPerSecond);
 				if (signal?.aborted) {
-					const aborted = createAbortedMessage(partial);
+					const aborted = createAbortedMessage(partial, startedAt);
 					stream.push({ type: "error", reason: "aborted", error: aborted });
 					stream.end(aborted);
 					return;
@@ -393,7 +402,7 @@ async function streamWithDeltas(
 			for (const chunk of splitStringByTokenSize(block.text, minTokenSize, maxTokenSize)) {
 				await scheduleChunk(chunk, tokensPerSecond);
 				if (signal?.aborted) {
-					const aborted = createAbortedMessage(partial);
+					const aborted = createAbortedMessage(partial, startedAt);
 					stream.push({ type: "error", reason: "aborted", error: aborted });
 					stream.end(aborted);
 					return;
@@ -410,7 +419,7 @@ async function streamWithDeltas(
 		for (const chunk of splitStringByTokenSize(JSON.stringify(block.arguments), minTokenSize, maxTokenSize)) {
 			await scheduleChunk(chunk, tokensPerSecond);
 			if (signal?.aborted) {
-				const aborted = createAbortedMessage(partial);
+				const aborted = createAbortedMessage(partial, startedAt);
 				stream.push({ type: "error", reason: "aborted", error: aborted });
 				stream.end(aborted);
 				return;
@@ -424,6 +433,7 @@ async function streamWithDeltas(
 	if (message.stopReason === "pending") {
 		throw new Error("Faux response ended without a stop reason");
 	}
+	message.durationMs = performance.now() - startedAt;
 	if (message.stopReason === "error" || message.stopReason === "aborted") {
 		stream.push({ type: "error", reason: message.stopReason, error: message });
 		stream.end(message);
@@ -508,6 +518,7 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 		state.callCount++;
 
 		queueMicrotask(async () => {
+			const startedAt = performance.now();
 			try {
 				await streamOptions?.onResponse?.({ status: 200, headers: {} }, requestModel);
 				if (!step) {
@@ -516,6 +527,7 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 						api,
 						provider,
 						requestModel.id,
+						startedAt,
 					);
 					message = withUsageEstimate(message, context, streamOptions, promptCache);
 					outer.push({ type: "error", reason: "error", error: message });
@@ -547,14 +559,23 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 						maxTokenSize,
 						tokensPerSecond,
 						streamOptions.signal,
+						startedAt,
 					);
 					return;
 				}
 
 				const message = await resolveResponse(step, context, streamOptions, requestModel);
-				await streamWithDeltas(outer, message, minTokenSize, maxTokenSize, tokensPerSecond, streamOptions?.signal);
+				await streamWithDeltas(
+					outer,
+					message,
+					minTokenSize,
+					maxTokenSize,
+					tokensPerSecond,
+					streamOptions?.signal,
+					startedAt,
+				);
 			} catch (error) {
-				const message = createErrorMessage(error, api, provider, requestModel.id);
+				const message = createErrorMessage(error, api, provider, requestModel.id, startedAt);
 				outer.push({ type: "error", reason: "error", error: message });
 				outer.end(message);
 			}
@@ -575,6 +596,7 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 		state.deferredFetchCount++;
 
 		queueMicrotask(async () => {
+			const startedAt = performance.now();
 			try {
 				await fetchOptions?.onResponse?.({ status: 200, headers: {} }, requestModel);
 				const entry = deferredResponses.get(handle.id);
@@ -597,6 +619,7 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 						maxTokenSize,
 						tokensPerSecond,
 						fetchOptions?.signal,
+						startedAt,
 					);
 					return;
 				}
@@ -611,7 +634,7 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 					try {
 						entry.final = await resolveResponse(entry.step, entry.context, submissionOptions, entry.model);
 					} catch (error) {
-						entry.final = createErrorMessage(error, api, provider, entry.model.id);
+						entry.final = createErrorMessage(error, api, provider, entry.model.id, startedAt);
 					}
 				}
 				await streamWithDeltas(
@@ -621,9 +644,10 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 					maxTokenSize,
 					tokensPerSecond,
 					fetchOptions?.signal,
+					startedAt,
 				);
 			} catch (error) {
-				const message = createErrorMessage(error, api, provider, requestModel.id);
+				const message = createErrorMessage(error, api, provider, requestModel.id, startedAt);
 				outer.push({ type: "error", reason: "error", error: message });
 				outer.end(message);
 			}

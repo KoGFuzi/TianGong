@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import type { Context, JsonValue, Message, ToolResultMessage } from "../src/types.ts";
+import type { AssistantMessage, Context, JsonValue, Message, ToolResultMessage } from "../src/types.ts";
 
 const base = {
 	role: "toolResult" as const,
@@ -53,5 +53,10 @@ describe("message JSON types", () => {
 		expectTypeOf<ToolResultMessage<{ callback: () => void }>>().toEqualTypeOf<never>();
 		expectTypeOf<ToolResultMessage<{ value: unknown }>>().toEqualTypeOf<never>();
 		expectTypeOf<ToolResultMessage<{ value: Date }>>().toEqualTypeOf<never>();
+	});
+
+	it("types durationMs as an optional millisecond count on both message roles", () => {
+		expectTypeOf<AssistantMessage["durationMs"]>().toEqualTypeOf<number | undefined>();
+		expectTypeOf<ToolResultMessage["durationMs"]>().toEqualTypeOf<number | undefined>();
 	});
 });

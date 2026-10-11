@@ -612,6 +612,11 @@ export type ToolResultMessage<TDetails = JsonValue> = IsJsonCompatible<TDetails>
 			usage?: Usage;
 			/** Calls this tool made to other tools. Kept for the session record; not sent to the model. */
 			nestedCalls?: NestedToolCalls;
+			/**
+			 * Elapsed time of the tool execution, in milliseconds, measured with the monotonic
+			 * `performance.now()` clock. Omitted when the producer did not stamp it.
+			 */
+			durationMs?: number;
 			isError: boolean;
 			timestamp: number; // Unix timestamp in milliseconds
 		}

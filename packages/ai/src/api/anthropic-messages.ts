@@ -579,6 +579,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 
 	(async () => {
 		const providerThinkingLevel = model.compat?.supportsMidConvoEffort ? (options?.effort ?? "high") : undefined;
+		const startedAt = performance.now();
 		const output: AssistantMessage = {
 			role: "assistant",
 			content: [],
@@ -883,6 +884,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				});
 			}
 
+			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -893,6 +895,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

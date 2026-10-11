@@ -451,6 +451,9 @@ describe("faux provider", () => {
 			expect(terminal.reason).toBe("error");
 			expect(terminal.error.stopReason).toBe("error");
 			expect(terminal.error.errorMessage).toBe("upstream failed");
+			// Every terminal message carries the request window, measured with the monotonic clock.
+			expect(Number.isFinite(terminal.error.durationMs)).toBe(true);
+			expect(terminal.error.durationMs).toBeGreaterThanOrEqual(0);
 		}
 	});
 
@@ -476,6 +479,50 @@ describe("faux provider", () => {
 			expect(terminal.reason).toBe("aborted");
 			expect(terminal.error.stopReason).toBe("aborted");
 			expect(terminal.error.errorMessage).toBe("Request was aborted");
+			expect(Number.isFinite(terminal.error.durationMs)).toBe(true);
+		}
+	});
+
+	it("measures the request window from the stream start to the terminal event", async () => {
+		const registration = registerFauxProvider({ tokensPerSecond: 200, tokenSize: { min: 4, max: 4 } });
+		registrations.push(registration);
+		registration.setResponses([fauxAssistantMessage("abcdefghijklmnopqrstuvwxyz")]);
+
+		const events = await collectEvents(
+			stream(registration.getModel(), { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] }),
+		);
+
+		const done = events.at(-1);
+		expect(done?.type).toBe("done");
+		if (done?.type === "done") {
+			// Pacing goes through setTimeout, so the window spans at least one timer tick.
+			expect(done.message.durationMs).toBeGreaterThan(0);
+			expect(Number.isFinite(done.message.durationMs)).toBe(true);
+		}
+	});
+
+	it("stamps the abort message created after the signal fires mid-stream", async () => {
+		const registration = registerFauxProvider({ tokensPerSecond: 100, tokenSize: { min: 3, max: 3 } });
+		registrations.push(registration);
+		registration.setResponses([fauxAssistantMessage("abcdefghijklmnopqrstuvwxyz")]);
+
+		const controller = new AbortController();
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of stream(
+			registration.getModel(),
+			{ messages: [{ role: "user", content: "hi", timestamp: Date.now() }] },
+			{ signal: controller.signal },
+		)) {
+			events.push(event);
+			if (event.type === "text_delta") controller.abort();
+		}
+
+		const terminal = events.at(-1);
+		expect(terminal?.type).toBe("error");
+		if (terminal?.type === "error") {
+			expect(terminal.error.stopReason).toBe("aborted");
+			expect(Number.isFinite(terminal.error.durationMs)).toBe(true);
+			expect(terminal.error.durationMs).toBeGreaterThanOrEqual(0);
 		}
 	});
 

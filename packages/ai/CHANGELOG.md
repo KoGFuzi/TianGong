@@ -74,6 +74,13 @@
   `retryProviderRequest` unchanged. Without an active `telemetryContext` both paths pass through
   untouched.
 
+- `AssistantMessage.durationMs` and `ToolResultMessage.durationMs` record how long a request or tool
+  execution took, in milliseconds, measured with the monotonic `performance.now()` clock. Both are
+  optional. Every provider adapter stamps its terminal assistant message — the `done` event and the
+  `error`/`aborted` path alike — and the faux provider stamps all of its terminals, including the
+  abort messages it builds after a signal fires mid-stream. A setup failure that happens before any
+  request gets `durationMs: 0` rather than a fabricated window.
+
 ### Fixed
 
 - The assistant message frame codec no longer swallows message-level fields it does not name.

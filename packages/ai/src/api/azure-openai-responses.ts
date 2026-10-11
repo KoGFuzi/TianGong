@@ -80,6 +80,7 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 	(async () => {
 		const deploymentName = resolveDeploymentName(model, options);
 
+		const startedAt = performance.now();
 		const output: AssistantMessage = {
 			role: "assistant",
 			content: [],
@@ -147,6 +148,7 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 				throw new Error(output.errorMessage || "An unknown error occurred");
 			}
 
+			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -158,6 +160,7 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatAzureOpenAIError(error);
+			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

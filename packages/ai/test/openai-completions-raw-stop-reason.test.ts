@@ -77,4 +77,17 @@ describe("OpenAI completions raw stop reasons", () => {
 		expect(message.rawStopReason).toBe("content_filter");
 		expect(message.errorMessage).toBe("Provider finish_reason: content_filter");
 	});
+
+	it("stamps the elapsed request window on both the success and error terminals", async () => {
+		mockState.chunks = [{ id: "chatcmpl-3", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }];
+		const succeeded = await streamOpenAICompletions(model, context, { apiKey: "test" }).result();
+		expect(Number.isFinite(succeeded.durationMs)).toBe(true);
+		expect(succeeded.durationMs).toBeGreaterThanOrEqual(0);
+
+		mockState.chunks = [{ id: "chatcmpl-4", choices: [{ index: 0, delta: {}, finish_reason: "content_filter" }] }];
+		const failed = await streamOpenAICompletions(model, context, { apiKey: "test" }).result();
+		expect(failed.stopReason).toBe("error");
+		expect(Number.isFinite(failed.durationMs)).toBe(true);
+		expect(failed.durationMs).toBeGreaterThanOrEqual(0);
+	});
 });

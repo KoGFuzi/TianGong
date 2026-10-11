@@ -177,7 +177,7 @@ function appendRewriteDiagnostic(message: AssistantMessage, rewrite: TgMessagesR
 	});
 }
 
-function createEventConverter(model: Model<"tg-messages">) {
+function createEventConverter(model: Model<"tg-messages">, startedAt: number) {
 	const partial: AssistantMessage = {
 		role: "assistant",
 		content: [],
@@ -202,6 +202,7 @@ function createEventConverter(model: Model<"tg-messages">) {
 					partial.providerThinkingLevel = event.providerThinkingLevel;
 				}
 				appendRewriteDiagnostic(partial, event.rewrite);
+				partial.durationMs = performance.now() - startedAt;
 				return { type: "done", reason: event.reason, message: partial };
 			case "error":
 				Object.assign(partial, {
@@ -214,6 +215,7 @@ function createEventConverter(model: Model<"tg-messages">) {
 					partial.providerThinkingLevel = event.providerThinkingLevel;
 				}
 				appendRewriteDiagnostic(partial, event.rewrite);
+				partial.durationMs = performance.now() - startedAt;
 				return { type: "error", reason: event.reason, error: partial };
 			case "start":
 				break;
@@ -320,7 +322,12 @@ function parseTgMessagesEvent(raw: string): TgMessagesEvent | undefined {
 	return data && data !== "[DONE]" ? (JSON.parse(data) as TgMessagesEvent) : undefined;
 }
 
-function createErrorEvent(model: Model<"tg-messages">, error: unknown, aborted: boolean): AssistantMessageEvent {
+function createErrorEvent(
+	model: Model<"tg-messages">,
+	error: unknown,
+	aborted: boolean,
+	startedAt: number,
+): AssistantMessageEvent {
 	const reason = aborted ? "aborted" : "error";
 	const assistantMessage: AssistantMessage = {
 		role: "assistant",
@@ -331,6 +338,7 @@ function createErrorEvent(model: Model<"tg-messages">, error: unknown, aborted: 
 		usage: createEmptyUsage(),
 		stopReason: reason,
 		errorMessage: error instanceof Error ? error.message : String(error),
+		durationMs: performance.now() - startedAt,
 		timestamp: Date.now(),
 	};
 
@@ -358,7 +366,8 @@ export const stream: StreamFunction<"tg-messages", TgMessagesOptions> = (
 	options?: TgMessagesOptions,
 ): AssistantMessageEventStream => {
 	const eventStream = new AssistantMessageEventStream();
-	const convertEvent = createEventConverter(model);
+	const startedAt = performance.now();
+	const convertEvent = createEventConverter(model, startedAt);
 
 	void (async () => {
 		try {
@@ -422,7 +431,7 @@ export const stream: StreamFunction<"tg-messages", TgMessagesOptions> = (
 
 			throw new Error(`${model.provider} stream ended without a terminal event`);
 		} catch (error) {
-			eventStream.push(createErrorEvent(model, error, options?.signal?.aborted ?? false));
+			eventStream.push(createErrorEvent(model, error, options?.signal?.aborted ?? false, startedAt));
 		}
 	})();
 

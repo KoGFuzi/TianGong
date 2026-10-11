@@ -18,6 +18,8 @@ function createSetupErrorMessage(model: Model<Api>, error: unknown): AssistantMe
 		},
 		stopReason: "error",
 		errorMessage: error instanceof Error ? error.message : String(error),
+		// Setup failures happen before any provider request, so there is no request window to measure.
+		durationMs: 0,
 		timestamp: Date.now(),
 	};
 }

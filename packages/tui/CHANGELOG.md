@@ -15,6 +15,13 @@
   the alt screen consumed `Home`/`End` first, so the editor could never reach its own line start or end. A host
   that binds `tui.altScreen.top` / `tui.altScreen.bottom` keeps its own keys.
 
+### Added
+
+- `Box.setPaddingX(paddingX)` and `Text.setPaddingX(paddingX)` change horizontal padding at runtime. Both
+  components took it only at construction, so a host that wanted different margins had to rebuild the
+  component and lose its render cache and subtree state. The new setters drop the render cache with the
+  padding.
+
 ### Changed: environment variables
 
 Every variable this package reads is now `TG_*`: `TG_TUI_WRITE_LOG`, `TG_TUI_DEBUG`,

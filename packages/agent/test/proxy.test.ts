@@ -1,5 +1,5 @@
 import type { AssistantMessage, AssistantMessageEvent, Model } from "@OnePanda-TgSec/tg-ai";
-import { normalizeContext } from "@OnePanda-TgSec/tg-ai";
+import { AssistantMessageEventStream, normalizeContext } from "@OnePanda-TgSec/tg-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type ProxyAssistantMessageEvent, streamProxy } from "../src/proxy.ts";
 
@@ -62,6 +62,9 @@ describe("streamProxy", () => {
 		for await (const event of stream) events.push(event);
 		const result = await stream.result();
 		const endEvent = events.find((event) => event.type === "toolcall_end");
+
+		// The proxy stream is the public tg-ai stream type, not a private copy of it.
+		expect(stream).toBeInstanceOf(AssistantMessageEventStream);
 
 		expect(endEvent).toMatchObject({
 			type: "toolcall_end",

@@ -746,7 +746,7 @@ describe("Models runtime", () => {
 		expect(await credentials.read("p1")).toEqual({ type: "api_key", key: "first" });
 	});
 
-	it("passes cancellation to OAuth refresh and preserves the previous credential", async () => {
+	it("passes cancellation to OAuth refresh and persists the credential it produced", async () => {
 		const credentials = new InMemoryCredentialStore();
 		const previous: OAuthCredential = { type: "oauth", access: "old", refresh: "old-refresh", expires: 0 };
 		await credentials.modify("p1", async () => previous);
@@ -785,7 +785,11 @@ describe("Models runtime", () => {
 		expect(receivedSignal?.reason).toBe(controller.signal.reason);
 		finishRefresh?.({ ...previous, access: "new", expires: Date.now() + 60_000 });
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(await credentials.read("p1")).toEqual(previous);
+		// The refresh already rotated the token server-side before the caller aborted, so the write
+		// must survive the cancellation; discarding it would leave the store holding a token the
+		// provider has invalidated (see docs/upstream-1.1.0-port-plan.md B1-1).
+		const persisted = await credentials.read("p1");
+		expect(persisted).toMatchObject({ type: "oauth", access: "new", refresh: "old-refresh" });
 	});
 
 	it("resolves auth: stored credential owns the provider, ambient only when nothing stored", async () => {

@@ -89,6 +89,14 @@
   API-equivalent implied pricing for the `kimi-coding` subscription model `k3`.
   See https://platform.moonshot.ai/docs/pricing/chat.
 
+- A credential `modify` that has already produced a value is now persisted even when the caller
+  aborted while it was running. `FileCredentialStore` and `InMemoryCredentialStore` used to check the
+  signal *after* `fn` returned and *before* the write, so a cancelled OAuth refresh discarded the
+  rotation the provider had already performed server-side, and the next request failed with
+  `invalid_grant` against the previous refresh token. The abort is now honored before the mutation
+  starts and never after `fn` returns; the caller still observes the cancellation through
+  `raceWithAbortSignal`. Ported from upstream pi 1.0.3.
+
 ## [2.0.1] - 2026-10-03
 
 ### Added

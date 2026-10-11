@@ -46,8 +46,10 @@ export class InMemoryCredentialStore implements CredentialStore {
 			providerId,
 			async () => {
 				const current = this.credentials.get(providerId);
-				const next = await fn(current);
+				// Same ordering as FileCredentialStore: an abort stops a mutation from starting, but a
+				// credential `fn` already produced is kept, because the token it replaces may be gone.
 				options?.signal?.throwIfAborted();
+				const next = await fn(current);
 				if (next !== undefined) this.credentials.set(providerId, next);
 				return next ?? current;
 			},

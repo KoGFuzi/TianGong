@@ -219,12 +219,14 @@ export class FileCredentialStore implements CredentialStore {
 			// rotated while this request was in flight.
 			const record = await this.#readRecord();
 			const current = asCredential(record[providerId]);
+			// Honor an abort before the mutation runs, so a cancelled request never calls the provider.
+			// Past this point the abort is deliberately not consulted: a refresh that already returned
+			// has rotated the token server-side, and that rotation has to land on disk even when the
+			// caller cancelled meanwhile, because the previous refresh token may already be invalid.
+			signal.throwIfAborted();
 			const next = await fn(current);
 			if (next === undefined) return current;
-			signal.throwIfAborted();
 			record[providerId] = next;
-			// Write before honoring an abort past this point. A rotated refresh token must land on
-			// disk even if the request is cancelled, because the previous one may already be invalid.
 			await this.#writeRecord(record);
 			return next;
 		});

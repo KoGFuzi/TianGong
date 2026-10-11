@@ -247,6 +247,55 @@ describe("FileCredentialStore", () => {
 		expect(JSON.parse(readFileSync(path, "utf8")).anthropic).toEqual(oauth("access-1"));
 	});
 
+	it("persists a credential fn produced before the caller aborted", async () => {
+		// Regression for the upstream 1.0.3 OAuth refresh race (see docs/upstream-1.1.0-port-plan.md
+		// B1-1): a refresh that already returned has rotated the token server-side, so the write must
+		// survive the caller's abort even though the caller itself observes the cancellation.
+		const { store } = credentialFile();
+		await store.modify("anthropic", async () => oauth("old"));
+
+		const controller = new AbortController();
+		const refresh = store.modify(
+			"anthropic",
+			async () => {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				return oauth("rotated");
+			},
+			{ signal: controller.signal },
+		);
+		setTimeout(() => controller.abort(), 5);
+
+		await expect(refresh).rejects.toThrow(/abort/i);
+
+		// A later modify on the same provider is queued behind the cancelled refresh, so by the time
+		// it runs the rotated credential is already on disk. This makes the assertion deterministic
+		// instead of sleeping for the write.
+		const observed = await store.modify("anthropic", async (current) => current);
+		expect(observed).toEqual(oauth("rotated"));
+		expect(await store.read("anthropic")).toEqual(oauth("rotated"));
+	});
+
+	it("does not call fn when the caller is already aborted", async () => {
+		const { store } = credentialFile();
+		let calls = 0;
+		const controller = new AbortController();
+		controller.abort();
+
+		await expect(
+			store.modify(
+				"anthropic",
+				async () => {
+					calls += 1;
+					return oauth("never");
+				},
+				{ signal: controller.signal },
+			),
+		).rejects.toThrow(/abort/i);
+
+		expect(calls).toBe(0);
+		expect(await store.read("anthropic")).toBeUndefined();
+	});
+
 	it("leaves no temporary file behind after a successful write", async () => {
 		const { root, store } = credentialFile();
 		await store.modify("anthropic", async () => oauth("access-1"));

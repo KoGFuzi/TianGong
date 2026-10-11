@@ -2,7 +2,8 @@
 
 > 生成于 2026-10-11。本文件是 `tg-ai` 与 `tg-agent-core` 两包从上游 pi agent 1.0.1 升级到 1.1.0 的
 > **唯一 cherry-pick 与回滚基线**，取代 [`upstream-1.1.0-port-review.md`](upstream-1.1.0-port-review.md)
-> 中这两包的「推荐」列（该表对 `tg-gibraltar` / `tg-tui` 仍然有效）。
+> 中这两包的「推荐」列（该表对 `tg-tui` 仍然有效；`tg-gibraltar` 见
+> [`upstream-1.1.0-port-plan-gibraltar.md`](upstream-1.1.0-port-plan-gibraltar.md)）。
 >
 > 每个条目标注三项：**来源版本**（上游 changelog 版本）、**上游类型**（Added / Fixed / Changed / Breaking）、
 > **本地兼容性结论**（在本仓库落地是否 breaking、是否触及持久化契约、测试面大小）。所有 file:line 均按
@@ -545,12 +546,15 @@ Foundry Chat Completions 为新增 api 模块，纯增量。
 
 `tg.*` kind 字符串与 SQLite schema 在全部条目中**零变化**；gibraltar / tui 的移植（含
 `Storage.order`/`ScanOrder`、`TaskRuntime.context()`、`startedAt`/`endedAt`、`Terminal.setProgramStatus`）
-不在本档案范围，仍以审核表为准。
+不在本档案范围，gibraltar 见 [`upstream-1.1.0-port-plan-gibraltar.md`](upstream-1.1.0-port-plan-gibraltar.md)
+（已定：`ScanOrder` 加入，PowerShell 不暂缓），tui 仍以审核表为准。
 
 ## 10. 与既有文档的关系
 
-- [`upstream-1.1.0-port-review.md`](upstream-1.1.0-port-review.md)：调研来源与 gibraltar/tui 依据；
+- [`upstream-1.1.0-port-review.md`](upstream-1.1.0-port-review.md)：调研来源与 tui 依据；
   其 tg-ai / tg-agent-core「推荐」列已被本基线取代。
+- [`upstream-1.1.0-port-plan-gibraltar.md`](upstream-1.1.0-port-plan-gibraltar.md)：`tg-gibraltar` 基线；
+  其 B1-2（工具结果 `durationMs`）依赖本档案 B2-2 先行落地。
 - [`p1-3-telemetry-wiring.md`](p1-3-telemetry-wiring.md)：`AssistantMessageEventStream` 契约
   （`settled()` 不 reject、`result()` 给终态消息）仍是流类型语义的权威描述，本基线不改动该契约。
 - [`provenance.md`](provenance.md)：vendored 包（codemode/mcp）1.1.0 re-sync 已完成，不在本档案范围。

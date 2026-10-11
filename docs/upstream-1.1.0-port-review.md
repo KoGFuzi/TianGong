@@ -4,9 +4,13 @@
 > 本表覆盖上游 **1.0.2 → 1.1.0** 增量。数据来源：上游各包 `CHANGELOG.md` 提取 + `pi-1.1.0`
 > 源码树逐包核对。配套文档见 [`provenance.md`](provenance.md)。
 >
-> 状态：**tg-ai / tg-agent-core 部分已被工程基线取代（2026-10-11）**。两包的批次划分、cherry-pick 顺序与
-> 回滚矩阵以 [`upstream-1.1.0-port-plan.md`](upstream-1.1.0-port-plan.md) 为准；`tg-gibraltar` / `tg-tui`
-> 各行仍以本表为待审依据，表内「推荐」一栏是建议而非定论，逐条过审时可直接改写。
+> 状态：**tg-ai / tg-agent-core / tg-gibraltar 三包已被工程基线取代（2026-10-11）**。前两包的批次划分、
+> cherry-pick 顺序与回滚矩阵以 [`upstream-1.1.0-port-plan.md`](upstream-1.1.0-port-plan.md) 为准；
+> `tg-gibraltar` 以 [`upstream-1.1.0-port-plan-gibraltar.md`](upstream-1.1.0-port-plan-gibraltar.md) 为准，
+> 其中两行相对本表升级为决策：`createPowerShellTool` **不暂缓**（该基线 B3-5）、查询 `order`/`ScanOrder`
+> **加入**以支持「最新任务优先」分页（该基线 B2-1）；另勘误一处：本表第 64 行「需叠加一版迁移」不成立，
+> 上游 1.1.0 未新增任何 SQLite 列。`tg-tui` 各行仍以本表为待审依据，表内「推荐」一栏是建议而非定论，
+> 逐条过审时可直接改写。
 > 勘误：表 1 第 38 行的 `AssistantMessageEventStream` 强制类型已随 V1 导入落地，不再是待移植项；
 > 第 94 行的两处 breaking 相应只剩 `Terminal.setProgramStatus` 一处。
 

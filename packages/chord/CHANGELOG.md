@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Adopted the upstream pi 1.3.0 chord wholesale: the facet/service runtime
+  (defineService, createFacetHost, the bundler and bundle loaders) is replaced
+  by the typed host runtime (contracts, createHost/defineFacet/defineRegistry,
+  memory/IPC/WebSocket links, hot reload). The replicated-state surface kept by
+  house consumers is unchanged: the root export still carries replicatedState,
+  copyJson, isJsonValue, Context, JsonValue, JsonRepresentation, and Draft, and
+  ./context and ./delta are unchanged.
+- The ./bundler export is gone; ./node now exports the child host manager and
+  the facet module loader. New ./output export (OutputBuffer, Progress,
+  boundOutput, sanitizeOutput, characterEnd, utf8ByteLength).
+- Depends on typebox instead of esbuild.
+
+## [Unreleased]
+
 ### Changed
 
 - Rebranded from `@earendil-works/chord` to `@OnePanda-TgSec/chord`. The package was adopted from

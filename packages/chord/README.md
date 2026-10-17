@@ -1,181 +1,148 @@
 # @OnePanda-TgSec/chord
 
-应用组合运行时：服务、复制状态、RPC 与插件。
+Chord builds applications out of **objects** that live in several processes (a server, workers, browser tabs) and can be **hot reloaded** while they run.
 
-Chord 是独立的。它不依赖本工作区里的任何包，运行时也只依赖自己的 bundler，因此可以独立发布。
+- An **object** is state plus code at an address. It is created on demand and lives while someone references it.
+- Everyone gets a **reference**, never the object. References work the same locally and across processes, and survive reloads.
+- Every object knows its **principal**: an owner and a guest get different objects, with different methods.
+- **State** is observable JSON. Remote viewers get a snapshot followed by deltas.
+- **Hot reload** swaps code while it runs. Work in flight finishes on the code it started with, state is kept, and incompatible changes migrate at a safe point.
 
-- **服务**是带声明身份的强类型接口。provider 实现一个；consumer 按 id 与地址解析一个。服务可
-  以是本地的、经由传输层远程的，或两者兼有。
-- **复制状态**是一份带有序副本集合的 JSON 文档。每次编辑都会变成一个操作批次，任何副本应用后
-  都能到达相同的值。这正是本地对象与远程对等方在没有谁是权威、且彼此可见的前提下收敛的原因。
-- **Facet** 是打包单元：一个具名的服务、状态与配置的组合，由宿主在运行时加载。
+Contracts are runtime values described with [TypeBox](https://github.com/sinclairzx81/typebox) schemas. Hosts exchange JSON frames over links: in memory, a Node IPC channel, or a WebSocket.
 
-## 目录
+## Entry points
 
-- [安装](#安装)
-- [快速开始](#快速开始)
-- [服务](#服务)
-- [复制状态](#复制状态)
-- [Facet](#facet)
-- [远程服务](#远程服务)
-- [Context](#context)
-- [Delta 引擎](#delta-引擎)
-- [入口](#入口)
-- [开发](#开发)
-- [来源](#来源)
-- [License](#license)
+| Import | Contents | Runs in |
+|--------|----------|---------|
+| `@OnePanda-TgSec/chord` | Contracts (`local`, `remote`, `method`, `opaque`), declarations (through the factory's `self`: `state`, `derive`, `resource`, `on`, `task`), hosts (`createHost`, `defineFacet`, `defineRegistry`), links (`memoryLinkPair`, `ipcLink`, `webSocketLink`, `acceptWebSockets`), errors (`ChordError`, `isChordError`, `forbidden`, `invalid`). Also the shared base: `Context`, `JsonValue`, `JsonRepresentation`, `Draft`, `copyJson`, `isJsonValue`, and `replicatedState` with its types. | Node and browsers |
+| `@OnePanda-TgSec/chord/node` | Child host processes: `createHostManager`, `forkDriver`, `childControl`, `processLock`; the facet module loader `nodeLoader`. | Node |
+| `@OnePanda-TgSec/chord/context` | Explicit cancellation and invocation values: `BACKGROUND_CONTEXT`, `withCancel`, `withAbortSignal`, `withoutAbortSignal`, `withContextValue`, `awaitWithContext`. | Node and browsers |
+| `@OnePanda-TgSec/chord/delta` | The transactional JSON tracker, structural diff, immutable apply, and the wire encoder/decoder for operation batches. | Node and browsers |
+| `@OnePanda-TgSec/chord/output` | Bounded output streams and paced progress: `OutputBuffer` (head or tail window of a stream, `OutputLimits`, `OutputSkip`), `boundOutput`, `sanitizeOutput`, `utf8ByteLength`, and `Progress` (adaptive commits of a changing value). | Node and browsers |
 
-## 安装
+## Quick start
 
-```bash
-bun add @OnePanda-TgSec/chord
-```
+```ts
+import { Type } from "typebox";
+import { createHost, hostNamed, method, remote } from "@OnePanda-TgSec/chord";
 
-## 快速开始
-
-```typescript
-import { BACKGROUND_CONTEXT } from "@OnePanda-TgSec/chord/context";
-import { createFacetHost, defineFacet, defineService, replicatedState } from "@OnePanda-TgSec/chord";
-
-interface Counter {
-	increment(): Promise<number>;
-	read(): number;
-}
-
-const CounterService = defineService<Counter>("app.counter", { local: true });
-
-const counterFacet = defineFacet({
-	id: "app.counter",
-	services: [CounterService],
-	state: replicatedState({ total: 0 }),
-	async setup({ services, state }) {
-		services.provide(CounterService, {
-			increment: async () => ++state.value.total,
-			read: () => state.value.total,
-		});
+// contract.ts: shared by provider and consumers
+export const Counter = remote("demo.counter", {
+	version: 1,
+	input: Type.Object({ name: Type.String() }),
+	host: hostNamed("server"), // where its objects live; callers never name a host
+	variants: {
+		default: {
+			state: { count: Type.Number() },
+			methods: { increment: method(Type.Object({ by: Type.Number() })) },
+		},
 	},
 });
 
-const host = await createFacetHost({ facets: [counterFacet] });
-const counter = host.services.resolve(CounterService, BACKGROUND_CONTEXT);
-await counter.increment();
-console.log(counter.read());
+const host = createHost({ name: "server", self: { kind: "server" } });
+
+host.serve(Counter, ({ name }, _principal, self) => {
+	const count = self.state("count", Type.Number(), 0);
+	return {
+		variant: "default",
+		count,
+		increment: async ({ by }, ctx) => {
+			count.change(ctx, (n) => n + by);
+		},
+	};
+});
+
+await host.root(async (ctx) => {
+	const clicks = await ctx.get(Counter, { name: "clicks" }); // ready, with its state; released when this root ends
+	clicks.count.subscribe((n) => console.log("count", n));
+	await clicks.increment({ by: 2 }, ctx); // logs 0, then 2
+});
 ```
 
-## 服务
+## Documentation
 
-```typescript
-const Weather = defineService<WeatherApi>("app.weather");                 // 仅本地
-const Grid = defineService<GridApi>("app.grid", { mode: "remote" });      // 经传输层解析
-```
+- [Tutorial](docs/tutorial.md): a shared todo list, built up section by section. Every example runs as `test/tutorial.test.ts`.
+- [Usage guide](docs/guide.md): API reference for contracts, objects, state, roots, lifetime, plugins, hot reload, hosts, and links.
+- [Specification](docs/spec.md): compatibility, lifetime, and reload semantics, plus known limitations and implementation decisions.
+- [Delta guide](src/delta/README.md): ownership, lifecycle, operation, and replica contracts of `@OnePanda-TgSec/chord/delta`.
 
-`defineService` 返回一个 `Service<T>`——一个类型化的 id，而不是类。两端就 id 与接口达成一致即
-可；彼此都不需要对方的引用。`local: true` 是"无法远程触达"服务的简写。
+## Tracking JSON deltas
 
-## 复制状态
+Import the standalone transactional tracker from `@OnePanda-TgSec/chord/delta`:
 
-`replicatedState(initial)` 返回一个由 facet 持有的可变句柄，以及任何人都可以订阅的只读
-`ReplicatedState`。
+```ts
+import { applyImmutable, track } from "@OnePanda-TgSec/chord/delta";
 
-这份契约是操作层面的，不是装饰性的：一次编辑经过 `Change`，`Change` 被 `prepare()` 成不可变的
-`{ base, value, ops }`，副本应用这些 ops。没有人去 patch 一个共享对象。如果两个副本并发编辑，按
-既定顺序应用双方的 op 集合会让两者收敛到相同的值——这就是全部意义所在。
-
-`replicatedState` 是 JSON。`isJsonValue()` 与 `copyJson()` 守卫这条边界。
-
-操作格式、重放规则与变更归属表见 [`src/delta/README.md`](src/delta/README.md)。
-
-## Facet
-
-facet 是一个具名的、自包含的单元：服务、状态，以及一个把它们接线起来的可选 `setup`。宿主通过
-`FacetLoader` 加载 facet，因此 facet 集合可以在宿主运行期间变化。
-
-```typescript
-const loader = combineFacetLoaders([
-	createStaticFacetLoader([coreFacet, counterFacet]),
-	pluginLoader,
-]);
-const host = await createFacetHost({ facets: [], loader });
-```
-
-## 远程服务
-
-远程服务就是经由传输层看到的本地服务。`createRemoteServiceBinding()` 描述一个，
-`createRemoteServiceEndpoint()` 暴露一个 provider，`RemoteServiceProvider` 实现传输层一侧。
-
-失败是类型化的：`RemoteServiceError`，带 `REMOTE_SERVICE_ERROR_CODES` 中的 code，用
-`isRemoteServiceErrorCode()` 检查。一次失败的远程调用不是无法区分的通用错误。
-
-线上编解码位于 `services/wire.ts`，以编/解码成对导出（`parseServiceCatalogue`、
-`parseServiceCall`、`parseServiceSubscriptionSnapshot` 及对应的 wire 侧函数），因此用任何语言写
-一个传输层都很容易。
-
-## Context
-
-每个异步调用都携带取消语义的 `Context`。
-
-```typescript
-import { BACKGROUND_CONTEXT, withAbortSignal, withCancel, awaitWithContext } from "@OnePanda-TgSec/chord/context";
-
-const { context, cancel } = withCancel(BACKGROUND_CONTEXT);
-const value = await awaitWithContext(fetchSomething(context), context);
-cancel();
-```
-
-`BACKGROUND_CONTEXT` 永不取消。`TODO_CONTEXT` 是"调用点应该带 context、但还没有"的标记。
-`createContextKey` 与 `withContextValue` 附加请求级取值。
-
-## Delta 引擎
-
-复制状态背后的 diff/apply 引擎是一个独立入口：
-
-```typescript
-import { apply, applyImmutable, diffRevisions, track } from "@OnePanda-TgSec/chord/delta";
-
-const tracker = track({ output: "" });
+const tracker = track({ output: "", count: 0 });
 const change = tracker.beginChange();
 change.state.output += "done\n";
+change.state.count += 1;
 const prepared = change.prepare();
-const ops = diffRevisions(prepared.base, prepared.value);
+
 tracker.adopt(prepared);
+const replica = applyImmutable(prepared.base, prepared.ops);
 ```
 
-优先用 `applyImmutable` 而不是 `apply`：它永远不会把可变副本交给调用方——所有权 bug 是被防住
-的，不是靠文档约束的。
+`tracker.value` is always the latest adopted immutable revision. Preparation does
+not change authority; adoption validates the preparation and swaps the root pointer.
+Assigned containers are copied by value and unchanged subtrees may be shared between
+revisions.
 
-## 入口
+The tracker uses trusted immutable ownership rather than defensive copying or
+freezing. `track(initial)`, `prepareReplace(value)`, `replicatedState(initial)`, and
+`replace(context, value)` take ownership of alias-free strict-JSON roots without
+walking them. Callers must not mutate transferred or published data. Values placed
+through drafts are already copied, so that walk also rejects non-strict JSON before
+the draft changes. Published values are not frozen. In-process consumers may share
+their containers with the provider; mutating a consumed value violates the contract
+and can corrupt authority. Clone or serialize at any mutable trust boundary.
 
-| 导入 | 内容 |
-| --- | --- |
-| `@OnePanda-TgSec/chord` | 服务、复制状态、facet、远程绑定类型。无副作用。 |
-| `@OnePanda-TgSec/chord/context` | `Context`、取消辅助、`BACKGROUND_CONTEXT`。 |
-| `@OnePanda-TgSec/chord/delta` | `track`、`diffRevisions`、`apply`、`applyImmutable`、路径与 op 校验。 |
-| `@OnePanda-TgSec/chord/bundler` | 把 facet 包打包成内容寻址的产物。 |
-| `@OnePanda-TgSec/chord/node` | Node 侧 loader：bundle loader、artifact loader、manifest reader。 |
+Replicated state provides the same model through a callback. `replicatedState` is a
+standalone observable value, independent of hosts; Durable uses it for document,
+view, and task-graph states:
 
-## 开发
+```ts
+import { replicatedState } from "@OnePanda-TgSec/chord";
 
-从 monorepo 根目录：
-
-```bash
-bun run check             # house standard、格式、类型
-bun run test              # 每个包套件
-bun run test packages/chord
+const initial = { output: "", count: 0 };
+const status = replicatedState(initial); // transfers ownership of initial
+status.change(context, (draft) => {
+	draft.output += "done\n";
+	draft.count += 1;
+});
 ```
 
-Delta 基准：
+A successful `change()` publishes exactly one atomic revision. If its callback
+throws, the original value and sequence remain unchanged. Draft references become
+unusable when the callback returns. The tracker emits string append and
+front-truncate operations, array splices and permutations, sets, and deletes; large
+edit sets may fold into a complete replacement.
 
-```bash
-cd packages/chord && bunx vitest bench
-```
+`replicatedState(source, { onError })` instead attaches a publication-only state to
+an authoritative revision source (`ReplicatedStateSource`): it captures a snapshot,
+then publishes every committed frame in cursor order.
 
-## 来源
+### Public state subscriptions
 
-从 [pi agent](https://github.com/earendil-works/pi) 项目以 `@earendil-works/chord` 身份采用，改牌
-到 `@OnePanda-TgSec`。模块无增删重组，公开 API 不变。包名保持 `chord`、不带 `tg-` 前缀：这个前缀
-标记端到端自有的包，而本包是整体采用进来的。见工作区根目录的
-[`docs/provenance.md`](../../docs/provenance.md)。
+`state.subscribe(async (value, context, delivery) => { ... })` serializes callbacks
+independently for each subscription. Hydration starts immediately when a value is
+available, and its returned promise must settle before updates start. Synchronous
+callbacks still run synchronously. Read the captured `value` inside an asynchronous
+callback: `state.value` may already refer to a later revision.
 
-## License
+Each subscription retains at most 100 pending complete-value deliveries, excluding
+the running callback. On overflow, only the newest pending value, context, and
+delivery metadata are retained; a not-yet-started initial hydration is preserved.
+Thus public delivery sequences may skip. This is a frame-count policy, not a byte
+limit.
 
-MIT
+The returned unsubscribe function immediately discards pending work and prevents
+new callbacks. It neither aborts nor waits for the running callback. Synchronous
+throws and promise rejections are observed, reported, and do not stop other
+subscriptions or subsequent callbacks. Attached sources use their `onError`
+handler; mutable states (and attached sources without a handler) report failures
+by throwing in a microtask. Unsubscribing does not hide a later rejection from the
+running callback.
+
+Cells of Chord objects and their remote readables have their own subscription
+model; see [State](docs/guide.md#state) in the usage guide.

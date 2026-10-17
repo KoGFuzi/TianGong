@@ -1,6 +1,6 @@
+import type { ReplicatedStateDelivery } from "@OnePanda-TgSec/chord";
 import { defineDoc, defineDocFamily } from "@OnePanda-TgSec/tg-gibraltar";
 import { describe, expect, it } from "vitest";
-import { getReplicatedStateInternals } from "../../chord/src/services/state-internals.ts";
 import { context, createConversation, documentChanges, flush, openTestSession } from "./session-support.ts";
 
 type State = { value: number; retained: { label: string } };
@@ -81,21 +81,21 @@ describe("Session document states", () => {
 		second.dispose();
 	});
 
-	it("shares exact committed value and operation references with Chord", async () => {
+	it("shares exact committed value references with Chord and delivers committed updates", async () => {
 		const { session, publications } = await createState();
 		const state = (await session.documentState(StateDoc, context))!;
-		let receivedOps: unknown;
-		getReplicatedStateInternals(state)!.subscribe((ops) => {
-			receivedOps = ops;
-		});
+		const deliveries: ReplicatedStateDelivery[] = [];
+		state.subscribe((_value, _context, delivery) => deliveries.push(delivery));
 		await session.commit(async (tx) => {
 			(await tx.doc(StateDoc)).value = 4;
 		}, context);
 		await flush();
 		const published = documentChanges(publications.at(-1)!)[0]!;
 		expect(state.value).toBe(published.value);
-		expect(receivedOps).toBe(published.ops);
+		// The committed operations are published as content; the immutable pipeline never feeds them to deliveries.
+		expect(published.ops).toEqual([["s", ["value"], 4]]);
 		expect(state.value?.retained).toBe((await session.snapshot(StateDoc, context))!.retained);
+		expect(deliveries.at(-1)).toEqual({ kind: "update", sequence: 1 });
 		state.dispose();
 	});
 
@@ -114,19 +114,18 @@ describe("Session document states", () => {
 	});
 
 	it("publishes null retirement and never follows a replacement incarnation", async () => {
-		const { session } = await createState();
+		const { session, publications } = await createState();
 		const oldState = (await session.documentState(StateDoc, context))!;
-		let retirementOps: unknown;
-		getReplicatedStateInternals(oldState)!.subscribe((ops) => {
-			retirementOps = ops;
-		});
 		await session.commit(async (tx) => {
 			await tx.retireDoc(StateDoc);
 			(await tx.doc(StateDoc)).value = 10;
 		}, context);
 		await flush();
+		// Retirement is published as a null value without operations; the value-carried retirement is the identifiable entry.
+		const retirement = documentChanges(publications.at(-1)!).find((change) => change.value === null)!;
+		expect(retirement.value).toBeNull();
+		expect(retirement.ops).toEqual([]);
 		expect(oldState.value).toBeNull();
-		expect(retirementOps).toEqual([["r", null]]);
 
 		const replacement = (await session.documentState(StateDoc, context))!;
 		expect(replacement.value?.value).toBe(10);

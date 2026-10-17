@@ -6,9 +6,9 @@
 		"moduleResolution": "NodeNext",
 		"paths": {
 			"@OnePanda-TgSec/chord": ["./packages/chord/src/index.ts"],
-			"@OnePanda-TgSec/chord/bundler": ["./packages/chord/src/bundler.ts"],
 			"@OnePanda-TgSec/chord/context": ["./packages/chord/src/context/index.ts"],
 			"@OnePanda-TgSec/chord/delta": ["./packages/chord/src/delta/index.ts"],
+			"@OnePanda-TgSec/chord/output": ["./packages/chord/src/output.ts"],
 			"@OnePanda-TgSec/chord/node": ["./packages/chord/src/node.ts"],
 			"@OnePanda-TgSec/tg-telemetry": ["./packages/telemetry/src/index.ts"],
 			"@OnePanda-TgSec/tg-telemetry/testing": ["./packages/telemetry/src/testing/index.ts"],

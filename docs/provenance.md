@@ -17,8 +17,8 @@ check:house-standard` asserts against that record, so the two cannot drift apart
 | `packages/ai` | `@OnePanda-TgSec/tg-ai` | pi agent, adopted and rebranded | House |
 | `packages/gibraltar` | `@OnePanda-TgSec/tg-gibraltar` | pi agent, adopted and rebranded | House |
 | `packages/agent` | `@OnePanda-TgSec/tg-agent-core` | pi agent, adopted and rebranded | House |
-| `packages/codemode` | `@earendil-works/pi-codemode` | **pi agent, migrated verbatim** | **Vendored, frozen** |
-| `packages/mcp` | `@earendil-works/pi-mcp` | **pi agent, migrated verbatim** | **Vendored, frozen** |
+| `packages/codemode` | `@earendil-works/pi-codemode` | **pi agent 1.1.0, migrated verbatim** | **Vendored, frozen** |
+| `packages/mcp` | `@earendil-works/pi-mcp` | **pi agent 1.1.0, migrated verbatim** | **Vendored, frozen** |
 
 Upstream project for every row above: **[pi agent](https://github.com/earendil-works/pi)**
 (`earendil-works/pi`), MIT licensed, authored upstream as "Earendil Works".
@@ -57,7 +57,10 @@ What *is* ours is the workspace that hosts them: they are built by `bun run buil
   `bun run check:house-standard` fails the build on any others.
 - Vendored packages never import a house package. They cannot know about us, and a dependency in
   that direction would make the freeze unreviewable.
-- House packages depend on them through a caret range pinned to the adopted version (`^1.0.1`).
+- House code reaches them by their **upstream** specifiers, resolved through the root `tsconfig.json`
+  path map; no package manifest declares them as a dependency.
+- The one exception to the byte-for-byte freeze is a locally pinned `shx` devDependency, recorded
+  under [Re-syncing a vendored package](#re-syncing-a-vendored-package) below.
 
 ### `@earendil-works/pi-codemode` — `packages/codemode`
 
@@ -65,10 +68,11 @@ What *is* ours is the workspace that hosts them: they are built by `bun run buil
 | --- | --- |
 | Upstream package | `@earendil-works/pi-codemode` |
 | Upstream path | `packages/codemode` in `earendil-works/pi` |
-| Upstream version adopted | `1.0.1` |
+| Upstream version adopted | `1.1.0` |
 | Upstream author | Earendil Works |
 | Upstream license | MIT |
 | Adopted into TianGong | 2026-10-04 |
+| Re-synced | 2026-10-10 (from `1.0.1`) |
 | Role in this repo | QuickJS/WASI sandbox whose only capability is calling injected tools |
 
 What it provides: a sandboxed JavaScript execution runtime (`quickjs-wasi`) plus the type
@@ -86,6 +90,7 @@ packages/codemode/CHANGELOG.md
 packages/codemode/src/{index,types,source,declarations,identifier,wasm}.ts
 packages/codemode/src/runtime/{host,protocol,worker,prelude-source}.ts
 packages/codemode/test/{declarations,sandbox,source}.test.ts
+packages/codemode/test/fixtures/raw-worker.ts
 ```
 
 Notes:
@@ -102,10 +107,11 @@ Notes:
 | --- | --- |
 | Upstream package | `@earendil-works/pi-mcp` |
 | Upstream path | `packages/mcp` in `earendil-works/pi` |
-| Upstream version adopted | `1.0.1` |
+| Upstream version adopted | `1.1.0` |
 | Upstream author | Earendil Works |
 | Upstream license | MIT, plus `LICENSES/modelcontextprotocol-typescript-sdk.txt` for the vendored type definitions |
 | Adopted into TianGong | 2026-10-04 |
+| Re-synced | 2026-10-10 (from `1.0.1`) |
 | Role in this repo | Standalone Model Context Protocol client: transport-neutral core, stdio and Streamable HTTP transports, OAuth subset, in-memory testing transport |
 
 What it provides: an MCP client that depends on neither the official MCP SDK nor any other pi
@@ -140,13 +146,17 @@ Notes:
 
 The vendored copy is a **complete mirror**, not a subset: every file upstream ships in
 `packages/mcp/` and `packages/codemode/` is present here, and every one of them is byte-identical
-(verified by git object hash).
+(verified by git object hash) — with **one recorded local deviation**: the `shx` devDependency in
+both `package.json` files is pinned to `0.4.0`, while upstream 1.1.0 ships `0.3.4`. TianGong keeps a
+single `shx` version across the workspace and avoids the deprecated `shelljs@0.8.5`/`glob@7` tree
+that `0.3.4` resolves to. The pin is version-controlled and re-applied on every re-sync.
 
 1. Take the upstream directory at the target tag.
 2. Replace the directory contents wholesale. Do not merge.
-3. Update `version` and the record in `VENDORED_PACKAGES` in `scripts/lib/packages.ts`.
-4. Note the bump in this file's summary table.
-5. Run `bun run check:house-standard && bun test`.
+3. Re-pin `shx` to `0.4.0` in the two vendored `package.json` files (the deviation above).
+4. Update `version` and the record in `VENDORED_PACKAGES` in `scripts/lib/packages.ts`.
+5. Note the bump in this file's summary table.
+6. Run `bun install --ignore-scripts`, then `bun run check && bun run test`.
 
 If the upstream change needs a local adaptation to work inside TianGong, that adaptation belongs
 in the calling house package, not in the vendored directory.

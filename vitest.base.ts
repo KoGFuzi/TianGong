@@ -5,9 +5,10 @@ import { defineConfig } from "vitest/config";
  * Shared Vitest base for the TianGong workspace.
  *
  * Every workspace package resolves its siblings straight to `src/` instead of `dist/`,
- * so tests never need a prior build. Only specifiers that changed under the TianGong
- * house standard are mapped here; `@earendil-works/pi-codemode` and `@earendil-works/pi-mcp`
- * keep their upstream names because they are vendored unmodified.
+ * so tests never need a prior build. Specifiers that changed under the TianGong house
+ * standard are mapped by their TianGong names; the two vendored packages keep their
+ * upstream specifiers (`@earendil-works/pi-codemode`, `@earendil-works/pi-mcp`) and are
+ * mapped here under those same names.
  */
 export const workspaceSourcePaths = {
 	chordIndex: fileURLToPath(new URL("./packages/chord/src/index.ts", import.meta.url)),
@@ -32,7 +33,12 @@ export const workspaceSourcePaths = {
 	tuiIndex: fileURLToPath(new URL("./packages/tui/src/index.ts", import.meta.url)),
 	tuiRoot: fileURLToPath(new URL("./packages/tui/src", import.meta.url)),
 	codemodeIndex: fileURLToPath(new URL("./packages/codemode/src/index.ts", import.meta.url)),
+	codemodeDeclarations: fileURLToPath(new URL("./packages/codemode/src/declarations.ts", import.meta.url)),
+	codemodeSource: fileURLToPath(new URL("./packages/codemode/src/source.ts", import.meta.url)),
+	codemodeWorker: fileURLToPath(new URL("./packages/codemode/src/runtime/worker.ts", import.meta.url)),
 	mcpIndex: fileURLToPath(new URL("./packages/mcp/src/index.ts", import.meta.url)),
+	mcpOAuth: fileURLToPath(new URL("./packages/mcp/src/oauth/index.ts", import.meta.url)),
+	mcpTesting: fileURLToPath(new URL("./packages/mcp/src/testing/index.ts", import.meta.url)),
 } as const;
 
 export default defineConfig({
@@ -74,8 +80,16 @@ export default defineConfig({
 				find: /^@OnePanda-TgSec\/tg-tui\/(.+)$/,
 				replacement: `${workspaceSourcePaths.tuiRoot}/$1.ts`,
 			},
-			{ find: /^@earendil-works\/tg-codemode$/, replacement: workspaceSourcePaths.codemodeIndex },
-			{ find: /^@earendil-works\/tg-mcp$/, replacement: workspaceSourcePaths.mcpIndex },
+			{ find: /^@earendil-works\/pi-codemode$/, replacement: workspaceSourcePaths.codemodeIndex },
+			{
+				find: /^@earendil-works\/pi-codemode\/declarations$/,
+				replacement: workspaceSourcePaths.codemodeDeclarations,
+			},
+			{ find: /^@earendil-works\/pi-codemode\/source$/, replacement: workspaceSourcePaths.codemodeSource },
+			{ find: /^@earendil-works\/pi-codemode\/worker$/, replacement: workspaceSourcePaths.codemodeWorker },
+			{ find: /^@earendil-works\/pi-mcp$/, replacement: workspaceSourcePaths.mcpIndex },
+			{ find: /^@earendil-works\/pi-mcp\/oauth$/, replacement: workspaceSourcePaths.mcpOAuth },
+			{ find: /^@earendil-works\/pi-mcp\/testing$/, replacement: workspaceSourcePaths.mcpTesting },
 		],
 	},
 });

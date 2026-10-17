@@ -20,6 +20,22 @@
 6. `tg.*` 持久化消息种（写入 transcript/document/SQLite 迁移的字符串）——新代码路径写消息一律 `tg.*`。
 7. JSONL 无读者是声明过的后果，不得为"兼容上游"偷偷加回。
 
+## 1A. 实施期勘误（2026-10-17，G1 落地后以实测为准）
+
+1. **G1-1 判别联合改期到 G2**：`ToolTaskInput/ToolTaskResult` 的 `{ kind: "nested" }` 变体落地时，
+   `tool.ts` 的 `readCall` 等读取函数立刻需要 nested 分支与 `NestedCallDoc` 文档族——那些是 G2-1 的
+   行为面。半套联合造成 12+ 连锁错误，实测不成立。**G1 保留 model 单形态**（`tool.ts:35` 注释已标注），
+   联合、`MADE_NESTED_CALLS`（房规名 `tg.tool.madeNestedCalls`）、`generation.ts` 对 `result.kind` 的
+   nested 判定，**全部并入 G2-1 一起落地**。G1 提交正文已注明此归属。
+2. **GuardedStorage 房规生命周期**：G1 引入上游 `GuardedStorage` 包装（SessionFailed 语义的落点）时，
+   丢了本仓 `Storage` 接口独有的 `deleteConversation/exportConversation/backup` 转发（保护清单 #4），
+   由复核补齐（`session.ts` scanConversations 之后三个 `#call` 转发 + `ConversationDeletion` 导入）。
+   **教训：wholesale 语义改造引入上游新类时，必须按本仓扩展接口逐方法核对实现面。**
+3. **通道现实**：agent-plan 全系与 opencode 默认模型周配额至 2026-10-19 重置；alibaba-cn 账号被拒；
+   opencode-go 未登录。执行统一钉 `opencode/glm-5.3-flash-free`（有小时级限流窗口，撞墙后短等重试）。
+4. **验证现实**：G1 终局 check 四项全绿；gibraltar 48 文件 920 passed/2 skipped、chord 517/517、
+   agent 118/118 全绿（均 Node 下 vitest）。
+
 ## 1. 批次结构（唯一 cherry-pick 序）
 
 ### G1 结构基座（Breaking，先行；跨 harness/types/storage 契约）

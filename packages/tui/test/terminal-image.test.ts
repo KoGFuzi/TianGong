@@ -317,12 +317,12 @@ describe("detectCapabilities", () => {
 		});
 	});
 
-	// #10573
-	it("enables hyperlinks without images for Herdr", () => {
+	// #10573 + upstream 1.2.0 #10774
+	it("enables hyperlinks and Kitty images for Herdr", () => {
 		withEnv({ TERM_PROGRAM: "herdr", TERM: "xterm-256color", COLORTERM: "truecolor", KITTY_WINDOW_ID: "1" }, () => {
 			const caps = detectCapabilities();
 			assert.strictEqual(caps.hyperlinks, true);
-			assert.strictEqual(caps.images, null);
+			assert.strictEqual(caps.images, "kitty");
 			assert.strictEqual(caps.trueColor, true);
 		});
 		withEnv({ TERM_PROGRAM: "herdr", TG_HYPERLINKS: "0" }, () => {

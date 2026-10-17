@@ -37,9 +37,27 @@
 
 ### Fixed
 
+- Inline images render under Herdr again. `TERM_PROGRAM=herdr` now also confirms the Kitty graphics
+  protocol, not just OSC 8 hyperlinks: Herdr regained Kitty image support, and the previous detection
+  that left image protocols off under it suppressed images from 1.1.0 on. Hyperlink detection is a
+  separate decision and is unchanged (upstream pi 1.2.0 #10774).
+- Fragmented terminal color replies no longer leak their hex tails into the prompt or turn an OSC BEL
+  terminator into Ctrl+G, which opened the external editor. A buffer starting with a recognized reply
+  header (OSC color or program-status, XTVersion, Kitty graphics) stays held until its terminator, a
+  cancel, or a new escape sequence; every other input keeps its old bounded 50ms recovery, and lone
+  string introducers still time out as Alt keys (upstream pi 1.2.0 #10256/#10657). Upstream changed
+  no code in `terminal.ts` for this; the fix lives entirely in the input buffer.
+- A focused fullscreen overlay that does not handle wheel input no longer swallows scroll events:
+  unhandled wheel events keep scrolling the transcript. An overlay that scrolls itself must implement
+  `handleMouse` (upstream pi 1.2.0 #10769).
+- Keybindings may name shifted symbols: `+` and `ctrl++` now match when the Kitty keyboard protocol or
+  `modifyOtherKeys` reports Shift plus an unshifted key, and `parseKey()` returns the produced symbol
+  (`+`, not `shift+=`). The physical `shift+=` spelling stays valid; Ctrl, Alt, and Super are preserved
+  (upstream pi 1.2.0 #9880).
 - Markdown links are clickable under Herdr again. `TERM_PROGRAM=herdr` is now detected as forwarding OSC 8
-  hyperlinks, with image protocols off: Herdr runs inside another terminal whose variables, such as
-  `KITTY_WINDOW_ID`, leak into its panes, so the Kitty branch matched and the links stopped working.
+  hyperlinks: Herdr runs inside another terminal whose variables, such as `KITTY_WINDOW_ID`, leak into its
+  panes, so its detection is matched before the outer terminal's; without it the Kitty branch consumed the
+  leaked variable and loaded the wrong detection for links.
 
 ### Changed: environment variables
 

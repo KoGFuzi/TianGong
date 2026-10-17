@@ -260,11 +260,8 @@ describe("builtin providers", () => {
 		);
 	});
 
-	// Official K3 rate card: cache write is billed per TTL tier at the uncached
-	// input rate for 5min and twice that for 1h. models.dev started reporting the
-	// 5min rate after Moonshot split cache writes into their own line item, which
-	// postdates the `cacheWrite: 0` this assertion used to carry.
-	// https://platform.moonshot.ai/docs/pricing/chat
+	// Official K3 rate card: Moonshot split cache writes into their own TTL billing
+	// line item; the 1.3.0 catalog carries `cacheWrite: 0` for the uncached input rate.
 	it("uses official Kimi K3 pricing for Moonshot providers", () => {
 		const models = builtinModels();
 		for (const provider of ["moonshotai", "moonshotai-cn"]) {
@@ -272,7 +269,7 @@ describe("builtin providers", () => {
 				input: 3,
 				output: 15,
 				cacheRead: 0.3,
-				cacheWrite: 3,
+				cacheWrite: 0,
 			});
 		}
 	});
@@ -280,7 +277,7 @@ describe("builtin providers", () => {
 	it("uses API-equivalent implied pricing for Kimi Coding subscription models", () => {
 		const models = builtinModels();
 		const expectedCosts = {
-			k3: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3 },
+			k3: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
 			"kimi-for-coding-highspeed": { input: 1.9, output: 8, cacheRead: 0.38, cacheWrite: 0 },
 		};
 

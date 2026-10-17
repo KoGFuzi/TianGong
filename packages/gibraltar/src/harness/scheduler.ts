@@ -2,6 +2,7 @@ import { type Context, copyJson, type JsonValue } from "@OnePanda-TgSec/chord";
 import { awaitWithContext, withAbortSignal } from "@OnePanda-TgSec/chord/context";
 import type { Models } from "@OnePanda-TgSec/tg-ai";
 import type { ExecutionEnv } from "../env/index.ts";
+import { errorMessage } from "../errors.ts";
 import type { SessionImpl } from "../session/session.ts";
 import type { Transaction } from "../session/transaction.ts";
 import type {
@@ -237,7 +238,7 @@ export class TaskScheduler {
 
 	/** Load live tasks and change surviving `running` tasks back to `pending`. Dispatches nothing. */
 	async open(context: Context): Promise<void> {
-		this.#session.subscribeCommits((publication) => this.#observe(publication));
+		this.#session.observeCommits((publication) => this.#observe(publication));
 		this.#session.subscribeClose(() => this.#seal());
 		this.#unsubscribeRegistry = this.#registry.subscribe(() => this.#kick());
 		await this.#session.commitWith(async (tx) => {
@@ -269,8 +270,10 @@ export class TaskScheduler {
 		this.#kick();
 	}
 
-	/** Wait for every invocation signalled by `#seal()`. Writes nothing. */
+	/** Wait for every invocation, which it signals first. Writes nothing. */
 	async join(): Promise<void> {
+		// Signal last: waits, watches, and streams a task holds end with the Session's reason, not as cancelled here.
+		for (const invocation of this.#invocations.values()) invocation.controller.abort();
 		await Promise.allSettled([...this.#invocations.values()].map((invocation) => invocation.done));
 	}
 
@@ -298,15 +301,18 @@ export class TaskScheduler {
 			if (!current.abortRequested) tx.setTask({ ...current, abortRequested: true });
 			return { result: "marked" as const, run: invocation?.mode === "run" ? invocation : undefined };
 		}, context);
-		// The commit listener signalled the run; join it.
-		if (marked.run !== undefined) await awaitWithContext(marked.run.done, context);
+		// The commit listener signalled the run; join it. A run that ignores its signal can outlive a failed Session,
+		// which ends the wait instead.
+		if (marked.run !== undefined) {
+			await awaitWithContext(Promise.race([marked.run.done, this.#session.failed]), context);
+		}
 		return marked.result;
 	}
 
 	async waitForTask(id: TaskId, context: Context): Promise<SettledTask<JsonValue>> {
 		// Check and register on the line so no terminal publication falls between them.
 		const found = await this.#session.readOnLine(async () => {
-			if (this.#closing) throw closedError();
+			if (this.#closing) throw closedError(this.#session);
 			if (this.#live.has(id)) return { promise: this.#taskWaiters.add(id, context) };
 			const record = await this.#storage.task(id, context);
 			if (record === undefined) throw new Error(`Task ${id} does not exist`);
@@ -320,7 +326,7 @@ export class TaskScheduler {
 	 * non-background task.
 	 */
 	waitForIdle(conversationId: ConversationId | undefined, context: Context): Promise<void> {
-		if (this.#closing) return Promise.reject(closedError());
+		if (this.#closing) return Promise.reject(closedError(this.#session));
 		if (this.#idle(conversationId)) return Promise.resolve();
 		this.#scheduleReconcile();
 		return this.#idleWaiters.add(conversationId, context);
@@ -540,10 +546,9 @@ export class TaskScheduler {
 				await this.#finalize(tx);
 			}, this.#context);
 		} catch (error) {
-			// Any pass may have staged marks, so a failed one is retried with the next commit.
-			this.#cascadePending = true;
-			for (const id of checks) this.#failFastChecks.add(id);
-			if (!this.#closing) this.#report(error);
+			// No extension code runs in this commit: a throw is a storage failure, a host callback, or a bug. None is fixed
+			// by running the pass again, so it fails the Session, which reports it.
+			this.#failSession(error);
 		}
 		this.#settleIdle();
 	}
@@ -731,17 +736,25 @@ export class TaskScheduler {
 		return false;
 	}
 
-	/** Close listener: runs synchronously once admission is sealed, before `join()`. */
+	/** Fail the Session, which reports it, for a throw in one of the scheduler's own commits; ignored once closing. */
+	#failSession(error: unknown): void {
+		if (!this.#closing) this.#session.fail(error);
+	}
+
+	/** Close listener: runs synchronously once admission is sealed, before `join()`, or when the Session fails. */
 	#seal(): void {
 		this.#closing = true;
-		this.#unsubscribeRegistry();
-		const error = closedError();
+		try {
+			this.#unsubscribeRegistry();
+		} catch (error) {
+			this.#report(error);
+		}
+		const error = closedError(this.#session);
 		this.#taskWaiters.rejectAll(error);
 		this.#idleWaiters.rejectAll(error);
 		this.#contexts.clear();
 		if (this.#expiry !== undefined) clearTimeout(this.#expiry.timer);
 		this.#expiry = undefined;
-		for (const invocation of this.#invocations.values()) invocation.controller.abort();
 	}
 
 	#kick(): void {
@@ -759,7 +772,8 @@ export class TaskScheduler {
 				for (const reservation of await this.#reserve()) this.#start(reservation);
 			}
 		} catch (error) {
-			if (!this.#closing) this.#report(error);
+			// As in `#reconcile()`: the reservation commit runs no extension code.
+			this.#failSession(error);
 		} finally {
 			this.#draining = false;
 			// A wakeup that arrived during a failed pass still needs its pass.
@@ -1018,14 +1032,16 @@ export class TaskScheduler {
 				if (decision === true) return current;
 				this.#end(invocation);
 				if (decision !== false) {
-					const message = decision.fault instanceof Error ? decision.fault.message : String(decision.fault);
+					const message = errorMessage(decision.fault);
 					await this.#terminate(tx, current!, { status: "faulted", error: { message } });
 				}
 				return undefined;
 			}, this.#context);
 		} catch (error) {
+			// The step writes the scheduler's own decision, a fault or a terminal record; a throw there would otherwise
+			// leave the task running, to be reserved and run again.
 			this.#end(invocation);
-			if (!this.#closing) this.#report(error);
+			this.#failSession(error);
 			return undefined;
 		}
 	}
@@ -1294,7 +1310,7 @@ export class TaskScheduler {
 		return this.#session.commitWith(
 			async (tx) => {
 				if (invocation.ended) throw endedError(invocation);
-				if (this.#closing) throw closedError();
+				if (this.#closing) throw closedError(this.#session);
 				const found = this.#live.get(invocation.taskId);
 				if (found === undefined) throw new Error(`Task ${invocation.taskId} is terminal`);
 				if (found.state.status !== "running") throw new Error(`Task ${invocation.taskId} is ${found.state.status}`);

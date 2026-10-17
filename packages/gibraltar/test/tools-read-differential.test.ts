@@ -19,7 +19,7 @@ function referenceRead(bytes: Uint8Array, path: string, offset: number | undefin
 	const mimeType = detectSupportedImageMimeType(bytes);
 	if (mimeType) {
 		return {
-			content: [],
+			output: [],
 			isError: true,
 			diagnostics: [
 				{
@@ -80,7 +80,7 @@ function referenceRead(bytes: Uint8Array, path: string, offset: number | undefin
 		});
 	}
 	return {
-		content: outputText === "" ? [] : [{ type: "text", text: outputText }],
+		output: outputText === "" ? [] : [{ type: "text", text: outputText }],
 		...(details === undefined ? {} : { details }),
 		diagnostics,
 	};
@@ -235,7 +235,7 @@ describe("read tool", () => {
 			createReadTool().execute({ path: "app.log", limit: 2 }, apiFor(growing), BACKGROUND_CONTEXT),
 		);
 		expect(grown).toMatchObject({
-			content: [{ type: "text", text: "one\ntwo" }],
+			output: [{ type: "text", text: "one\ntwo" }],
 			diagnostics: [{ message: expect.stringContaining("Use offset=3 to continue.") }],
 		});
 

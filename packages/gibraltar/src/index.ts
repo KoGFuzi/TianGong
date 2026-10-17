@@ -8,7 +8,7 @@ export {
 	ToolResultEntry,
 	UserEntry,
 } from "./entries.ts";
-export { ConversationBusy, ReadAfterWrite, StorageRejected } from "./errors.ts";
+export { ConversationBusy, ReadAfterWrite, SessionFailed, StorageRequestError } from "./errors.ts";
 export {
 	AgentDoc,
 	configure,

@@ -148,7 +148,7 @@ const subagentTool = defineTool({
 	execute: async (args, api, callContext) => {
 		const { action, name, message, followUp } = args;
 		const reply = (text: string, conversationId?: ConversationId) => ({
-			content: [{ type: "text" as const, text }],
+			output: [{ type: "text" as const, text }],
 			// A UI can attach to the subagent's conversation through the call's details.
 			...(conversationId === undefined || name === undefined ? {} : { details: { name, conversationId } }),
 		});

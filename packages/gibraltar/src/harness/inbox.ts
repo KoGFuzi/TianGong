@@ -70,7 +70,7 @@ export async function applyBoundary(
 ): Promise<BoundaryResult> {
 	const { conversationId, inbox } = boundary;
 	const items = inbox.items;
-	const reset = items.some((item) => item.mode === "write" && item.entry.head === "self");
+	const reset = hasQueuedReset(items);
 	const final = at === "final" || reset;
 	const pick = (mode: "steer" | "followUp", queueMode: QueueMode): number[] => {
 		const indexes = items.flatMap((item, index) => (item.mode === mode ? [index] : []));
@@ -103,6 +103,19 @@ export async function applyBoundary(
 	const removed = [...writes, ...users].sort((a, b) => b - a);
 	for (const index of removed) items.splice(index, 1);
 	return { users: placed, reset };
+}
+
+/**
+ * Whether a write is display-only: it has no `model`, `head`, or `edits` (present counts, even if empty), so it changes
+ * nothing the model sees and needs no boundary.
+ */
+export function isDisplayOnly(entry: EntryDraft): boolean {
+	return entry.model === undefined && entry.head === undefined && entry.edits === undefined;
+}
+
+/** Whether a reset (`head: "self"` write) is queued; entries appended before it leave the active range when it lands. */
+export function hasQueuedReset(items: readonly InboxItem[]): boolean {
+	return items.some((item) => item.mode === "write" && (item.entry as { head?: unknown }).head === "self");
 }
 
 /** Whether a head write targets an entry before the active range, so placing it would bring back cut history. */

@@ -144,7 +144,8 @@ export async function watchEvents(
 ): Promise<AgentEventStream> {
 	let watch!: CommittedWatch<readonly AgentEvent[]>;
 	let snapshot!: SnapshotEvent;
-	await conversationViews(harness).attach(
+	const views = conversationViews(harness);
+	await views.attach(
 		conversationId,
 		async (initial, release, storage) => {
 			// Generations whose held outcome already ended their turn, read on the line with the snapshot.
@@ -154,7 +155,12 @@ export async function watchEvents(
 			let current = initial;
 			snapshot = snapshotOf(initial);
 			// Batches are the watch's values; an overflow delivers a snapshot of the newest view instead.
-			watch = new CommittedWatch<readonly AgentEvent[]>([], release, () => [snapshotOf(current)]);
+			watch = new CommittedWatch<readonly AgentEvent[]>(
+				[],
+				release,
+				(error) => views.report(error),
+				() => [snapshotOf(current)],
+			);
 			return {
 				publication: (before, after, ops, publication, commitContext) => {
 					current = after;

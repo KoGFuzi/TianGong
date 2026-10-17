@@ -21,7 +21,6 @@ import {
 	type Harness,
 	LiveDoc,
 	MemoryStorage,
-	StorageRejected,
 	type TaskId,
 	UsageDoc,
 	watchEvents,
@@ -36,7 +35,7 @@ import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { allEntries, type ChatSetup, chatSetup, openChat, textOf, toolsNamed, waitFor } from "./chat-support.ts";
 import { addHooks, addSection, addTask, addTool } from "./harness-support.ts";
 import { ControlledStorage, context } from "./session-support.ts";
-import { aborted, type Deferred, deferred } from "./task-support.ts";
+import { aborted, type Deferred, deferred, failedOf } from "./task-support.ts";
 
 const directories = new Set<string>();
 
@@ -436,7 +435,7 @@ describe("manual compaction", () => {
 				name: "wait",
 				description: "wait",
 				parameters: Type.Object({}),
-				execute: async () => ({ content: [{ type: "text", text: "waited" }] }),
+				execute: async () => ({ output: [{ type: "text", text: "waited" }] }),
 			}),
 		);
 		await chat.root.configure({ tools: toolsNamed(chat.setup, "wait") }, context);
@@ -844,7 +843,7 @@ describe("compaction outcomes", () => {
 				name: "read",
 				description: "read",
 				parameters: Type.Object({}),
-				execute: async () => ({ content: [] }),
+				execute: async () => ({ output: [] }),
 			}),
 		);
 		await chat.root.configure({ tools: toolsNamed(chat.setup, "read") }, context);
@@ -1243,7 +1242,7 @@ describe("compaction estimates and interactions", () => {
 					execute: async () => {
 						toolReached.resolve();
 						await toolGate.promise;
-						return { content: [{ type: "text", text: text("result", 200) }] };
+						return { output: [{ type: "text", text: text("result", 200) }] };
 					},
 				}),
 			);
@@ -1992,25 +1991,30 @@ describe("compaction edge cases", () => {
 		await chat.harness.close(context);
 	});
 
-	it("leaves no usage, submission, summary, or outcome when the classifying commit is rejected", async () => {
+	it("leaves no usage, submission, or summary when the classifying commit fails, which fails the Harness", async () => {
 		const storage = new ControlledStorage();
 		const chat = await open({ storage });
 		await history(chat);
 		const usage = async () => (await chat.harness.snapshot(UsageDoc, chat.root.id, context))!.models["faux/faux-1"];
 		const before = await usage();
+		const failure = new Error("disk gone");
 		chat.faux.summaries.push(async () => {
-			storage.failNextCommit(new StorageRejected("rejected"));
+			storage.failNextCommit(failure);
 			return summary();
 		});
 		const id = await chat.root.compact(undefined, context);
-		const outcome = await result(chat, id);
-		expect(outcome.status).toBe("faulted");
-		expect(await usage()).toEqual(before);
-		expect((await kinds(chat.root)).includes("tg.compaction")).toBe(false);
-		expect((await chat.harness.inspect(context)).submissions).toEqual([]);
-		expect(await storage.submissionByRequest(chat.root.id, `compaction:${id}`, context)).toBeUndefined();
-		expect((await live(chat)).compactions).toBeUndefined();
+		await expect(failedOf(chat.harness)).rejects.toMatchObject({ name: "SessionFailed", cause: failure });
 		await chat.harness.close(context);
+		// Nothing of the failed commit landed: the task is still live, without usage, entry, or submission.
+		storage.reopen();
+		expect(await storage.submissionByRequest(chat.root.id, `compaction:${id}`, context)).toBeUndefined();
+		expect((await storage.task(id, context))?.state.status).not.toBe("terminal");
+		const reopened = await openChat(storage, chat.setup);
+		expect((await reopened.harness.snapshot(UsageDoc, reopened.root.id, context))!.models["faux/faux-1"]).toEqual(
+			before,
+		);
+		expect((await kinds(reopened.root)).includes("tg.compaction")).toBe(false);
+		await reopened.harness.close(context);
 	});
 });
 

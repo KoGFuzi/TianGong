@@ -32,7 +32,7 @@ import { assignJson } from "./json.ts";
 import { endRun, LiveDoc, type LiveState, type ToolSlot } from "./live.ts";
 import { planSystemEntries, renderSections, replaySections } from "./prompt.ts";
 import { ensureProviderSessionId } from "./provider.ts";
-import { appendToolResult, harnessError, ToolTask, type ToolTaskResult } from "./tool.ts";
+import { appendToolResult, harnessError, ToolTask, type ToolTaskInput, type ToolTaskResult } from "./tool.ts";
 import type {
 	CompactionPolicy,
 	CompactionResult,
@@ -295,7 +295,8 @@ async function readCalls(
 
 /** A tool task for call `callId`, owned by the generation. */
 function createToolTask(tx: Tx, runtime: Runtime, assistant: EntryId, callId: string): Promise<TaskId<ToolTaskResult>> {
-	return tx.createTask(ToolTask, { assistant, callId }, { ownership: { kind: "task", taskId: runtime.taskId } });
+	const input: ToolTaskInput = { kind: "model", assistant, callId };
+	return tx.createTask(ToolTask, input, { ownership: { kind: "task", taskId: runtime.taskId } });
 }
 
 /**
@@ -605,6 +606,7 @@ async function finishToolRound(
 	const outcomes = await runtime.outcomes(tools, context);
 	tools.forEach((id, index) => {
 		const outcome = outcomes[index]!;
+		// Version 1 results have no kind; every result a generation's round reads is a model-issued call's.
 		controls.set(id, outcome.status === "completed" ? outcome.result.control : undefined);
 	});
 	const slots = (await runtime.snapshot(LiveDoc, conversationId, context))?.tools ?? [];

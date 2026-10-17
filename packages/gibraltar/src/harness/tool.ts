@@ -4,6 +4,7 @@ import { overlap } from "@OnePanda-TgSec/chord/delta";
 import type { ImageContent, TextContent, ToolCall, ToolResultMessage } from "@OnePanda-TgSec/tg-ai";
 import { validateToolArguments } from "@OnePanda-TgSec/tg-ai/utils/validation";
 import { AssistantEntry, ToolResultEntry } from "../entries.ts";
+import { errorMessage } from "../errors.ts";
 import { defineTask } from "../tasks.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, utf8ByteLength } from "../truncate.ts";
 import type {
@@ -30,14 +31,20 @@ import type {
 } from "./types.ts";
 import { recordUsage } from "./usage.ts";
 
-export type ToolTaskInput = { assistant: EntryId; callId: string };
+/** A model-issued call, read from its assistant entry (upstream may add nested calls in a later batch). */
+export type ToolTaskInput = { kind: "model"; assistant: EntryId; callId: string };
 
 export type ToolTaskCheckpoint =
 	| { phase: "call" }
 	/** Durable intent: the final arguments and the replay policy recorded before execution. */
 	| { phase: "execute"; arguments: JsonObject; replay: "safe" | "unsafe" };
 
-export type ToolTaskResult = { entryId: EntryId; control?: ToolControl };
+/**
+ * A model-issued call's result is its transcript entry. A version 1 task that was already holding its outcome as
+ * `completing` when the Harness upgraded finishes with a version 1 result, `{ entryId, control? }` without `kind`;
+ * treat a result without `kind` as a model-issued call's.
+ */
+export type ToolTaskResult = { kind: "model"; entryId: EntryId; control?: ToolControl };
 
 type Runtime = TaskRuntime<ToolTaskInput, ToolTaskCheckpoint, ToolTaskResult, ToolHooks>;
 type Content = (TextContent | ImageContent)[];
@@ -49,8 +56,13 @@ type Content = (TextContent | ImageContent)[];
  */
 export const ToolTask = defineTask<ToolTaskInput, ToolTaskCheckpoint, ToolTaskResult, ToolHooks>({
 	name: "tg.tool",
-	version: 1,
+	version: 2,
 	initial: () => ({ phase: "call" }),
+	// Version 1 had only model-issued calls.
+	migrate: (input, checkpoint) => ({
+		input: { kind: "model", ...(input as { assistant: EntryId; callId: string }) },
+		checkpoint: checkpoint as ToolTaskCheckpoint,
+	}),
 	phases: {
 		call: async (task, runtime, context) => {
 			const call = await readCall(runtime, task.input, context);
@@ -72,7 +84,7 @@ export const ToolTask = defineTask<ToolTaskInput, ToolTaskCheckpoint, ToolTaskRe
 					else if (decision?.arguments !== undefined) args = decision.arguments;
 				} catch (error) {
 					if (runtime.signal.aborted) throw error;
-					block = errorText(error);
+					block = errorMessage(error);
 				}
 			});
 			if (block !== undefined) {
@@ -140,7 +152,7 @@ function prepare(tool: ToolRegistration, args: JsonObject): Checked {
 	try {
 		return { args: tool.prepareArguments(args) as JsonObject };
 	} catch (error) {
-		return { error: errorText(error) };
+		return { error: errorMessage(error) };
 	}
 }
 
@@ -149,7 +161,7 @@ function validate(tool: ToolRegistration, call: ToolCall, args: JsonObject): Che
 	try {
 		return { args: validateToolArguments(tool, { ...call, arguments: args }) as JsonObject };
 	} catch (error) {
-		return { error: errorText(error) };
+		return { error: errorMessage(error) };
 	}
 }
 
@@ -267,7 +279,7 @@ async function run(
 			for (const waiter of await progress.stop()) waiter.reject(error);
 			throw error;
 		}
-		result = { isError: true, diagnostics: [toolDiagnostic("tool_error", errorText(error))] };
+		result = { isError: true, diagnostics: [toolDiagnostic("tool_error", errorMessage(error))] };
 		// A throw, from `execute()` or from building the environment, ends the task `failed`, which cancels what the call owned; it no longer supervises it. The error text
 		// is already in the result entry.
 		ending = { status: "failed", message: `Tool ${call.name} threw` };
@@ -352,25 +364,25 @@ async function finalResult(
 	context: Context,
 ): Promise<ToolExecutionResult> {
 	const harness: ToolDiagnostic[] = [];
-	const retained = result.content === undefined ? reported.output.snapshot() : undefined;
-	const content: Content =
-		retained === undefined ? result.content! : retained.text === "" ? [] : [{ type: "text", text: retained.text }];
+	const retained = result.output === undefined ? reported.output.snapshot() : undefined;
+	const output: Content =
+		retained === undefined ? result.output! : retained.text === "" ? [] : [{ type: "text", text: retained.text }];
 	let final: ToolExecutionResult = {
 		...result,
-		content,
+		output,
 		details: result.details === undefined ? reported.details : result.details,
 		diagnostics: [...reported.diagnostics, ...(result.diagnostics ?? [])],
 	};
 	await runtime.hooks.each("afterTool", async (hook) => {
 		final = (await hook(call, final, runtime, context)) ?? final;
 	});
-	// The retained output's truncation applies only while afterTool kept that content.
-	if (retained !== undefined && retained.droppedBytes > 0 && final.content === content) {
+	// The retained output's truncation applies only while afterTool kept that output.
+	if (retained !== undefined && retained.droppedBytes > 0 && final.output === output) {
 		harness.push(truncated(retained, reported.limits.retain));
 	}
-	const bounded = boundContent(final.content ?? [], reported.limits);
+	const bounded = boundContent(final.output ?? [], reported.limits);
 	if (bounded.droppedBytes > 0) harness.push(truncated(bounded, reported.limits.retain));
-	return { ...final, content: bounded.content, diagnostics: [...(final.diagnostics ?? []), ...harness] };
+	return { ...final, output: bounded.content, diagnostics: [...(final.diagnostics ?? []), ...harness] };
 }
 
 /**
@@ -390,19 +402,18 @@ async function settle(
 		const result = build(slot);
 		const entry = await appendToolResult(tx, runtime.conversationId, call, result, runtime.now(), durationMs);
 		if (slot !== undefined) finishSlot(slot, entry.id);
-		const entryId = entry.id;
-		if (ending.status === "aborted")
-			return { status: "terminal", outcome: { status: "aborted", result: { entryId } } };
-		if (ending.status === "failed") {
-			const error = { message: ending.message };
-			return { status: "terminal", outcome: { status: "failed", error, result: { entryId } } };
-		}
 		// Tools build control objects freely; drop keys set to undefined so the task result is strict JSON.
 		const control =
 			result.control === undefined
 				? {}
 				: { control: copyJson(result.control as JsonValue, { omitUndefinedProperties: true }) as ToolControl };
-		return { status: "terminal", outcome: { status: "completed", result: { entryId, ...control } } };
+		const settled: ToolTaskResult = { kind: "model", entryId: entry.id, ...control };
+		if (ending.status === "aborted") return { status: "terminal", outcome: { status: "aborted", result: settled } };
+		if (ending.status === "failed") {
+			const error = { message: ending.message };
+			return { status: "terminal", outcome: { status: "failed", error, result: settled } };
+		}
+		return { status: "terminal", outcome: { status: "completed", result: settled } };
 	}, context);
 }
 
@@ -421,7 +432,7 @@ function fromSlot(slot: Readonly<ToolSlot> | undefined, code: string, message: s
 	if (droppedBytes > 0) diagnostics.push(truncated({ droppedBytes, droppedLines: slot?.droppedLines ?? 0 }));
 	diagnostics.push(toolDiagnostic(code, message));
 	return {
-		content: slot?.output === undefined || slot.output === "" ? [] : [{ type: "text", text: slot.output }],
+		output: slot?.output === undefined || slot.output === "" ? [] : [{ type: "text", text: slot.output }],
 		isError: true,
 		...(slot?.details === undefined ? {} : { details: slot.details }),
 		diagnostics,
@@ -430,7 +441,7 @@ function fromSlot(slot: Readonly<ToolSlot> | undefined, code: string, message: s
 
 /** An error result the Harness writes itself: no content and one `error` diagnostic with `code`. */
 export function harnessError(code: string, message: string): ToolExecutionResult {
-	return { content: [], isError: true, diagnostics: [toolDiagnostic(code, message)] };
+	return { output: [], isError: true, diagnostics: [toolDiagnostic(code, message)] };
 }
 
 function toolDiagnostic(code: string, message: string): ToolDiagnostic {
@@ -463,7 +474,7 @@ export async function appendToolResult(
 	durationMs?: number,
 ): Promise<TypedEntry<{ diagnostics: ToolDiagnostic[] }>> {
 	const diagnostics = [...(result.diagnostics ?? [])];
-	const content: Content = [...(result.content ?? [])];
+	const content: Content = [...(result.output ?? [])];
 	if (diagnostics.length > 0) content.push({ type: "text", text: renderDiagnostics(diagnostics) });
 	const message = {
 		role: "toolResult",
@@ -502,8 +513,4 @@ function boundContent(
 		else if (item === keep) result.push({ ...item, text: bounded.text });
 	}
 	return { content: result, droppedBytes: bounded.droppedBytes, droppedLines: bounded.droppedLines };
-}
-
-function errorText(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }

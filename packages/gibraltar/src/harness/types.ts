@@ -140,9 +140,18 @@ export type ToolDiagnostic = {
 	readonly code?: string;
 };
 
+/**
+ * What a tool returns, on channels: `output` for the model, `structuredOutput` for programs that call the tool
+ * (nested `executeTool()` callers arrive in a later batch), and `details` for UIs.
+ */
 export type ToolExecutionResult<TDetails extends JsonValue = JsonValue> = {
-	/** Omitted: the retained `output()` text becomes the content. */
-	readonly content?: ToolResultMessage["content"];
+	/** For the model. Omitted: the retained `output()` text. */
+	readonly output?: ToolResultMessage["content"];
+	/**
+	 * For programs. Validated against `structuredOutputSchema` when the tool declares one; not allowed without one.
+	 * Program-facing read paths arrive with nested tool calls; the field is declared here already.
+	 */
+	readonly structuredOutput?: JsonValue;
 	readonly isError?: boolean;
 	/** Omitted: the last `details()` value becomes the details. */
 	readonly details?: TDetails;
@@ -176,7 +185,7 @@ export interface ToolExecutionApi<TDetails extends JsonValue = JsonValue> extend
 	/** Built by `HarnessOptions.env` for this call; `undefined` without an environment. */
 	readonly env: ExecutionEnv | undefined;
 	/**
-	 * Append running output; it becomes the result content when the result omits `content`. `skipped` counts output
+	 * Append running output; it becomes the result output when the result omits `output`. `skipped` counts output
 	 * omitted before the chunk, as reported by an environment given `outputWindow` (`ShellOutputInfo.skipped`).
 	 */
 	output(chunk: string | Uint8Array, skipped?: ShellOutputSkip): void;
@@ -521,7 +530,9 @@ export interface Conversation {
 
 	/**
 	 * Durably admit user input or a passive entry write. A busy conversation, or one with queued items, queues it in
-	 * `tg.inbox`; `whenBusy: "reject"` rejects with `ConversationBusy` instead and writes nothing.
+	 * `tg.inbox`; `whenBusy: "reject"` rejects with `ConversationBusy` instead and writes nothing. A write of only
+	 * `kind` and `data` (no `model`, `head`, or `edits`) is appended at once, even mid-run, as it changes nothing the
+	 * model sees.
 	 */
 	submit(submission: SubmissionDraft, context: Context): Promise<Submission>;
 	/**

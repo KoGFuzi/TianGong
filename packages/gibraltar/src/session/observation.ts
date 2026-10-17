@@ -7,6 +7,7 @@ import type {
 } from "@OnePanda-TgSec/chord";
 import { withoutAbortSignal } from "@OnePanda-TgSec/chord/context";
 import type { Op } from "@OnePanda-TgSec/chord/delta";
+import { errorMessage } from "../errors.ts";
 import type { JsonObject, WatchEnd, WatchHandle } from "../types.ts";
 
 export type ObservedDocumentValue = Readonly<JsonObject> | null;
@@ -154,6 +155,7 @@ type WatchFrame<T> = {
  */
 export class CommittedWatch<T = ObservedDocumentValue> implements WatchHandle<T> {
 	readonly #detach: () => void;
+	readonly #report: (error: unknown) => void;
 	readonly #replace: (() => T) | undefined;
 	readonly #closedPromise: Promise<WatchEnd>;
 	readonly #pending: WatchFrame<T>[] = [];
@@ -170,10 +172,14 @@ export class CommittedWatch<T = ObservedDocumentValue> implements WatchHandle<T>
 	#cancellationSignal: AbortSignal | undefined;
 	#cancellationListener: (() => void) | undefined;
 
-	/** `replace` gives the value an overflow delivers; by default the newest value. */
-	constructor(value: T, detach: () => void, replace?: () => T) {
+	/**
+	 * `report` gets a listener's throw, which also ends the watch. `replace` gives the value an overflow delivers; by
+	 * default the newest value.
+	 */
+	constructor(value: T, detach: () => void, report: (error: unknown) => void, replace?: () => T) {
 		this.#value = value;
 		this.#detach = detach;
+		this.#report = report;
 		this.#replace = replace;
 		this.#closedPromise = new Promise((resolve) => {
 			this.#resolveClosed = resolve;
@@ -256,6 +262,7 @@ export class CommittedWatch<T = ObservedDocumentValue> implements WatchHandle<T>
 					await this.#listener!(frame.value, frame.ops, deliveryContext);
 				} catch (error) {
 					if (this.#end === undefined) {
+						this.#report(error);
 						this.#terminate({ reason: "listener_error", error: toError(error) });
 					}
 					break;
@@ -297,5 +304,5 @@ export class CommittedWatch<T = ObservedDocumentValue> implements WatchHandle<T>
 }
 
 function toError(error: unknown): Error {
-	return error instanceof Error ? error : new Error(String(error));
+	return error instanceof Error ? error : new Error(errorMessage(error));
 }

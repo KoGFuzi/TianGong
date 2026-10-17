@@ -105,7 +105,7 @@ describe("tg.live deltas", () => {
 				name: "noop",
 				description: "noop",
 				parameters: Type.Object({}),
-				execute: async () => ({ content: [] }),
+				execute: async () => ({ output: [] }),
 			}),
 		);
 		setup.faux.setResponses([
@@ -373,7 +373,7 @@ describe("tg.live deltas", () => {
 				description: "bad",
 				parameters: Type.Object({}),
 				// Not strict JSON: the result commit throws and the scheduler faults the task.
-				execute: async () => ({ content: [], details: { fn: (() => 1) as never } }),
+				execute: async () => ({ output: [], details: { fn: (() => 1) as never } }),
 			}),
 		);
 		setup.faux.setResponses([
@@ -414,7 +414,7 @@ describe("tg.live deltas", () => {
 				name: "noop",
 				description: "noop",
 				parameters: Type.Object({}),
-				execute: async () => ({ content: [] }),
+				execute: async () => ({ output: [] }),
 			}),
 		);
 		setup.faux.setResponses([

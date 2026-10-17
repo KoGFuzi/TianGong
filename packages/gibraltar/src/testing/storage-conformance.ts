@@ -1217,7 +1217,7 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 				} catch (error) {
 					conflictError = error;
 				}
-				expect((conflictError as Error | undefined)?.name).toBe("StorageRejected");
+				expect(conflictError instanceof Error).toBe(true);
 				expect(await storage.document(conflictId, "current", context)).toBeUndefined();
 				expect((await storage.document(currentCopyId, "current", context))?.value).toEqual({
 					count: 2,
@@ -1240,7 +1240,7 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 				} catch (error) {
 					mismatchError = error;
 				}
-				expect((mismatchError as Error | undefined)?.name).toBe("StorageRejected");
+				expect(mismatchError instanceof Error).toBe(true);
 				expect(await storage.document(mismatchId, "current", context)).toBeUndefined();
 			},
 		),

@@ -12,7 +12,16 @@ import type {
 	Tx,
 } from "../types.ts";
 import { startRun } from "./generation.ts";
-import { applyBoundary, InboxDoc, isStale, prepareBoundary, type QueueModes, removeInboxItem } from "./inbox.ts";
+import {
+	applyBoundary,
+	hasQueuedReset,
+	InboxDoc,
+	isDisplayOnly,
+	isStale,
+	prepareBoundary,
+	type QueueModes,
+	removeInboxItem,
+} from "./inbox.ts";
 import { LiveDoc } from "./live.ts";
 import type { SettledSubmissionRecord, Submission, SubmissionDraft, UserInput } from "./types.ts";
 import { closedError, Waiters } from "./util.ts";
@@ -43,10 +52,10 @@ export class Submissions {
 		this.#now = now;
 		this.#queueModes = queueModes;
 		this.#resume = resume;
-		session.subscribeCommits((publication) => this.#observe(publication));
+		session.observeCommits((publication) => this.#observe(publication));
 		session.subscribeClose(() => {
 			this.#closed = true;
-			this.#waiters.rejectAll(closedError());
+			this.#waiters.rejectAll(closedError(this.#session));
 		});
 	}
 
@@ -80,7 +89,7 @@ export class Submissions {
 			if (record === undefined) throw new Error(`Submission ${id} does not exist`);
 			if (isSettled(record)) return { promise: Promise.resolve(record) };
 			// Close rejects registered waiters synchronously and may begin during the read.
-			if (this.#closed) throw closedError();
+			if (this.#closed) throw closedError(this.#session);
 			return { promise: this.#waiters.add(id, context) };
 		});
 		return found.promise;
@@ -140,10 +149,13 @@ function isSettled(record: SubmissionRecord): record is SettledSubmissionRecord 
 
 /**
  * Admit a submission inside a commit (spec §6); `Conversation.submit()` and conversation-owned compactions share it. A
- * known request ID returns its existing submission without writing. A busy conversation queues it in `tg.inbox`, or
- * rejects `whenBusy: "reject"` input with `ConversationBusy`. An idle conversation with queued items queues it behind
- * them and runs a final boundary. Otherwise idle input places a user entry and starts a run, and an idle write appends
- * its entry and settles `done`, or `stale` when its head reaches before the active range.
+ * known request ID returns its existing submission without writing. A display-only write (no `model`, `head`, or
+ * `edits`) is appended and settled `done` at once, busy or not, as it changes nothing the model sees; only behind a
+ * queued reset it queues, so it lands after the reset instead of before it in the context the reset ends. A busy
+ * conversation queues anything else in `tg.inbox`, or rejects `whenBusy: "reject"` input with `ConversationBusy`. An
+ * idle conversation with queued items queues it behind them and runs a final boundary. Otherwise idle input places a
+ * user entry and starts a run, and an idle write appends its entry and settles `done`, or `stale` when its head
+ * reaches before the active range.
  */
 export async function admitSubmission(
 	tx: Tx,
@@ -161,10 +173,19 @@ export async function admitSubmission(
 			return existing.id;
 		}
 	}
+	const requestId = draft.requestId === undefined ? {} : { requestId: draft.requestId };
+	if (
+		draft.type === "write" &&
+		isDisplayOnly(draft.entry) &&
+		!hasQueuedReset((await tx.doc(InboxDoc, conversationId)).items)
+	) {
+		const entry = await tx.appendEntry(conversationId, draft.entry);
+		const write = { conversationId, ...requestId, type: "write", status: "done", entry: entry.id } as const;
+		return (await tx.createSubmission(write)).id;
+	}
 	const live = await tx.doc(LiveDoc, conversationId);
 	const busy = live.run !== undefined;
 	if (busy && draft.type === "input" && draft.whenBusy === "reject") throw new ConversationBusy(conversationId);
-	const requestId = draft.requestId === undefined ? {} : { requestId: draft.requestId };
 	// A boundary reads the table, so it is prepared before the first table write; a busy one needs none.
 	const boundary = busy ? undefined : await prepareBoundary(tx, conversationId, queueModes);
 	if (boundary === undefined || boundary.inbox.items.length > 0) {

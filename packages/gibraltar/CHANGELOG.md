@@ -28,12 +28,37 @@
   fork chain's segments from the root conversation forward, each capped at the next fork point, so a cursor
   narrows the lower bound the way a descending scan narrows the upper one. A missing ancestor still ends the
   visible history rather than throwing.
+- A tool's `ToolExecutionResult.content` is renamed to `output`: every `execute()` returns the tool's output
+  blocks there, consistent with `api.output()`. Custom tools return `{ output: [...] }` where they returned
+  `{ content: [...] }`.
+- A tool task's input and result carry a `kind`, and the `tg.tool` document version is 2 with a migration that
+  treats a version 1 input or result without `kind` as a model-issued call. G1 ports only the model member: a
+  nested-call union may arrive in a later batch.
+- A `bash`/`powershell` command that exits nonzero is an error result with an `exit_code` diagnostic that still
+  carries the output, where it used to throw; a timeout or an interrupted start still throws.
 
 ### Added
 
 - `ScanOrder` is exported. `scanTasks({ order: "descending" }, limit, cursor)` pages the newest tasks first;
   `Conversation.entries({ order })` forwards the order to `scanEntries`.
-- `Conversation.context(context, { at })` reads the context as of a visible entry: the same view `fork(at)` would
+- The Session fails as one unit on the first failed Storage call: `SessionFailed` carries the first error as
+  `cause`, every later call and wait rejects with it, running tasks are ended through their close (their
+  spinner watches keep the session-close reason rather than their own cancellation), and what cannot be
+  attributed becomes an `onReport` entry. Two kinds of Storage errors are exempt: an invalid request
+  (`StorageRequestError`) and a read its caller cancelled fail only the call. A read corrupted mid-flight gets
+  the guard's `SessionFailed` afterwards; nothing it read is used. A throwing internal commit listener fails
+  the Session too, because it would leave memory behind storage.
+- `errorMessage(error)` formats a thrown value safely, `StorageRequestError` marks an invalid Storage request,
+  and `SessionFailed` marks a failed Session; all are exported. Previously `StorageRejected` marked a
+  guaranteed no-effect rejection; every rejection is now unknown-effect and fails the Session with a plain
+  `Error`.
+- Every Session component reads its writes and reads through one closed-over Storage guard. Host transactions
+  read through it as well, so an invalid request during a callback is visible to `#assertHealthy` afterwards.
+- A display-only write (no `model`, `head`, or `edits`) is appended and settled `done` at once, busy or not,
+  because it changes nothing the model sees; only behind a queued reset does it queue, so it lands after the
+  reset and stays visible. `isDisplayOnly(entry)` and `hasQueuedReset(items)` are exported.
+- `safeNow(now, report)` wraps the host clock: a throw is reported once (also if the handler rereads the
+  clock) and the fallback `Date.now` is used, so a broken clock never fails a commit.- `Conversation.context(context, { at })` reads the context as of a visible entry: the same view `fork(at)` would
   start with, without creating a conversation. An entry not visible from the conversation throws.
 - A task record carries `startedAt` (wall-clock milliseconds of the first change to `running`) and `endedAt` (the
   change to `terminal`). `startedAt` survives waits, recovery, and close and reopen, so the span between them includes

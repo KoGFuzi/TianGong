@@ -59,6 +59,11 @@ export async function settled(promise: Promise<unknown>): Promise<boolean> {
 	return done;
 }
 
+/** The Session's failure promise (G1-4's internal latch); rejects `SessionFailed` when the Session fails. */
+export function failedOf(harness: Harness): Promise<never> {
+	return (harness as unknown as { readonly failed: Promise<never> }).failed;
+}
+
 /** Open a Harness whose registry holds `tasks`; failures passed to `onReport` are collected. */
 export async function openTasks(
 	storage: Storage,

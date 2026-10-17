@@ -923,9 +923,9 @@ export interface Session extends DocumentObserver {
 	commit<T>(change: (tx: Tx) => T | Promise<T>, context: Context): Promise<T>;
 	/** Seal admission, settle admitted commits, then close storage. */
 	close(context: Context): Promise<void>;
-	/** Observe complete commits synchronously after adoption. The listener must not throw, block, or call Session APIs. */
+	/** Observe complete commits synchronously after adoption. The listener must not block or call Session APIs; a throw is reported. */
 	subscribeCommits(listener: (publication: CommitPublication, context: Context) => void): () => void;
-	/** Observe close synchronously when it begins. The listener must not throw, block, or call Session APIs. */
+	/** Observe close synchronously when it begins. The listener must not block or call Session APIs; a throw is reported. */
 	subscribeClose(listener: () => void): () => void;
 
 	snapshot<T extends JsonObject>(token: SessionDocToken<T>, context: Context): Promise<Readonly<T> | undefined>;

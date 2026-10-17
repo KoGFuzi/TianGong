@@ -53,8 +53,8 @@
 ## 2. 验证协议（每批次 commit 前强制）
 
 1. `bun run check` 全绿。
-2. `packages/tui` 下 Node 跑 vitest：
-   `PATH="$HOME/.local/share/fnm/node-versions/v24.21.0/installation/bin:$PATH" node ../../node_modules/vitest/vitest.mjs --run`
+2. `packages/tui` 下 Node 跑 node:test：
+   `PATH="$HOME/.local/share/fnm/node-versions/v24.21.0/installation/bin:$PATH" node --test --test-reporter=dot --test-reporter-destination=stdout test/*.test.ts`
    全绿（含 native 相关测试按平台 skip）。
 3. 保护清单回归自查：`component-padding.test.ts`、`program-status.test.ts` 必须保持绿。
 4. 每批次一个 commit：`feat(tui)/fix(tui): ...`，正文注明上游条目与 issue 号。

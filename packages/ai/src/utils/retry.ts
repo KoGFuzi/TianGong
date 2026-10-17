@@ -45,15 +45,19 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"520",
 	"524",
 	"529",
-	"service.?unavailable",
+	// Also matches "The service is temporarily unavailable" (#10965).
+	"service.?(?:is.?)?(?:temporarily.?)?unavailable",
 	"server.?error",
 	"internal.?error",
 
 	// Wrapper/provider text for transient upstream failures, including OpenRouter
-	// "Provider returned error" responses (#2264).
-	"provider.?returned.?error",
+	// "Provider returned error" responses (#2264) and gateway wording such as
+	// "The upstream provider returned an error" (#10842).
+	"provider.?returned.?(?:an.?)?error",
 	"exceeded request buffer limit while retrying upstream",
-
+	// Gateway failure relaying the upstream response stream, sent as an OpenAI
+	// Responses `response.failed` event without an error code (#10920).
+	"unable to forward upstream",
 	// Mistral reports a mid-stream termination as `finish_reason: "error"`; without this the
 	// message looks terminal and the turn ends as model_error instead of retrying (#10487). The
 	// literal phrase is scoped to that finish reason: other providers' `Provider stopped with:

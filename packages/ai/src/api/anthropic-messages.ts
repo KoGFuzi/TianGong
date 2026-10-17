@@ -40,7 +40,7 @@ import type {
 import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
-import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.ts";
+import { parseJsonWithRepair, parseStreamingJson, parseToolCallArguments } from "../utils/json-parse.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { retryProviderRequest } from "../utils/provider-retry.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
@@ -60,7 +60,7 @@ import {
 } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
 import { adjustMaxTokensForThinking, buildBaseOptions, clampMaxTokensToContext } from "./simple-options.ts";
-import { transformMessages } from "./transform-messages.ts";
+import { splitErrorToolResultImages, transformMessages } from "./transform-messages.ts";
 
 /**
  * Resolve cache retention preference.
@@ -134,6 +134,17 @@ const fromClaudeCodeName = (name: string, tools?: Tool[]) => {
 /**
  * Convert content blocks to Anthropic API format
  */
+function convertImageBlock(image: ImageContent) {
+	return {
+		type: "image" as const,
+		source: {
+			type: "base64" as const,
+			media_type: image.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+			data: image.data,
+		},
+	};
+}
+
 function convertContentBlocks(content: (TextContent | ImageContent)[]):
 	| string
 	| Array<
@@ -161,14 +172,7 @@ function convertContentBlocks(content: (TextContent | ImageContent)[]):
 				text: sanitizeSurrogates(block.text),
 			};
 		}
-		return {
-			type: "image" as const,
-			source: {
-				type: "base64" as const,
-				media_type: block.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
-				data: block.data,
-			},
-		};
+		return convertImageBlock(block);
 	});
 
 	// If only images (no text), add placeholder text block
@@ -637,25 +641,58 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				client = created.client;
 				isOAuth = created.isOAuthToken;
 			}
-			let params = buildParams(model, normalizedContext, isOAuth, options);
-			const nextParams = await options?.onPayload?.(params, model);
-			if (nextParams !== undefined) {
-				params = { ...(nextParams as MessageCreateParamsStreaming), stream: true };
-			}
 			const requestOptions = {
 				...(options?.signal ? { signal: options.signal } : {}),
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				maxRetries: 0,
 			};
-			const response = await retryProviderRequest(
-				() => client.beta.messages.create(params, requestOptions).asResponse(),
-				{
-					maxRetries: options?.maxRetries,
-					maxRetryDelayMs: options?.maxRetryDelayMs,
-					signal: options?.signal,
-					onRetry: options?.onRetry,
-				},
-			);
+			let disablePreferredStrictTools = false;
+			let response: Response;
+			for (;;) {
+				options?.signal?.throwIfAborted();
+				const built = buildParams(model, normalizedContext, isOAuth, options, disablePreferredStrictTools);
+				let params = built.params;
+				const nextParams = await options?.onPayload?.(params, model);
+				if (nextParams !== undefined) {
+					params = { ...(nextParams as MessageCreateParamsStreaming), stream: true };
+				}
+				try {
+					response = await retryProviderRequest(
+						() => client.beta.messages.create(params, requestOptions).asResponse(),
+						{
+							maxRetries: options?.maxRetries,
+							maxRetryDelayMs: options?.maxRetryDelayMs,
+							signal: options?.signal,
+							onRetry: options?.onRetry,
+						},
+					);
+					break;
+				} catch (error) {
+					// Only downgrade a rejected request, never an already-started stream.
+					if (
+						options?.signal?.aborted ||
+						disablePreferredStrictTools ||
+						!built.hasPreferredStrictTools ||
+						!(error instanceof Anthropic.APIError) ||
+						error.status !== 400 ||
+						error.type !== "invalid_request_error" ||
+						![
+							"The compiled grammar is too large",
+							"Too many strict tools (",
+							"Schemas contains too many parameters with union types (",
+						].some((message) => error.message.includes(message))
+					) {
+						throw error;
+					}
+					disablePreferredStrictTools = true;
+					appendAssistantMessageDiagnostic(output, {
+						type: "anthropic_strict_tools_fallback",
+						timestamp: Date.now(),
+						error: { message: error.message },
+						details: { reason: "strict_tool_limits_exceeded" },
+					});
+				}
+			}
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			stream.push({ type: "start", partial: output });
 
@@ -802,7 +839,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 								partial: output,
 							});
 						} else if (block.type === "toolCall") {
-							block.arguments = parseStreamingJson(block.partialJson);
+							Object.assign(block, parseToolCallArguments(block.partialJson));
 							// Finalize in-place and strip the scratch buffer so replay only
 							// carries parsed arguments.
 							delete (block as { partialJson?: string }).partialJson;
@@ -1130,7 +1167,8 @@ function buildParams(
 	context: TranscriptContext,
 	isOAuthToken: boolean,
 	options?: AnthropicOptions,
-): MessageCreateParamsStreaming {
+	disablePreferredStrictTools = false,
+): { params: MessageCreateParamsStreaming; hasPreferredStrictTools: boolean } {
 	const { cacheControl } = getCacheControl(model, options?.cacheRetention, options?.env);
 	const compat = getAnthropicCompat(model);
 	const initialSystemMessage = getInitialSystemMessage(context.messages);
@@ -1141,6 +1179,26 @@ function buildParams(
 	// by value in a `tool_addition` block, which also expresses same-name redefinitions.
 	// Anthropic rejects a tool list where every tool is deferred, so there must be an initial
 	// active tool to anchor the placeholder. Otherwise the current tool list is sent.
+	let hasPreferredStrictTools = false;
+	const convertToolDefinitions = (tools: Tool[], toolCacheControl?: CacheControlEphemeral): BetaTool[] => {
+		const definitions = convertTools(
+			tools,
+			isOAuthToken,
+			compat.supportsEagerToolInputStreaming,
+			compat.supportsStrictTools,
+			toolCacheControl,
+			disablePreferredStrictTools,
+		);
+		if (
+			definitions.some((definition, index) => {
+				const config = tools[index].constrainedSampling;
+				return definition.strict === true && config && config.type === "json_schema" && config.strict === "prefer";
+			})
+		) {
+			hasPreferredStrictTools = true;
+		}
+		return definitions;
+	};
 	const initialTools = initialSystemMessage?.toolsAdded ?? [];
 	const nativeToolChanges =
 		compat.supportsMidConvoSystemMessages && compat.supportsMidConvoToolChanges && initialTools.length > 0;
@@ -1150,10 +1208,7 @@ function buildParams(
 		cacheControl,
 		compat.allowEmptySignature,
 		model.compat?.supportsMidConvoEffort === true ? model.provider : undefined,
-		nativeToolChanges
-			? (tools) =>
-					convertTools(tools, isOAuthToken, compat.supportsEagerToolInputStreaming, compat.supportsStrictTools)
-			: undefined,
+		nativeToolChanges ? convertToolDefinitions : undefined,
 	);
 	const activeEffort = options?.effort ?? "high";
 	const betaFeatures = getBetaFeatures(model, context, isOAuthToken, nativeToolChanges, options);
@@ -1211,26 +1266,11 @@ function buildParams(
 		// placeholder. The list never changes afterwards: later tools are defined by value in
 		// `tool_addition` blocks and withdrawn by `tool_removal`, so the cached prefix survives
 		// every tool change.
-		params.tools = [
-			...convertTools(
-				initialTools,
-				isOAuthToken,
-				compat.supportsEagerToolInputStreaming,
-				compat.supportsStrictTools,
-				toolCacheControl,
-			),
-			DEFERRED_TOOL_PLACEHOLDER,
-		];
+		params.tools = [...convertToolDefinitions(initialTools, toolCacheControl), DEFERRED_TOOL_PLACEHOLDER];
 	} else {
 		const tools = getCurrentTools(context.messages);
 		if (tools.length > 0) {
-			params.tools = convertTools(
-				tools,
-				isOAuthToken,
-				compat.supportsEagerToolInputStreaming,
-				compat.supportsStrictTools,
-				toolCacheControl,
-			);
+			params.tools = convertToolDefinitions(tools, toolCacheControl);
 		}
 	}
 
@@ -1287,7 +1327,7 @@ function buildParams(
 		params.fallbacks = allowedFallbackModels.map((fallback) => ({ model: fallback.model }));
 	}
 
-	return params;
+	return { params, hasPreferredStrictTools };
 }
 
 // Normalize tool call IDs to match Anthropic's required pattern and length
@@ -1295,11 +1335,11 @@ function normalizeToolCallId(id: string): string {
 	return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 }
 
-function convertToolResult(msg: ToolResultMessage): ContentBlockParam {
+function convertToolResult(msg: ToolResultMessage, content = msg.content): ContentBlockParam {
 	return {
 		type: "tool_result",
 		tool_use_id: msg.toolCallId,
-		content: convertContentBlocks(msg.content),
+		content: convertContentBlocks(content),
 		is_error: msg.isError,
 	};
 }
@@ -1372,14 +1412,7 @@ function convertMessages(
 							text: sanitizeSurrogates(item.text),
 						};
 					} else {
-						return {
-							type: "image",
-							source: {
-								type: "base64",
-								media_type: item.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
-								data: item.data,
-							},
-						};
+						return convertImageBlock(item);
 					}
 				});
 				const filteredBlocks = blocks.filter((b) => {
@@ -1466,9 +1499,17 @@ function convertMessages(
 		} else if (msg.role === "toolResult") {
 			// Collect all consecutive toolResult messages, needed for z.ai Anthropic endpoint.
 			const toolResults: ContentBlockParam[] = [];
+			// Anthropic rejects error tool results that contain anything but text, so their images follow
+			// all tool results of the turn, which must come first in the user message (#10794).
+			const errorImages: ContentBlockParam[] = [];
 			let j = i;
 			while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
-				toolResults.push(convertToolResult(transformedMessages[j] as ToolResultMessage));
+				const toolMsg = transformedMessages[j] as ToolResultMessage;
+				const split = splitErrorToolResultImages(toolMsg);
+				toolResults.push(convertToolResult(toolMsg, split?.content));
+				if (split) {
+					errorImages.push({ type: "text", text: split.caption }, ...split.images.map(convertImageBlock));
+				}
 				j++;
 			}
 
@@ -1477,7 +1518,7 @@ function convertMessages(
 
 			params.push({
 				role: "user",
-				content: toolResults,
+				content: [...toolResults, ...errorImages],
 			});
 		}
 	}
@@ -1583,11 +1624,16 @@ function convertTools(
 	supportsEagerToolInputStreaming: boolean,
 	supportsStrictTools: boolean,
 	cacheControl?: CacheControlEphemeral,
+	disablePreferredStrictTools = false,
 ): BetaTool[] {
 	if (!tools) return [];
 
 	return tools.map((tool, index) => {
-		const strict = resolveJsonSchemaStrictSampling(tool, supportsStrictTools, isAnthropicStrictUnsupportedKeyword);
+		const config = tool.constrainedSampling;
+		const strict =
+			disablePreferredStrictTools && config && config.type === "json_schema" && config.strict === "prefer"
+				? undefined
+				: resolveJsonSchemaStrictSampling(tool, supportsStrictTools, isAnthropicStrictUnsupportedKeyword);
 		const parameters = getJsonSchemaToolParameters(tool, strict);
 		const schema = parameters as { properties?: unknown; required?: string[] };
 		const legacyInputSchema = {

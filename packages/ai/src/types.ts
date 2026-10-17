@@ -917,6 +917,13 @@ export interface OpenAIResponsesCompat {
 	supportsExplicitPromptCacheMode?: boolean;
 	/** Whether the provider accepts the `max_output_tokens` parameter. Some Codex-protocol gateways reject it. Default: true. */
 	supportsMaxOutputTokens?: boolean;
+	/**
+	 * Whether thinking level changes are sent as configuration_update input items instead of
+	 * changing reasoning.effort, so a change keeps the prompt cache. Only used by the
+	 * openai-responses API, and ignored with Sign in with ChatGPT on the openai provider.
+	 * Default: false.
+	 */
+	supportsMidConvoEffort?: boolean;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */

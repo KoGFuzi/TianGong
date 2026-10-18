@@ -317,7 +317,7 @@ it("types submissions, task waits, compaction, and tasks erased into extensions"
 	expectTypeOf(typedWaits).toBeFunction();
 
 	const compileTimeFailures = (conversation: Conversation) => {
-		// @ts-expect-error an input submission carries no entry
+		// An input submission carries an `InputEntry` now; a write submission carries no content.
 		const inputWithEntry: SubmissionDraft = { type: "input", content: "hi", entry: { kind: "note" } };
 		// @ts-expect-error a write submission carries no content
 		const writeWithContent: SubmissionDraft = { type: "write", entry: { kind: "note" }, content: "hi" };

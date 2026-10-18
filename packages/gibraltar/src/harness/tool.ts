@@ -3,6 +3,7 @@ import { awaitWithContext } from "@OnePanda-TgSec/chord/context";
 import { overlap } from "@OnePanda-TgSec/chord/delta";
 import type { ImageContent, TextContent, ToolCall, ToolResultMessage } from "@OnePanda-TgSec/tg-ai";
 import { validateToolArguments } from "@OnePanda-TgSec/tg-ai/utils/validation";
+import { Compile } from "typebox/compile";
 import { defineDocFamily } from "../documents.ts";
 import { AssistantEntry, ToolResultEntry } from "../entries.ts";
 import { errorMessage } from "../errors.ts";
@@ -198,19 +199,15 @@ export const ToolTask = defineTask<ToolTaskInput, ToolTaskCheckpoint, ToolTaskRe
 	},
 });
 
-/**
- * The called tool, among the tools the phase agent offers the model. Nested calls resolve among the same set until
- * tool callers (`ToolRegistration.callers`, `Agent.callable`) arrive with their batch; every enabled tool is callable
- * by both until then.
- */
+/** The called tool: among the tools the model is offered for a model-issued call, else among those tools may call. */
 async function resolveTool(
 	runtime: Runtime,
-	_input: ToolTaskInput,
+	input: ToolTaskInput,
 	name: string,
 	context: Context,
 ): Promise<ToolRegistration | undefined> {
 	const agent = await runtime.agent(context);
-	return agent.tools.find((tool) => tool.name === name);
+	return (input.kind === "model" ? agent.tools : agent.callable).find((tool) => tool.name === name);
 }
 
 /** The call: from the input for a nested call, which hooks see with its parent, else from the assistant entry. */
@@ -312,6 +309,11 @@ async function run(
 						bytesPerSecond: PROGRESS_BYTES_PER_SECOND,
 					}
 				: undefined,
+		retainedOutput: () => {
+			assertLive();
+			const retained = reported.output.snapshot();
+			return { text: retained.text, truncated: retained.droppedBytes > 0 };
+		},
 		diagnostic: (diagnostic) => {
 			assertLive();
 			reported.diagnostics.push(copyJson(diagnostic, { omitUndefinedProperties: true }) as ToolDiagnostic);
@@ -482,15 +484,15 @@ function publishProgress(runtime: Runtime, reported: Reported, enabled: boolean,
 
 /**
  * The settled result: the tool's result with the retained output and last details as fallbacks, its diagnostics after
- * those reported through the api, `afterTool` applied, and explicit text bounded, with the Harness's diagnostics last.
- * A nested call's programs get the tool's bounded output as `structuredOutput`; the schema declarations and their
- * validation arrive with the structured-output batch, which will also use the tool's registration for its contract.
+ * those reported through the api, `afterTool` applied, explicit text bounded, and `structuredOutput` checked against the
+ * tool's schema, with the Harness's diagnostics last. A nested call whose `structuredOutput` breaks the contract gets an
+ * error result without it; a model-issued call only loses it, and the break is reported to the host.
  */
 async function finalResult(
 	runtime: Runtime,
 	input: ToolTaskInput,
 	call: ToolHookCall,
-	_tool: ToolRegistration,
+	tool: ToolRegistration,
 	result: ToolExecutionResult,
 	reported: Reported,
 	context: Context,
@@ -514,12 +516,61 @@ async function finalResult(
 	}
 	const bounded = boundContent(final.output ?? [], reported.limits);
 	if (bounded.droppedBytes > 0) harness.push(truncated(bounded, reported.limits.retain));
+	const broken = structuredOutputError(tool, final);
+	if (broken !== undefined) {
+		const { structuredOutput: _dropped, ...rest } = final;
+		if (input.kind === "nested") {
+			final = { ...rest, isError: true };
+			harness.push(toolDiagnostic("invalid_structured_output", broken));
+		} else {
+			// The model never sees structured output, so its call stands; the host learns of the broken tool.
+			final = rest;
+			runtime.report(new Error(broken));
+		}
+	}
 	// Programs get the tool's own value: without a schema, its output. The model reads only `output`, so model-issued
-	// calls skip this.
-	if (input.kind === "nested") {
+	// calls skip both.
+	if (input.kind === "nested" && tool.structuredOutputSchema === undefined) {
 		final = { ...final, structuredOutput: outputValue(bounded.content) as JsonValue };
 	}
+	// A schema tool's error result without structured output has its text only in the output, which programs never
+	// get: it becomes an error diagnostic, as a thrown error's message does, unless one says what went wrong already.
+	if (
+		input.kind === "nested" &&
+		tool.structuredOutputSchema !== undefined &&
+		final.isError === true &&
+		final.structuredOutput === undefined &&
+		![...(final.diagnostics ?? []), ...harness].some((diagnostic) => diagnostic.severity === "error")
+	) {
+		const text = bounded.content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n");
+		if (text !== "") harness.push(toolDiagnostic("tool_error", text));
+	}
 	return { ...final, output: bounded.content, diagnostics: [...(final.diagnostics ?? []), ...harness] };
+}
+
+const structuredValidators = new WeakMap<object, ReturnType<typeof Compile>>();
+
+/** Why a result's `structuredOutput` breaks the tool's contract, or `undefined` when it keeps it. */
+function structuredOutputError(tool: ToolRegistration, result: ToolExecutionResult): string | undefined {
+	const schema = tool.structuredOutputSchema;
+	const value = result.structuredOutput;
+	if (schema === undefined) {
+		return value === undefined
+			? undefined
+			: `Tool ${tool.name} returned structuredOutput but declares no structuredOutputSchema`;
+	}
+	if (value === undefined) {
+		return result.isError === true ? undefined : `Tool ${tool.name} returned no structuredOutput`;
+	}
+	let validator = structuredValidators.get(schema);
+	if (validator === undefined) {
+		validator = Compile(schema);
+		structuredValidators.set(schema, validator);
+	}
+	if (validator.Check(value)) return undefined;
+	const [first] = validator.Errors(value);
+	const path = first?.instancePath.replace(/^\//, "").replace(/\//g, ".") || "root";
+	return `Tool ${tool.name} returned structuredOutput that does not match its schema: ${path}: ${first?.message ?? "invalid"}`;
 }
 
 /**

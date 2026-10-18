@@ -1,12 +1,17 @@
-import type { Draft, JsonRepresentation } from "@OnePanda-TgSec/chord";
+import { copyJson, type Draft, type JsonRepresentation } from "@OnePanda-TgSec/chord";
 import { defineDoc } from "../documents.ts";
 import { UserEntry } from "../entries.ts";
-import type { ConversationId, EntryDraft, EntryId, JsonObject, SubmissionId, Tx } from "../types.ts";
-import type { QueueMode, Settings, UserInput } from "./types.ts";
+import type { ConversationId, EntryDraft, EntryId, EntryRecord, JsonObject, SubmissionId, Tx } from "../types.ts";
+import type { InputEntry, QueueMode, Settings, UserInput } from "./types.ts";
 
-/** A queued submission: user input for a run, or a passive entry write. */
+/** A queued submission: user input for a run, with the entry it is placed as when not `tg.user`, or an entry write. */
 export type InboxItem =
-	| { id: SubmissionId; mode: "steer" | "followUp"; content: JsonRepresentation<UserInput> }
+	| {
+			id: SubmissionId;
+			mode: "steer" | "followUp";
+			content: JsonRepresentation<UserInput>;
+			entry?: JsonRepresentation<InputEntry>;
+	  }
 	/** `entry` is an `EntryDraft`, stored as plain JSON. */
 	| { id: SubmissionId; mode: "write"; entry: JsonObject };
 
@@ -95,14 +100,32 @@ export async function applyBoundary(
 	const placed: SubmissionId[] = [];
 	for (const index of users) {
 		const item = items[index] as Draft<Extract<InboxItem, { mode: "steer" | "followUp" }>>;
-		const message = { role: "user", content: item.content as UserInput, timestamp: now } as const;
-		const entry = await tx.appendEntry(UserEntry, conversationId, { model: [message] });
+		const entry = await appendInput(tx, conversationId, item.content as UserInput, item.entry as InputEntry, now);
 		tx.placeSubmission(item.id, entry.id);
 		placed.push(item.id);
 	}
 	const removed = [...writes, ...users].sort((a, b) => b - a);
 	for (const index of removed) items.splice(index, 1);
 	return { users: placed, reset };
+}
+
+/** Append the entry an input is placed as: `entry`'s kind and data, or `tg.user`, with the user message of `content`. */
+export function appendInput(
+	tx: Tx,
+	conversationId: ConversationId,
+	content: UserInput,
+	entry: InputEntry | undefined,
+	now: number,
+): Promise<EntryRecord> {
+	const message = { role: "user", content, timestamp: now } as const;
+	if (entry === undefined) return tx.appendEntry(UserEntry, conversationId, { model: [message] });
+	return tx.appendEntry(conversationId, { ...pickInputEntry(entry), model: [message] });
+}
+
+/** The kind and data of an input's entry as strict JSON, without other fields an untyped caller might pass. */
+export function pickInputEntry({ kind, data }: InputEntry): JsonRepresentation<InputEntry> {
+	const picked = data === undefined ? { kind } : { kind, data };
+	return copyJson(picked, { omitUndefinedProperties: true }) as JsonRepresentation<InputEntry>;
 }
 
 /**
@@ -115,7 +138,7 @@ export function isDisplayOnly(entry: EntryDraft): boolean {
 
 /** Whether a reset (`head: "self"` write) is queued; entries appended before it leave the active range when it lands. */
 export function hasQueuedReset(items: readonly InboxItem[]): boolean {
-	return items.some((item) => item.mode === "write" && (item.entry as { head?: unknown }).head === "self");
+	return items.some((item) => item.mode === "write" && item.entry.head === "self");
 }
 
 /** Whether a head write targets an entry before the active range, so placing it would bring back cut history. */

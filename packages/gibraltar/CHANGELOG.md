@@ -39,9 +39,37 @@
   tool events field by field see the new members; matching on `type` alone is unaffected.
 - A `bash`/`powershell` command that exits nonzero is an error result with an `exit_code` diagnostic that still
   carries the output, where it used to throw; a timeout or an interrupted start still throws.
+- Tools resolve per caller: `ToolRegistration.callers` (default both) splits `agent.tools`, what the model is
+  offered, from `agent.callable`, what `executeTool()` nested calls resolve among. A nested call of a
+  `["model"]`-only tool is now `tool_unavailable`, and a `["tools"]`-only tool is no longer offered to the
+  model. Every tool was callable by both before.
 
 ### Added
 
+- Structured tool output. `ToolRegistration.structuredOutputSchema` declares the contract of
+  `ToolExecutionResult.structuredOutput`, which nesting tools (`executeTool()` callers) get validated, and the
+  model never sees. Without a schema, callers get the result's bounded output as the model sees it: one text
+  item as a string, one image as itself, otherwise the content list. A nested call whose `structuredOutput`
+  breaks the contract settles as an error result with an `invalid_structured_output` diagnostic; a
+  model-issued call only loses the value, and the break is reported to the host. A schema tool's error result
+  without a value puts its text in a `tool_error` diagnostic for callers, not in `structuredOutput`.
+  `ToolExecutionApi.retainedOutput()` returns the output the model will see, and `bash` and `powershell`
+  return `{ output, truncated, fullOutputPath?, exitCode }` as theirs.
+- `ToolRegistration.deferred` keeps a tool out of the model's request until `modelTools` names it, in its
+  array or its `add`, which `control.addTools` writes; other tools can call a deferred tool any time.
+  `Agent.callable` lists what nested calls resolve, `Agent.deferred` what `tool_search` loads, and
+  `addTools` extends `modelTools` too.
+- The `tool_search` extension, exported as `@OnePanda-TgSec/tg-gibraltar/tool-search`: the model searches
+  its deferred tools with BM25 (`rankDocuments()`/`tokenize()` in `src/search.ts`) and loads the matches with
+  `control.addTools`, so the next request offers them, per branch and in the baseline after a reset.
+- An input may be placed as its own entry: the input submission takes `entry?: InputEntry` (`{ kind, data }`),
+  whose kind must be a non-empty string not starting with `tg.`. It is placed with its content as the user
+  message, queued items carry it in `tg.inbox`, and a write of only `kind` and `data` from an untyped caller
+  is stripped to those fields.
+- `tg.live.compactionFailure` keeps the newest compaction failure (`taskId`, `reason`, `error`) until a
+  compaction produces a summary; an aborted compaction or one that finds nothing to compact leaves it. Agent
+  event snapshots carry `compactionFailure`, and `compaction_end` carries `error` when the compaction failed,
+  faulted, or was orphaned.
 - `ScanOrder` is exported. `scanTasks({ order: "descending" }, limit, cursor)` pages the newest tasks first;
   `Conversation.entries({ order })` forwards the order to `scanEntries`.
 - The Session fails as one unit on the first failed Storage call: `SessionFailed` carries the first error as

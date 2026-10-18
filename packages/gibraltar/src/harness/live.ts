@@ -59,6 +59,14 @@ export type NestedToolSummary = {
 	error?: string;
 };
 
+/** The newest compaction that failed since a compaction last produced a summary (spec §8.7). */
+export type CompactionFailure = {
+	taskId: TaskId<CompactionResult>;
+	reason: CompactionReason;
+	/** The failed or faulted outcome's error message, or why the scheduler orphaned the task. */
+	error: string;
+};
+
 /** Presentation of one live compaction task (spec §8.7). */
 export type CompactionStatus = {
 	taskId: TaskId<CompactionResult>;
@@ -93,6 +101,11 @@ export type LiveState = {
 	nestedTools?: NestedToolSlot[];
 	/** Live compaction tasks in task ID order; absent when none. */
 	compactions?: CompactionStatus[];
+	/**
+	 * The newest compaction failure, so a client can show it after the task ended. A compaction that produces a summary
+	 * removes it; one that is aborted or finds nothing to compact leaves it.
+	 */
+	compactionFailure?: CompactionFailure;
 };
 
 export const LiveDoc = defineDoc<LiveState>({
@@ -141,6 +154,13 @@ export function addCompactionStatus(live: Draft<LiveState>, status: CompactionSt
 /** The status of compaction task `taskId`, if listed. */
 export function compactionStatus(live: Draft<LiveState>, taskId: TaskId): Draft<CompactionStatus> | undefined {
 	return live.compactions?.find((status) => status.taskId === taskId);
+}
+
+/** Remove the status of compaction task `taskId` and record that it failed with `error`. */
+export function failCompactionStatus(live: Draft<LiveState>, taskId: TaskId, error: string): void {
+	const status = compactionStatus(live, taskId);
+	if (status !== undefined) live.compactionFailure = { taskId: status.taskId, reason: status.reason, error };
+	removeCompactionStatus(live, taskId);
 }
 
 /** Remove the status of compaction task `taskId`, and the list once empty. */
@@ -207,7 +227,7 @@ export function clearProgress(slot: Draft<SlotProgress>): void {
 /**
  * Harness cleanup for a terminal outcome the scheduler writes itself (`faulted` or `orphaned`). A run task ends its
  * run; a tool task's slot is marked done without an entry, and context derivation synthesizes the missing result; a
- * compaction task's status is removed.
+ * compaction task's status is removed and its failure recorded.
  * Ignores other kinds so it never creates `tg.live` elsewhere. The scheduler calls this without knowing task kinds;
  * the Harness passes it in (spec §5.4).
  * REMINDER: a committed generation partial becomes an aborted assistant entry here, exactly as in the generation abort
@@ -229,7 +249,8 @@ export async function settleSchedulerOutcome(
 		return;
 	}
 	if (record.kind === COMPACTION_TASK_KIND) {
-		removeCompactionStatus(await tx.doc(LiveDoc, record.conversationId), record.id);
+		const error = outcome.status === "faulted" ? outcome.error.message : outcome.reason;
+		failCompactionStatus(await tx.doc(LiveDoc, record.conversationId), record.id, error);
 		return;
 	}
 	if (!RUN_TASK_KINDS.has(record.kind)) return;

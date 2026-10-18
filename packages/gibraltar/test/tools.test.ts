@@ -71,6 +71,7 @@ function fakeApi(env: ExecutionEnv | undefined): {
 		env,
 		output: (chunk: string | Uint8Array) =>
 			output.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk)),
+		retainedOutput: () => ({ text: output.join(""), truncated: false }),
 		diagnostic: (diagnostic: ToolDiagnostic) => diagnostics.push(diagnostic),
 		details: async () => {},
 	} as unknown as ToolExecutionApi;

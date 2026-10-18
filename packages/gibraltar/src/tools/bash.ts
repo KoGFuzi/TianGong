@@ -7,6 +7,16 @@ import { requireEnv } from "./env.ts";
 
 const MAX_TIMEOUT_SECONDS = 2_147_483_647 / 1000;
 
+/** What a program that calls `bash` or `powershell` receives. */
+const shellStructuredOutputSchema = Type.Object({
+	output: Type.String({ description: "Combined stdout and stderr: the retained tail, as the model sees it" }),
+	truncated: Type.Boolean({ description: "Whether earlier output was dropped" }),
+	fullOutputPath: Type.Optional(Type.String({ description: "File with the complete output, when it was spilled" })),
+	exitCode: Type.Number(),
+});
+
+export type ShellStructuredOutput = Static<typeof shellStructuredOutputSchema>;
+
 const bashSchema = Type.Object({
 	command: Type.String({ description: "Bash command to execute" }),
 	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
@@ -72,8 +82,8 @@ async function prepareExecution(
 
 /**
  * Run each command form in turn until one starts, streaming output to `api.output()` within the retained window, and
- * turn the result into the tool's result: a spill diagnostic, and an error result with the exit code for a nonzero
- * exit. A failure such as a timeout throws.
+ * turn the result into the tool's result: a spill diagnostic, an error result for a nonzero exit, and a thrown error for
+ * a failure such as a timeout. The structured output repeats the retained output with the exit code.
  */
 async function runCommand(
 	commands: readonly (string | readonly string[])[],
@@ -114,9 +124,16 @@ async function runCommand(
 		throw result.error;
 	}
 	const exitCode = result.value.exitCode;
-	if (exitCode === 0) return {};
+	const retained = api.retainedOutput();
+	const structuredOutput: ShellStructuredOutput = {
+		output: retained.text,
+		truncated: retained.truncated,
+		...(spillPath === undefined ? {} : { fullOutputPath: spillPath }),
+		exitCode,
+	};
+	if (exitCode === 0) return { structuredOutput };
 	const exited = { severity: "error", code: "exit_code", message: `Command exited with code ${exitCode}` } as const;
-	return { isError: true, diagnostics: [exited] };
+	return { structuredOutput, isError: true, diagnostics: [exited] };
 }
 
 /**
@@ -131,6 +148,7 @@ export function createBashTool(options?: BashToolOptions): ToolRegistration<type
 		name: "bash",
 		description: `Execute a bash command in the current working directory. Returns combined stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
 		parameters: bashSchema,
+		structuredOutputSchema: shellStructuredOutputSchema,
 		outputLimits: { retain: "tail" },
 		async execute(args, api, context) {
 			validateTimeout(args.timeout);
@@ -154,6 +172,7 @@ export function createPowerShellTool(options?: PowerShellToolOptions): ToolRegis
 		name: "powershell",
 		description: `Execute a PowerShell command in the current working directory. Returns combined stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
 		parameters: powershellSchema,
+		structuredOutputSchema: shellStructuredOutputSchema,
 		outputLimits: { retain: "tail" },
 		async execute(args, api, context) {
 			validateTimeout(args.timeout);

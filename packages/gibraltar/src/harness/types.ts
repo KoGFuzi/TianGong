@@ -51,6 +51,12 @@ export type ModelRef = {
 
 export type UserInput = UserMessage["content"];
 
+/**
+ * The entry an input is placed as, instead of `tg.user`: an application kind, and data the transcript shows, such as its
+ * author. Its model message is still the input's user message.
+ */
+export type InputEntry = { readonly kind: string; readonly data?: JsonValue };
+
 /** Host submission: user input that may start a run, or a passive entry write. */
 export type SubmissionDraft = {
 	readonly requestId?: string;
@@ -59,7 +65,8 @@ export type SubmissionDraft = {
 			readonly type: "input";
 			readonly content: UserInput;
 			readonly whenBusy?: "steer" | "followUp" | "reject";
-			readonly entry?: never;
+			/** Place the input as this entry; default `tg.user` without data. The kind must not start with `tg.`. */
+			readonly entry?: InputEntry;
 	  }
 	| {
 			readonly type: "write";
@@ -141,15 +148,15 @@ export type ToolDiagnostic = {
 };
 
 /**
- * What a tool returns, on channels: `output` for the model, `structuredOutput` for programs that call the tool
- * (`executeTool()` callers), and `details` for UIs.
+ * What a tool returns, on three channels: `output` for the model, `structuredOutput` for programs that call the tool
+ * (`executeTool()` callers, code mode scripts), and `details` for UIs.
  */
 export type ToolExecutionResult<TDetails extends JsonValue = JsonValue> = {
 	/** For the model. Omitted: the retained `output()` text. */
 	readonly output?: ToolResultMessage["content"];
 	/**
-	 * For programs. Validated against `structuredOutputSchema` when the tool declares one; not allowed without one.
-	 * Program-facing read paths arrive with nested tool calls; the field is declared here already.
+	 * For programs. Required unless `isError` when the tool declares `structuredOutputSchema`, and validated against it;
+	 * not allowed without one, where programs get the output itself (`NestedToolExecutionResult.structuredOutput`).
 	 */
 	readonly structuredOutput?: JsonValue;
 	readonly isError?: boolean;
@@ -212,6 +219,11 @@ export interface ToolExecutionApi<TDetails extends JsonValue = JsonValue> extend
 	 * omitted before the chunk, as reported by an environment given `outputWindow` (`ShellOutputInfo.skipped`).
 	 */
 	output(chunk: string | Uint8Array, skipped?: ShellOutputSkip): void;
+	/**
+	 * The output retained so far, as the model will see it when the result omits `output`, and whether earlier output was
+	 * dropped; for a tool that also returns that text in its `structuredOutput`.
+	 */
+	retainedOutput(): { readonly text: string; readonly truncated: boolean };
 	/**
 	 * The tail this call's output keeps and the pace of its progress commits, for `ShellExecOptions.window`; `undefined`
 	 * when the tool keeps the head of its output, which cannot accept skips. A wrapper that replaces `output` and
@@ -286,6 +298,22 @@ export type ToolRegistration<
 	readonly replay?: "safe" | "unsafe";
 	/** Default: the settings' `toolExecution`. One sequential call makes its whole round sequential. */
 	readonly executionMode?: ToolExecutionMode;
+	/**
+	 * Schema of `structuredOutput`, which programs that call the tool receive. Omitted: they receive the result's bounded
+	 * output, success or error, as `NestedToolExecutionResult.structuredOutput` describes.
+	 */
+	readonly structuredOutputSchema?: TSchema;
+	/**
+	 * Who may call the tool: the model, other tools through `executeTool()`, or both (default). A code mode tool is
+	 * `["model"]`, so scripts cannot start scripts; tools behind code mode, such as MCP tools, can be `["tools"]`, so the
+	 * model is never offered them.
+	 */
+	readonly callers?: readonly ("model" | "tools")[];
+	/**
+	 * Not offered to the model until loaded: the model gets the tool only when `modelTools` names it, in its array or its
+	 * `add`, which `control.addTools` (from a tool such as `tool_search`) writes. Other tools can call it any time.
+	 */
+	readonly deferred?: true;
 	/**
 	 * Repair arguments models commonly get wrong before validation, such as a JSON string where an array belongs. Must be
 	 * pure and must not mutate `args`: it runs again when a call is retried before its intent is recorded. Its result is
@@ -379,8 +407,18 @@ export type AgentState = {
 	thinkingLevel?: ModelThinkingLevel;
 	/** An array selects exactly these extensions, in order. An object edits the host default selection. */
 	extensions?: string[] | { add?: string[]; remove?: string[] };
-	/** Filters the selected extensions' tools. An array offers exactly these, in order. */
+	/** Filters the selected extensions' tools: the enabled tools. An array enables exactly these, in order. */
 	tools?: string[] | { remove: string[] };
+	/**
+	 * Filters the enabled tools the model may call (`callers` includes `model`): the tools offered to it. Never widens:
+	 * other tools can still call the ones it leaves out.
+	 * - Unset: every such tool except deferred ones.
+	 * - An array: exactly these, in order, deferred ones too.
+	 * - An object: every such tool except deferred ones and those in `remove`, in registry order, followed by the
+	 *   deferred tools in `add` that are not in `remove`, in `add` order. Names of tools that are not deferred or not
+	 *   registered have no effect in `add`.
+	 */
+	modelTools?: string[] | { remove?: string[]; add?: string[] };
 	/** Rendered after every extension section, as the section `instructions`. */
 	instructions?: string;
 	/** Directory within the environment's file system, passed to `HarnessOptions.env`. */
@@ -396,6 +434,11 @@ export type AgentChange = {
 		| { readonly add?: readonly Extension[]; readonly remove?: readonly Extension[] }
 		| null;
 	readonly tools?: readonly ToolRegistration[] | { readonly remove: readonly ToolRegistration[] } | null;
+	/** Replaces the stored filter as a whole; tools loaded with `control.addTools` are in its `add`. */
+	readonly modelTools?:
+		| readonly ToolRegistration[]
+		| { readonly remove?: readonly ToolRegistration[]; readonly add?: readonly ToolRegistration[] }
+		| null;
 	readonly instructions?: string | null;
 	readonly cwd?: string | null;
 };
@@ -405,8 +448,12 @@ export type Agent<Tool extends ToolRegistration = ToolRegistration> = {
 	readonly model?: ModelRef;
 	readonly thinkingLevel: ModelThinkingLevel;
 	readonly extensions: readonly Extension<Tool>[];
-	/** The tools a request offers, in order. */
+	/** The tools a request offers, in order: enabled, callable by the model, and selected by `modelTools`. */
 	readonly tools: readonly Tool[];
+	/** The tools nested calls (`executeTool()`) resolve among, in order: enabled and callable by tools. */
+	readonly callable: readonly Tool[];
+	/** Enabled deferred tools the model may call and is not offered yet, in registry order: what `tool_search` loads. */
+	readonly deferred: readonly Tool[];
 	/** Extension sections, then `instructions` when set. */
 	readonly sections: readonly PromptSection<Tool>[];
 	readonly instructions?: string;

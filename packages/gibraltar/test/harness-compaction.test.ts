@@ -966,6 +966,43 @@ describe("background threshold compaction", () => {
 		await chat.harness.close(context);
 	});
 
+	it("records a failure in tg.live, the snapshot, and compaction_end until a summary is produced", async () => {
+		const chat = await open({ contextWindow: 2000 });
+		await history(chat);
+		chat.setup.settings.compaction = BACKGROUND;
+		const events: AgentEvent[] = [];
+		const stream = await watchEvents(chat.harness, chat.root.id, context);
+		stream.start(async (batch) => {
+			events.push(...batch);
+		});
+		chat.faux.summaries.push(failure("bad request"));
+		await turn(chat, text("u4", 100), text("a4", 100));
+		await waitFor(() => events.some((event) => event.type === "compaction_end"));
+		const recorded = (await live(chat)).compactionFailure;
+		expect(recorded).toMatchObject({ reason: "threshold", error: "Summarization failed: bad request" });
+		expect(events.find((event) => event.type === "compaction_end")).toEqual({
+			type: "compaction_end",
+			taskId: recorded!.taskId,
+			reason: "threshold",
+			error: "Summarization failed: bad request",
+		});
+		const reopened = await watchEvents(chat.harness, chat.root.id, context);
+		expect(reopened.snapshot.compactionFailure).toEqual(recorded);
+		await reopened.stop();
+		// A compaction that produces a summary removes the failure, and ends without an error.
+		chat.setup.settings.compaction = MANUAL;
+		chat.faux.summaries.push(summary());
+		const manual = await chat.root.compact(undefined, context);
+		expect((await result(chat, manual)).status).toBe("completed");
+		expect((await live(chat)).compactionFailure).toBeUndefined();
+		await waitFor(() => events.some((event) => event.type === "compaction_end" && event.taskId === manual));
+		expect(events.find((event) => event.type === "compaction_end" && event.taskId === manual)).not.toHaveProperty(
+			"error",
+		);
+		await stream.stop();
+		await chat.harness.close(context);
+	});
+
 	it("stops through abortTask() and Conversation.abort() with background", async () => {
 		for (const stop of ["task", "conversation"] as const) {
 			const chat = await open({ contextWindow: 2000 });

@@ -43,4 +43,4 @@ collect.sh
 
 # Local agent state
 .tiangong/
-.opencode/
+.opencode/.qoder/

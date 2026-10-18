@@ -7,6 +7,7 @@ const gibraltarSrcTesting = fileURLToPath(new URL("./src/testing/index.ts", impo
 export default defineConfig({
 	test: {
 		environment: "node",
+		setupFiles: ["./test/setup-document-retention.ts"],
 	},
 	resolve: {
 		conditions: ["source"],

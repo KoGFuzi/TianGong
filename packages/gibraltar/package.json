@@ -72,9 +72,14 @@
 		"clean": "shx rm -rf dist",
 		"build": "tsc -p tsconfig.build.json",
 		"test": "vitest --run",
+		"test:evicting": "TG_DOCUMENT_RETENTION_MS=0 vitest --run",
 		"bench:storage": "vitest bench --config vitest.benchmark.config.ts",
 		"bench:storage:memory": "node --conditions=source --experimental-strip-types test/storage-memory.ts",
 		"bench:tool-output": "node --conditions=source --experimental-strip-types --expose-gc test/tool-output-bench.ts",
+		"bench:scheduler-fanout": "node --conditions=source --experimental-strip-types test/scheduler-fanout-bench.ts",
+		"bench:scheduler-memory": "node --conditions=source --experimental-strip-types test/scheduler-memory-bench.ts",
+		"bench:document-cache": "node --conditions=source --experimental-strip-types test/session-document-cache-bench.ts",
+		"bench:document-append": "node --conditions=source --experimental-strip-types test/document-append-bench.ts",
 		"prepublishOnly": "bun run clean && bun run build"
 	},
 	"keywords": [

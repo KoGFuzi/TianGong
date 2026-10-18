@@ -208,6 +208,11 @@ export class TaskScheduler {
 	/** Ownership fields of terminal tasks that walks pass through. */
 	readonly #settled = new Map<TaskId, TaskNode>();
 	/**
+	 * Live tasks with `abandonOnRestart` found at open, from an earlier Harness. The first reservation pass abort-marks
+	 * them with reason `restart`, so nothing of them or below them runs a phase again.
+	 */
+	readonly #abandoned = new Set<TaskId>();
+	/**
 	 * `failFast` waiters the next reconcile checks for a failed task in `on`: at open, when they start waiting, and when
 	 * one of their tasks fails.
 	 */
@@ -250,6 +255,7 @@ export class TaskScheduler {
 			for (const records of scans) {
 				for (const record of records) {
 					this.#live.set(record.id, record);
+					if (record.abandonOnRestart === true) this.#abandoned.add(record.id);
 					if (record.state.status === "running") {
 						tx.setTask(withState(record, { status: "pending", checkpoint: record.state.checkpoint }));
 					}
@@ -280,14 +286,18 @@ export class TaskScheduler {
 	/**
 	 * Commit the abort mark, or settle a task that no registered definition can take as `orphaned` when nothing it owns
 	 * is live, then join the run invocation seen on the line; the commit listener signalled it. The abort invocation
-	 * starts once the task's ordinary owned work is gone. A `completing` task is only marked.
+	 * starts once the task's ordinary owned work is gone. A `completing` task is only marked. A request replaces a
+	 * `restart` mark, so a task abandoned after a restart that waits for its definition is orphaned; with `keepRestart`,
+	 * as for an owner's own cleanup, such a task keeps its mark and waits on.
 	 */
-	async abort(id: TaskId, context: Context): Promise<"marked" | "terminal"> {
+	async abort(id: TaskId, context: Context, keepRestart = false): Promise<"marked" | "terminal"> {
 		const marked = await this.#session.commitWith(async (tx) => {
 			const current = await tx.task(id);
 			if (current === undefined) throw new Error(`Task ${id} does not exist`);
 			if (current.state.status === "terminal") return { result: "terminal" as const };
 			const invocation = this.#invocations.get(id);
+			// A restart-marked task has no run invocation; it only waits for its abort.
+			if (keepRestart && current.abortReason === "restart") return { result: "marked" as const };
 			if (invocation === undefined && current.state.status !== "completing") {
 				await this.#loadScopes(false);
 				if (!this.#ownedLive().has(id)) {
@@ -298,7 +308,7 @@ export class TaskScheduler {
 					}
 				}
 			}
-			if (!current.abortRequested) tx.setTask({ ...current, abortRequested: true });
+			if (!current.abortRequested || current.abortReason !== undefined) tx.setTask(withAbortMark(current));
 			return { result: "marked" as const, run: invocation?.mode === "run" ? invocation : undefined };
 		}, context);
 		// The commit listener signalled the run; join it. A run that ignores its signal can outlive a failed Session,
@@ -346,7 +356,7 @@ export class TaskScheduler {
 				if (record.background && !background) continue;
 				if (this.#inScope(parentOf(record), scope, background) !== true) continue;
 				reached.push(record.id);
-				if (!record.abortRequested) tx.setTask({ ...record, abortRequested: true });
+				if (!record.abortRequested || record.abortReason !== undefined) tx.setTask(withAbortMark(record));
 			}
 			for (const id of queued) {
 				if (this.#inScope({ conversation: id }, scope, background) === true) await this.#withdrawInputs(tx, id);
@@ -385,6 +395,8 @@ export class TaskScheduler {
 				const invocation = this.#invocations.get(record.id);
 				if (invocation?.mode === "run") invocation.controller.abort();
 			}
+			// A request replacing a `restart` mark upgrades the marks of the work below.
+			if (previous?.abortReason !== undefined && record.abortReason === undefined) this.#cascadePending = true;
 			const status = record.state.status;
 			if (status === "completing" && previous?.state.status !== "completing") {
 				if (cancellationIntent(record)) this.#cascadePending = true;
@@ -523,15 +535,22 @@ export class TaskScheduler {
 			await this.#session.commitWith(async (tx) => {
 				if (this.#closing) return;
 				const queued = await this.#loadScopes(cascade);
-				const marked = new Set<TaskId>();
-				const mark = (record: AnyTaskRecord): void => {
-					if (record.abortRequested || marked.has(record.id)) return;
-					marked.add(record.id);
-					tx.setTask({ ...record, abortRequested: true });
+				// A cascade from an abandoned owner passes its `restart` reason on; any other intent marks, or upgrades a
+				// `restart` mark, as a request. Collected first, so a request wins over a `restart` mark of the same pass.
+				const marks = new Map<TaskId, { readonly record: AnyTaskRecord; readonly reason: "restart" | undefined }>();
+				const mark = (record: AnyTaskRecord, reason: "restart" | undefined): void => {
+					const staged = marks.get(record.id);
+					if (staged !== undefined && staged.reason === undefined) return;
+					if (record.abortRequested && (record.abortReason === undefined || reason !== undefined)) return;
+					marks.set(record.id, { record, reason });
 				};
 				// Loading edges can reveal a cancelled owner, so marks are derived on every pass.
 				for (const record of this.#live.values()) {
-					if (!record.background && this.#belowCancelled(parentOf(record))) mark(record);
+					if (record.background) continue;
+					const above = this.#cancelledOwnerAbove(parentOf(record));
+					if (above === undefined) continue;
+					// Only an owner abandoned after a restart, and nothing else, passes its reason on.
+					mark(record, above.abortReason === "restart" && !failedOutcome(above) ? "restart" : undefined);
 				}
 				for (const id of checks) {
 					const waiter = this.#live.get(id);
@@ -539,9 +558,10 @@ export class TaskScheduler {
 					// Every other live task: the failed one keeps its own outcome.
 					for (const member of waiter.state.on) {
 						const record = this.#live.get(member);
-						if (record !== undefined && !failedOutcome(record)) mark(record);
+						if (record !== undefined && !failedOutcome(record)) mark(record, undefined);
 					}
 				}
+				for (const { record, reason } of marks.values()) tx.setTask(withAbortMark(record, reason));
 				for (const id of queued) if (this.#belowCancelled({ conversation: id })) await this.#withdrawInputs(tx, id);
 				await this.#finalize(tx);
 			}, this.#context);
@@ -722,18 +742,27 @@ export class TaskScheduler {
 	}
 
 	/**
+	 * The nearest live owner with cancellation intent above `start`, or `undefined` when a live owner's cancellation
+	 * intent does not reach it: walking up finds an owner with intent before a background owner without it. Terminal
+	 * owners never cascade (spec §5.4).
+	 */
+	#cancelledOwnerAbove(start: Up): AnyTaskRecord | undefined {
+		for (const step of this.#above(start)) {
+			if ("unknown" in step) return undefined;
+			if (!("task" in step)) continue;
+			const live = this.#live.get(step.task);
+			if (live !== undefined && cancellationIntent(live)) return live;
+			if (step.node.background) return undefined;
+		}
+		return undefined;
+	}
+
+	/**
 	 * Whether a live owner's cancellation intent reaches `start`: walking up finds an owner with intent before a
 	 * background owner without it. Terminal owners never cascade (spec §5.4).
 	 */
 	#belowCancelled(start: Up): boolean {
-		for (const step of this.#above(start)) {
-			if ("unknown" in step) return false;
-			if (!("task" in step)) continue;
-			const live = this.#live.get(step.task);
-			if (live !== undefined && cancellationIntent(live)) return true;
-			if (step.node.background) return false;
-		}
-		return false;
+		return this.#cancelledOwnerAbove(start) !== undefined;
 	}
 
 	/** Fail the Session, which reports it, for a throw in one of the scheduler's own commits; ignored once closing. */
@@ -781,12 +810,24 @@ export class TaskScheduler {
 		}
 	}
 
-	/** Reserve every eligible task in one commit; orphan abort-marked tasks no definition can take. */
+	/**
+	 * Reserve every eligible task in one commit; orphan abort-marked tasks no definition can take, unless abandoned after
+	 * a restart. The first pass after open only abort-marks the abandoned tasks, so later passes see the marks.
+	 */
 	async #reserve(): Promise<Reservation[]> {
 		const reservations: Reservation[] = [];
+		let abandoned: TaskId[] = [];
 		try {
 			await this.#session.commitWith(async (tx) => {
 				if (!this.#enabled || this.#closing) return;
+				for (const id of this.#abandoned) {
+					const record = this.#live.get(id);
+					if (record !== undefined && !record.abortRequested) tx.setTask(withAbortMark(record, "restart"));
+				}
+				if (this.#abandoned.size > 0) {
+					abandoned = [...this.#abandoned];
+					return;
+				}
 				await this.#loadScopes(false);
 				const owned = this.#ownedLive();
 				// Taken once per pass, and only when some task is a candidate.
@@ -796,10 +837,18 @@ export class TaskScheduler {
 					if (record.state.status === "completing") continue;
 					const runnable = record as RunnableTaskRecord;
 					const mode = record.abortRequested ? "abort" : "run";
+					// Work below an owner with cancellation intent waits for its cascade mark instead of running a phase;
+					// schedule the cascade, which may not have run yet.
+					if (mode === "run" && !record.background && this.#belowCancelled(parentOf(record))) {
+						this.#cascadePending = true;
+						this.#scheduleReconcile();
+						continue;
+					}
 					snapshot ??= this.#registry.snapshot();
 					const resolution = this.#resolve(runnable, snapshot);
 					if (resolution.kind === "blocked") {
-						if (mode === "abort") {
+						// An abandoned task waits for its definition, so its abort handler can clean up.
+						if (mode === "abort" && record.abortReason === undefined) {
 							await this.#terminate(tx, record, { status: "orphaned", reason: resolution.reason });
 						}
 						continue;
@@ -824,6 +873,9 @@ export class TaskScheduler {
 			}
 			throw error;
 		}
+		// Marked, or already marked or gone: done with them. Reserve again, now seeing the marks.
+		for (const id of abandoned) this.#abandoned.delete(id);
+		if (abandoned.length > 0) this.#dirty = true;
 		return reservations;
 	}
 
@@ -1217,6 +1269,34 @@ export class TaskScheduler {
 				this.#read(invocation, () =>
 					this.waitForTask(id, withAbortSignal(invocation.controller.signal, context)),
 				)) as ErasedRuntime["waitForTask"],
+			ownedTasks: ((context) =>
+				this.#read(invocation, () =>
+					this.#session.readOnLine(async () => {
+						// The step that ends the invocation may have run on the line before this.
+						if (invocation.ended) throw endedError(invocation);
+						context.abortSignal?.throwIfAborted();
+						// Every live task the invocation's task owns directly.
+						const owned: AnyTaskRecord[] = [];
+						for (const record of this.#live.values()) {
+							if (record.owner === invocation.taskId) owned.push(record);
+						}
+						// Copies, as from storage: the scheduler reads its own.
+						return owned
+							.sort((a, b) => a.id - b.id)
+							.map((record) => copyJson(record as unknown as JsonValue) as unknown as AnyTaskRecord);
+					}),
+				)) as ErasedRuntime["ownedTasks"],
+			abortOwned: ((id: TaskId, context: Context) =>
+				this.#read(invocation, async () => {
+					const bound = withAbortSignal(invocation.controller.signal, context);
+					const record = await this.#session.readOnLine(() => this.#storage.task(id, bound));
+					if (record?.owner !== invocation.taskId) {
+						throw new Error(`Task ${id} is not owned by task ${invocation.taskId}`);
+					}
+					if (record.state.status === "terminal") return;
+					await this.abort(id, bound, true);
+					await this.waitForTask(id, bound);
+				})) as ErasedRuntime["abortOwned"],
 			outcomes: ((ids: readonly TaskId[], context: Context) =>
 				this.#read(invocation, () =>
 					this.#session.readOnLine(async () => {
@@ -1356,6 +1436,12 @@ export class TaskScheduler {
 /** A live owner's durable cancellation intent: its abort mark, or a held outcome other than `completed`. */
 function cancellationIntent(record: AnyTaskRecord): boolean {
 	return record.state.status !== "terminal" && (record.abortRequested || failedOutcome(record));
+}
+
+/** The record with an abort mark: `restart` for an abandonment; without a reason, a request, which replaces `restart`. */
+function withAbortMark(record: AnyTaskRecord, reason?: "restart"): AnyTaskRecord {
+	const { abortReason: _reason, ...rest } = record;
+	return { ...rest, abortRequested: true, ...(reason === undefined ? {} : { abortReason: reason }) } as AnyTaskRecord;
 }
 
 /** Whether the record holds or ends with an outcome other than `completed`. */

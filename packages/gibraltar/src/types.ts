@@ -208,6 +208,16 @@ export interface TaskRuntime<I, S, R, H extends object> extends DocumentObserver
 	getTask<T>(id: TaskId<T>, context: Context): Promise<TaskRecord<JsonValue, JsonValue, T> | undefined>;
 	/** Resolve with the task's terminal receipt; rejects when the invocation ends. */
 	waitForTask<T>(id: TaskId<T>, context: Context): Promise<SettledTask<T>>;
+	/**
+	 * Abort a task this task owns, as `Harness.abortTask()` does, and resolve once it is terminal. Rejects for a task
+	 * another owns; resolves at once for a terminal one.
+	 */
+	abortOwned(id: TaskId, context: Context): Promise<void>;
+	/**
+	 * Live tasks this task owns directly, in ID order: also those an earlier invocation created, before a restart. Tasks
+	 * in conversations it owns are not included. Copies of the committed records.
+	 */
+	ownedTasks(context: Context): Promise<TaskRecord<JsonValue, JsonValue, JsonValue>[]>;
 	/** Outcomes of terminal tasks, in order; rejects when one is missing or not terminal. Used after a wait. */
 	outcomes<T>(ids: readonly TaskId<T>[], context: Context): Promise<TaskOutcome<T>[]>;
 	/**
@@ -277,6 +287,12 @@ export type TaskOptions = {
 	readonly conversationId?: ConversationId;
 	/** Conversation-owned tasks only: excluded from ordinary idle waits, conversation aborts, and cascades. */
 	readonly background?: boolean;
+	/**
+	 * Its creator awaits it only in memory and does not resume after a restart, so it is pointless once the Harness that
+	 * created it is gone. When scheduling starts in a later Harness, the task, if still live, is abort-marked with reason
+	 * `restart`, and the mark cascades to its ordinary owned work, before any of it runs again.
+	 */
+	readonly abandonOnRestart?: boolean;
 };
 
 /** Ownership selected explicitly whenever a conversation is created. */
@@ -535,6 +551,14 @@ type TaskRecordBase<I, R> = {
 	readonly background: boolean;
 	/** Durable abort mark checked before run-mode progress is committed. */
 	readonly abortRequested: boolean;
+	/**
+	 * Why the mark was set when not by an abort request: `restart` for a task abandoned after a restart
+	 * (`TaskOptions.abandonOnRestart`) or below one. Such a task waits for its definition instead of becoming `orphaned`.
+	 * A later abort request clears it.
+	 */
+	readonly abortReason?: "restart";
+	/** Set from `TaskOptions.abandonOnRestart`. Immutable. */
+	readonly abandonOnRestart?: true;
 	/**
 	 * Wall-clock milliseconds of the first change to `running`, stamped by the Session. Kept through waits and recovery,
 	 * so the span to `endedAt` includes them. Absent before the task first runs, and on records written by earlier

@@ -607,7 +607,10 @@ async function finishToolRound(
 	tools.forEach((id, index) => {
 		const outcome = outcomes[index]!;
 		// Version 1 results have no kind; every result a generation's round reads is a model-issued call's.
-		controls.set(id, outcome.status === "completed" ? outcome.result.control : undefined);
+		controls.set(
+			id,
+			outcome.status === "completed" && outcome.result.kind !== "nested" ? outcome.result.control : undefined,
+		);
 	});
 	const slots = (await runtime.snapshot(LiveDoc, conversationId, context))?.tools ?? [];
 	const results = slots.flatMap((slot) => (slot.entry === undefined ? [] : [slot.entry]));
@@ -641,6 +644,7 @@ async function finishToolRound(
 				if (users.length > 0) await startRun(tx, conversationId, live, users);
 			} else {
 				delete live.tools;
+				delete live.nestedTools;
 				if (live.run?.taskId === runtime.taskId) live.run.inputs.push(...users);
 				handOver(live, runtime.taskId, await createGeneration(tx, conversationId));
 			}

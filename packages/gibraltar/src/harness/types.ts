@@ -142,7 +142,7 @@ export type ToolDiagnostic = {
 
 /**
  * What a tool returns, on channels: `output` for the model, `structuredOutput` for programs that call the tool
- * (nested `executeTool()` callers arrive in a later batch), and `details` for UIs.
+ * (`executeTool()` callers), and `details` for UIs.
  */
 export type ToolExecutionResult<TDetails extends JsonValue = JsonValue> = {
 	/** For the model. Omitted: the retained `output()` text. */
@@ -160,6 +160,29 @@ export type ToolExecutionResult<TDetails extends JsonValue = JsonValue> = {
 	/** Spend of the execution itself, such as a model call; stored on the result and in `tg.usage.tools`. */
 	readonly usage?: Usage;
 	readonly control?: ToolControl;
+};
+
+/**
+ * Result of a nested call, as `executeTool()` returns it. Programs read `structuredOutput`; the output for the model
+ * is not kept, and `control` does not apply.
+ */
+export type NestedToolExecutionResult = {
+	/** The nested call's tool task. */
+	readonly taskId: TaskId;
+	/**
+	 * The tool's value for programs. A tool with `structuredOutputSchema`: its validated `structuredOutput`, also on an
+	 * error result that has one; absent otherwise, and an error's text is then in an error diagnostic. A tool without:
+	 * its bounded output, success or error, as a string for one text item, an `ImageContent` for one image, `""` for
+	 * none, and the content list otherwise. Absent on an error result the Harness wrote itself (unavailable, invalid,
+	 * blocked, interrupted, aborted); `diagnostics` say what went wrong.
+	 */
+	readonly structuredOutput?: JsonValue;
+	readonly isError: boolean;
+	readonly details?: JsonValue;
+	readonly diagnostics: readonly ToolDiagnostic[];
+	readonly usage?: Usage;
+	/** Execution time of the attempt that produced the result; absent when it never executed. */
+	readonly durationMs?: number;
 };
 
 /** Whether the tools of one round run at once or one after another in call order. */
@@ -202,6 +225,10 @@ export interface ToolExecutionApi<TDetails extends JsonValue = JsonValue> extend
 	commit<T>(change: (tx: Tx) => T | Promise<T>, context: Context): Promise<T>;
 	memo<T extends JsonValue>(name: string, context: Context): Promise<T | undefined>;
 	memo<T extends JsonValue>(name: string, candidate: T, context: Context): Promise<T>;
+	/**
+	 * Create a task in one commit. A child task of a tool that is not replay-safe defaults to `abandonOnRestart`: the
+	 * tool never resumes after a restart, so nothing awaits the child then.
+	 */
 	createTask<I, S extends { phase: string }, R, H extends object>(
 		task: Task<I, S, R, H>,
 		input: I,
@@ -212,6 +239,39 @@ export interface ToolExecutionApi<TDetails extends JsonValue = JsonValue> extend
 	waitForTask<R>(id: TaskId<R>, context: Context): Promise<SettledTask<R>>;
 	/** Invocation-bound handle of an existing conversation, such as one this tool created in `commit()`. */
 	conversation(id: ConversationId, context: Context): Promise<ConversationHandle | undefined>;
+	/**
+	 * Run tool `name` as a nested call of this one and wait for its result. The nested call is its own `tg.tool` task,
+	 * owned by this call: it resolves the tool among the conversation's tools, validates, runs the `ToolTask` hooks (which
+	 * see `call.parent`), applies output limits and the tool's replay policy, and reports progress in `tg.live.nestedTools`.
+	 * Its result returns here instead of entering the transcript. A call that is blocked, invalid, throws, is interrupted,
+	 * or is aborted returns an `isError` result.
+	 *
+	 * The nested call's key names it within this call; its call ID is `<callId>/<key>`. By default the key is the call's
+	 * position among this invocation's nested calls, `1`, `2`, ... An explicit `key` must be non-empty, without `/`, not
+	 * `__proto__`, and not a positive integer, so it never collides with a default one. A rerun of a replay-safe tool
+	 * that makes a call with a used key, by calling in the same order or by passing the same `key`, gets that nested call
+	 * back, finished or still running, instead of starting another. A nested call a crash interrupted before its result
+	 * committed follows its own replay policy, so this is not exactly-once execution. Reusing a key with another tool or
+	 * other arguments throws. A tool that is not replay-safe never reruns: after a restart, its unfinished nested calls
+	 * are abandoned (`TaskOptions.abandonOnRestart`) before they run again.
+	 *
+	 * `progress: false` commits no running output, details, or diagnostics to the nested call's slot, only its status;
+	 * the result still carries its details and diagnostics, and a schema-less tool's output as `structuredOutput`. An
+	 * interrupted or aborted call's result is built from its slot, so it then has none of them. Either way, programs never
+	 * get the partial output of an interrupted or aborted call.
+	 *
+	 * Nested calls run as soon as they are made, whatever their `executionMode`; the caller decides what runs at once by
+	 * what it awaits. Cancelling `context` stops only the wait; the nested call runs on. When this call settles, nested
+	 * calls it left running are aborted first. A nested result's `usage` is already counted under its tool; a result
+	 * that passes it on counts it again. Rejects, instead of returning a result, once `execute()` has returned, when this
+	 * call is aborted, or when the Harness closes.
+	 */
+	executeTool(
+		name: string,
+		args: JsonObject,
+		context: Context,
+		options?: { readonly key?: string; readonly progress?: boolean },
+	): Promise<NestedToolExecutionResult>;
 }
 
 /**
@@ -652,17 +712,22 @@ export interface GenerationHooks {
 	afterTools(assistant: EntryId, results: readonly EntryId[], api: HookApi, context: Context): void | Promise<void>;
 }
 
-/** Hooks of the built-in tool task. */
+/** A call as tool hooks see it; `parent` is set for a nested call, one a running tool made through `executeTool()`. */
+export type ToolHookCall = ToolCall & {
+	readonly parent?: { readonly taskId: TaskId; readonly callId: string };
+};
+
+/** Hooks of the built-in tool task, for model-issued and nested calls. */
 export interface ToolHooks {
 	/** Before intent; the first `block` wins, otherwise `arguments` replace the call's arguments. A throw blocks. */
 	beforeTool(
-		call: ToolCall,
+		call: ToolHookCall,
 		api: HookApi,
 		context: Context,
 	): HookResult<{ readonly arguments?: JsonObject; readonly block?: string }>;
 	/** After execution, before the result entry; replaces the result. */
 	afterTool(
-		call: ToolCall,
+		call: ToolHookCall,
 		result: ToolExecutionResult,
 		api: HookApi,
 		context: Context,

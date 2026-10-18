@@ -32,8 +32,11 @@
   blocks there, consistent with `api.output()`. Custom tools return `{ output: [...] }` where they returned
   `{ content: [...] }`.
 - A tool task's input and result carry a `kind`, and the `tg.tool` document version is 2 with a migration that
-  treats a version 1 input or result without `kind` as a model-issued call. G1 ports only the model member: a
-  nested-call union may arrive in a later batch.
+  treats a version 1 input or result without `kind` as a model-issued call. The input union holds both members:
+  model-issued calls and the nested calls `executeTool()` makes.
+- `AgentEvent.tool_execution_start` now carries the executing task as `taskId`. For a nested call, its start,
+  update, and end events also carry `parentToolCallId` and `parentTaskId`. Channel implementations that match
+  tool events field by field see the new members; matching on `type` alone is unaffected.
 - A `bash`/`powershell` command that exits nonzero is an error result with an `exit_code` diagnostic that still
   carries the output, where it used to throw; a timeout or an interrupted start still throws.
 
@@ -123,6 +126,28 @@
   `VACUUM INTO`, including committed WAL content and every project in the file. The target must not
   exist and parent directories are not created. `MemoryStorage` has no file backend and rejects with an
   unsupported-capability error, which keeps the package root free of Node imports.
+- A tool makes a nested call with
+  `api.executeTool(name, arguments?, context, options?: { key?, progress? })`. The call runs as its own tool
+  task, a child of the calling task, with its own call ID (`<parentCallId>/<key>`, default-keyed by call order).
+  Its hooks see the calling call as `parent`; its usage is recorded under the calling tool in the owner's
+  `tg.usage` ledger; the caller gets the result as `NestedToolExecutionResult`, not the transcript: the result
+  lives in a `tg.tool.nested-call` document of the calling task, which retires with it. A result key returns the
+  already-made call (`MADE_NESTED_CALLS = "tg.tool.madeNestedCalls"` thrown otherwise); a key reused with
+  another tool or other arguments is rejected. A caller returning leaves the nested calls it left running
+  abort-marked, children before parents, with their details kept; a replay-safe caller reattaches to the calls
+  its earlier invocation made.
+- `NestedCallDoc` and `NestedCallState` are exported: the task-scoped document family (kind
+  `tg.tool.nested-call`) a nested call's result is written into and its caller reads. `NestedToolSlot` and
+  `NestedToolSummary` type the `tg.live.nestedTools` slots the live document lists, and `ToolHookCall` is the
+  call tool hooks see, with `parent` for a nested call.
+- `TaskOptions.abandonOnRestart` marks a task its creator awaits only in memory: when scheduling starts in a
+  later Harness, such a live task, and the ordinary owned work below it, is abort-marked with reason `restart`
+  before any of it runs again, and a task whose definition is not installed yet waits for it instead of
+  becoming `orphaned`. A persisted record carries `abandonOnRestart` (immutable) and `abortReason` when the
+  mark came from the abandonment rather than an abort request.
+- `TaskRuntime.abortOwned(id, context)` aborts a task this task owns and resolves once it is terminal, and
+  `TaskRuntime.ownedTasks(context)` lists the live tasks this task owns directly, in ID order, including an
+  earlier invocation's.
 
 ### Changed
 

@@ -31,6 +31,7 @@
 			"@OnePanda-TgSec/tg-tui/*": ["./packages/tui/src/*"],
 			"@earendil-works/pi-codemode": ["./packages/codemode/src/index.ts"],
 			"@earendil-works/pi-codemode/declarations": ["./packages/codemode/src/declarations.ts"],
+			"@earendil-works/pi-codemode/portable": ["./packages/codemode/src/portable.ts"],
 			"@earendil-works/pi-codemode/source": ["./packages/codemode/src/source.ts"],
 			"@earendil-works/pi-codemode/worker": ["./packages/codemode/src/runtime/worker.ts"],
 			"@earendil-works/pi-mcp": ["./packages/mcp/src/index.ts"],

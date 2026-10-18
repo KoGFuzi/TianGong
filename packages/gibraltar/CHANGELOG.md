@@ -67,6 +67,23 @@
 - The `tool_search` extension, exported as `@OnePanda-TgSec/tg-gibraltar/tool-search`: the model searches
   its deferred tools with BM25 (`rankDocuments()`/`tokenize()` in `src/search.ts`) and loads the matches with
   `control.addTools`, so the next request offers them, per branch and in the baseline after a reset.
+- The durable code mode extension, exported as `@OnePanda-TgSec/tg-gibraltar/codemode`:
+  `createCodemodeExtension({ sandbox })` installs the `codemode` tool, which runs model-written JavaScript in a
+  QuickJS sandbox whose script survives a restart. Scripts call the conversation's callable tools as nested calls
+  (`await tools.<name>(args)`), each its own `tg.tool` task keyed `c<VM call id>` and reported in
+  `tg.live.nestedTools`. Every delivered result is journaled (`tg.codemode.journal`) before the VM sees it, with
+  the start data in `tg.codemode.run`, so a rerun replays the recorded results in order and reconnects the nested
+  calls; a replay that diverges (another call, another order, a changed sandbox fingerprint or module version) or
+  whose deadline passed ends the call with an error instead. The `codemode` prompt section lists the tools scripts
+  can call as TypeScript declarations, grouped by namespace within a token budget (default 3000); deferred tools
+  are left out and found with `searchTools()`/`describeTool()`/`describeNamespace()`. Results carry a header, the
+  script's text items and console block, `max_output_tokens` truncation with the full text in a spill file, and
+  images saved to temp files; a failed call rejects in the script, except a schema tool's error value and a
+  `bash` nonzero exit, which resolve. `store()`/`load()` keep JSON values per conversation, forked as of the fork
+  entry. `models.*` gives scripts the model catalog plus `models.classify()` and `models.generateImages()`, which
+  run as hidden internal tools (`tg.codemode.models.*`), at most four at a time. The tool declares the Lark
+  grammar (`CODEMODE_SOURCE_GRAMMAR`) for models that take syntax-constrained sampling, and lists its calls in
+  `details.calls`.
 - An input may be placed as its own entry: the input submission takes `entry?: InputEntry` (`{ kind, data }`),
   whose kind must be a non-empty string not starting with `tg.`. It is placed with its content as the user
   message, queued items carry it in `tg.inbox`, and a write of only `kind` and `data` from an untyped caller
@@ -200,7 +217,7 @@
   `maxDepth`, and `timeoutMs`, and `FileListing` reports `entries` (`FileListEntry`: `path`, `size?`),
   `ignoredBy`, `truncated`, and `aborted`. `listFiles` is optional on `FileSystem`; only environments that
   implement it need to answer conformance's `listFiles` option. `NodeExecutionEnv` implements it from the
-  environment's directory walker and windows-style `gitignore` matching: `.git` is never listed, a deeper
+  environment's directory walker with `gitignore` matching: `.git` is never listed, a deeper
   pattern file wins over a shallower one, a later rule in one file wins over an earlier one, a pattern with a
   `/` besides its trailing one is anchored, and the default global excludes file is `$XDG_CONFIG_HOME/git/ignore`.
 

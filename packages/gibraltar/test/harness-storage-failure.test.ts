@@ -1,7 +1,5 @@
 // Ported from upstream 1.3.0's harness-storage-failure.test.ts for batch G1. Adapted to the pieces G1 gates in: the
-// Session fails on the first failed Storage call (`failedOf`), the guard rejects later calls, watchers end
-// `session_closed` (upstream 1.3.0's `session_failed` end and the settled-`closed` promise are the G7-6 scope), and a
-// Yielding backend close is not asserted (the closed-backend ordering test is upstream's too).
+// Session fails on the first failed Storage call (`failedOf`), the guard rejects later calls.
 
 import type { Context } from "@OnePanda-TgSec/chord";
 import { createModels } from "@OnePanda-TgSec/tg-ai";
@@ -23,7 +21,7 @@ import { safeNow } from "../src/harness/harness.ts";
 import { conversationViews } from "../src/harness/view.ts";
 import { contained } from "../src/session/session.ts";
 import { ControlledStorage, context } from "./session-support.ts";
-import { aborted, type Deferred, deferred, failedOf, openTasks, settled } from "./task-support.ts";
+import { aborted, type Deferred, deferred, failedOf, openTasks } from "./task-support.ts";
 
 /** Waits for its signal, records that it saw it, and ends `aborted` through its abort handler. */
 const signals: string[] = [];
@@ -111,14 +109,14 @@ describe("a failed Storage call", () => {
 		const failed = { name: "SessionFailed", cause: failure };
 		await expect(task).rejects.toMatchObject(failed);
 		await expect(idle).rejects.toMatchObject(failed);
-		// G1 keeps the older watch end: the session close ends it `session_closed`, whatever caused it.
-		expect(await watch.closed).toEqual({ reason: "session_closed" });
-		expect(await stream.closed).toEqual({ reason: "session_closed" });
+		// The failed session closes itself; its watch and stream end `session_failed` with the error.
+		expect(await watch.closed).toEqual({ reason: "session_failed", error: failure });
+		expect(await stream.closed).toEqual({ reason: "session_failed", error: failure });
 		// Every later call, and a wait that starts now.
 		await expect(harness.getTask(id, context)).rejects.toMatchObject(failed);
 		await expect(harness.waitForIdle(context)).rejects.toMatchObject(failed);
 		await expect(root.submit({ type: "input", content: "x" }, context)).rejects.toMatchObject(failed);
-		await expect(failedOf(harness)).rejects.toMatchObject(failed);
+		expect(await harness.closed).toEqual({ reason: "failed", error: failure });
 		expect(signals).toEqual(["aborted"]);
 		expect(reports).toEqual([failure]);
 		await harness.close(context);
@@ -130,12 +128,12 @@ describe("a failed Storage call", () => {
 		await root.commit((tx) => tx.appendEntry(root.id, { kind: "note" }), context);
 		storage.failing.add("scanRange");
 		await expect(root.context(context)).rejects.toBe(storage.error);
-		await expect(failedOf(harness)).rejects.toMatchObject({ name: "SessionFailed", cause: storage.error });
+		expect(await harness.closed).toEqual({ reason: "failed", error: storage.error });
 		expect(reports).toEqual([storage.error]);
 		await harness.close(context);
 	});
 
-	it("ends Storage calls underway with SessionFailed", async () => {
+	it("ends Storage calls underway with SessionFailed, and closes once they have settled", async () => {
 		const storage = new FailingCalls();
 		const { harness, root } = await started(storage);
 		const release = deferred();
@@ -147,9 +145,52 @@ describe("a failed Storage call", () => {
 		storage.failing.add("mintId");
 		await expect(root.commit((tx) => tx.appendEntry(root.id, { kind: "note" }), context)).rejects.toBe(storage.error);
 		// The read succeeds at the backend, yet its caller gets the failure: nothing it read is used.
+		let closed = false;
+		void harness.closed.then(() => {
+			closed = true;
+		});
+		for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(closed).toBe(false);
 		release.resolve();
 		await expect(reading).rejects.toMatchObject({ name: "SessionFailed", cause: storage.error });
+		expect(await harness.closed).toEqual({ reason: "failed", error: storage.error });
 		await harness.close(context);
+	});
+
+	it("closes the backend only after a paged read underway, which cannot start another page", async () => {
+		const pages: string[] = [];
+		const firstPage = deferred();
+		const releaseFirst = deferred();
+		class Paged extends ControlledStorage {
+			override async scanEntries(...args: Parameters<MemoryStorage["scanEntries"]>) {
+				if (args[1] > 1) {
+					pages.push(args[2] === undefined ? "first" : "next");
+					if (args[2] === undefined) {
+						firstPage.resolve();
+						await releaseFirst.promise;
+					}
+				}
+				return super.scanEntries(...args);
+			}
+			override async close(closeContext: Context): Promise<void> {
+				pages.push("close");
+				return super.close(closeContext);
+			}
+		}
+		const storage = new Paged();
+		const { harness, root } = await started(storage);
+		// More entries than one page of the context read.
+		await root.commit(async (tx) => {
+			for (let n = 0; n < 300; n++) await tx.appendEntry(root.id, { kind: "note" });
+		}, context);
+		const reading = root.context(context);
+		await firstPage.promise;
+		const closing = harness.close(context);
+		releaseFirst.resolve();
+		await expect(reading).rejects.toThrow("is closed");
+		await closing;
+		expect(pages).toEqual(["first", "close"]);
+		expect(await harness.closed).toEqual({ reason: "closed" });
 	});
 
 	it("fails it when Storage cannot close; an earlier failure stays the cause", async () => {
@@ -163,6 +204,7 @@ describe("a failed Storage call", () => {
 		const healthy = await started(new FailingClose());
 		await expect(healthy.harness.close(context)).rejects.toBe(closeError);
 		expect(healthy.reports).toEqual([closeError]);
+		expect(await healthy.harness.closed).toEqual({ reason: "failed", error: closeError });
 
 		const storage = new FailingClose();
 		const failed = await started(storage);
@@ -171,7 +213,7 @@ describe("a failed Storage call", () => {
 		await expect(failed.root.commit((tx) => tx.appendEntry(failed.root.id, { kind: "note" }), context)).rejects.toBe(
 			failure,
 		);
-		await expect(failedOf(failed.harness)).rejects.toMatchObject({ name: "SessionFailed", cause: failure });
+		expect(await failed.harness.closed).toEqual({ reason: "failed", error: failure });
 		expect(failed.reports).toEqual([failure]);
 	});
 
@@ -191,7 +233,7 @@ describe("a failed Storage call", () => {
 		await harness.close(context);
 	});
 
-	it("ends what a task holds with the session close, not as cancelled by its signal", async () => {
+	it("ends what a task holds with session_failed, not as cancelled by its signal", async () => {
 		const ends: unknown[] = [];
 		const watching = deferred();
 		const Watcher = defineTask<null, { phase: "work" }, null>({
@@ -222,7 +264,8 @@ describe("a failed Storage call", () => {
 		storage.failNextCommit(failure);
 		await expect(root.commit((tx) => tx.appendEntry(root.id, { kind: "note" }), context)).rejects.toBe(failure);
 		await failedOf(opened.harness).catch(() => {});
-		expect(ends).toEqual([{ reason: "session_closed" }, "SessionFailed"]);
+		await opened.harness.closed;
+		expect(ends).toEqual([{ reason: "session_failed", error: failure }, "SessionFailed"]);
 		await opened.harness.close(context);
 	});
 
@@ -231,7 +274,7 @@ describe("a failed Storage call", () => {
 		const { harness, root } = await started(storage);
 		storage.failing.add("mintId");
 		await expect(root.commit((tx) => tx.appendEntry(root.id, { kind: "note" }), context)).rejects.toBe(storage.error);
-		await expect(failedOf(harness)).rejects.toMatchObject({ name: "SessionFailed", cause: storage.error });
+		expect(await harness.closed).toEqual({ reason: "failed", error: storage.error });
 		await harness.close(context);
 	});
 
@@ -256,7 +299,7 @@ describe("a failed Storage call", () => {
 		const rejection = new StorageRequestError("bad batch");
 		storage.failNextCommit(rejection);
 		await expect(root.commit((tx) => tx.appendEntry(root.id, { kind: "note" }), context)).rejects.toBe(rejection);
-		await expect(failedOf(harness)).rejects.toMatchObject({ name: "SessionFailed", cause: rejection });
+		expect(await harness.closed).toEqual({ reason: "failed", error: rejection });
 		await harness.close(context);
 	});
 
@@ -277,7 +320,12 @@ describe("a failed Storage call", () => {
 			await expect(request()).rejects.toMatchObject({ name: "StorageRequestError" });
 		}
 		await expect(root.commit((tx) => tx.appendEntry(root.id, { kind: "note" }), context)).resolves.toBeDefined();
-		expect(await settled(failedOf(harness))).toBe(false);
+		let ended = false;
+		void harness.closed.then(() => {
+			ended = true;
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(ended).toBe(false);
 		expect(reports).toEqual([]);
 		await harness.close(context);
 	});
@@ -291,7 +339,7 @@ describe("a failed Storage call", () => {
 		});
 		// The commit itself is durable and resolves; the Session fails behind it.
 		await expect(root.commit((tx) => tx.appendEntry(root.id, { kind: "note" }), context)).resolves.toBeDefined();
-		await expect(failedOf(harness)).rejects.toMatchObject({ name: "SessionFailed", cause: bug });
+		expect(await harness.closed).toEqual({ reason: "failed", error: bug });
 		expect(reports).toEqual([bug]);
 		await harness.close(context);
 	});
@@ -308,7 +356,7 @@ describe("a failed Storage call", () => {
 		held.release();
 		await expect(committing).rejects.toBe(failure);
 		await closing;
-		await expect(failedOf(harness)).rejects.toMatchObject({ name: "SessionFailed", cause: failure });
+		expect(await harness.closed).toEqual({ reason: "failed", error: failure });
 		expect(reports).toEqual([failure]);
 	});
 

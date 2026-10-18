@@ -220,6 +220,16 @@
   environment's directory walker with `gitignore` matching: `.git` is never listed, a deeper
   pattern file wins over a shallower one, a later rule in one file wins over an earlier one, a pattern with a
   `/` besides its trailing one is anchored, and the default global excludes file is `$XDG_CONFIG_HOME/git/ignore`.
+- `Session.closed` settles once the Session has closed, Storage included: `{ reason: "closed" }` after
+  `close()`, or `{ reason: "failed", error }` after a storage error, including one that fails the close
+  itself. `WatchEnd` gains `{ reason: "session_failed", error }`: a watch or event stream of a failed
+  Session ends with the error that failed it, instead of the plain `session_closed`.
+- `SqliteStorage.open(database, { prefix })` namespaces every table and index of the durable schema
+  under a SQLite-identifier prefix (reserved `sqlite_` rejected; existing data is not migrated when the
+  prefix changes). `openNodeSqliteStorage()` and `openDefaultSqliteStorage()` forward it, validating it
+  before the database file is created, and `health()` reads the version from the prefixed
+  `durable_schema`. It composes with `project` isolation: one file can hold both namespaces and both
+  projects, and the migration history and its schema-version semantics are unchanged.
 
 ### Changed
 
@@ -278,11 +288,6 @@ rewritten in place before it can be opened.
   once, and a second change is reported instead of read as garbage.
 - Design-document links in the README now point at the in-repo `docs/` files instead of upstream
   GitHub URLs.
-  A run's input is committed before generation renders the system prompt, so a transcript, or the range
-  after a compaction or reset, started with user messages followed by the system baseline. Providers
-  treat only a leading system message as the initial prompt and tool set, so a later tool change
-  rewrote the request's tool list and invalidated the whole prompt cache. User messages keep their
-  relative order, and a system message that is not preceded only by user messages stays in place.
 - Fork-history reads treat a missing ancestor conversation as the end of visible history instead of
   faulting. The ancestor walks asserted the parent row existed; deleting a fork parent would have made
   `scanEntries`, the two-argument `entry()`, and `findLatestHeadMarker` throw `TypeError` once the
@@ -311,6 +316,22 @@ rewritten in place before it can be opened.
   loads from Storage again on its next access. It held every conversation and session document ever
   touched, built-in and third-party, for the life of the process: 5,000 conversations kept 26,000
   documents and about 3.8 KB each; with retention 0 they keep none (`bun run bench:document-cache`).
+- The system baseline leads the model context once the kept history contains assistant messages, after a
+  compaction or reset just the same as at a transcript start: the first `tg.system` entry's system
+  message moves to the front when it is the baseline, even when assistant messages precede it
+  (upstream pi #10904). Providers treat only a leading system message as the initial prompt and tool
+  set, so a mid-conversation baseline used to rewrite the request's tool list and invalidate the whole
+  prompt cache. System messages other than the baseline, and a retained, edited, or later `tg.system`
+  entry in place of it, stay where they were committed; only the first system message moves.
+- Compaction no longer includes thinking in the summarization request. Replayed thinking is often not in
+  the live context (a block that does not match its request is dropped), so a request that included it
+  could be larger than the context it summarized and fail with "prompt is too long" on every attempt.
+- A generation whose blocking threshold compaction failed, faulted, was orphaned, or was aborted directly
+  now fails with `model_error` (`Compaction failed: <error>`) instead of sending its request anyway. The
+  context was still above the blocking threshold, so the request at best left no room for the answer: a
+  session at 996K of a 1M window got an empty `length` answer on every turn, with no visible error.
+- A task whose fault write failed no longer runs again in the same process (landed with the G1 scheduler
+  port; recorded here with the batch that closes it out).
 
 ## [1.0.1] - 2026-10-03
 

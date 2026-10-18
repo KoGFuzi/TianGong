@@ -60,6 +60,7 @@ export class CommittedStateSource<T = ObservedDocumentValue> implements Replicat
 		for (const attachment of [...this.#attachments]) attachment.publish(frame);
 	}
 
+	/** Stop publishing; the attached states keep their last value. A failure ends them the same way. */
 	closeSession(): void {
 		if (this.#closed) return;
 		for (const attachment of [...this.#attachments]) attachment.dispose();
@@ -220,8 +221,10 @@ export class CommittedWatch<T = ObservedDocumentValue> implements WatchHandle<T>
 		this.#terminate({ reason: "cancelled" });
 	}
 
-	closeSession(): void {
-		this.#terminate({ reason: "session_closed" });
+	closeSession(failure?: { readonly error: unknown }): void {
+		this.#terminate(
+			failure === undefined ? { reason: "session_closed" } : { reason: "session_failed", error: failure.error },
+		);
 	}
 
 	advance(value: T, ops: readonly Op[], context: Context): void {

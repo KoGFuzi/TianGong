@@ -42,7 +42,7 @@ export type ViewObserver = {
 		publication: CommitPublication,
 		context: Context,
 	): void;
-	closeSession(): void;
+	closeSession(failure: { readonly error: unknown } | undefined): void;
 };
 
 const MOUNTED = [
@@ -94,7 +94,7 @@ export class ConversationViews {
 			for (const mount of this.#mounts.values())
 				for (const observer of [...mount.observers]) {
 					contained(
-						() => observer.closeSession(),
+						() => observer.closeSession(this.#session.failure),
 						(error) => this.report(error),
 					);
 				}

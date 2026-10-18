@@ -193,7 +193,7 @@ export async function watchEvents(
 					const events = translate(conversationId, before, after, ops, publication, held);
 					if (events.length > 0) watch.advance(events, [], commitContext);
 				},
-				closeSession: () => watch.closeSession(),
+				closeSession: (failure) => watch.closeSession(failure),
 			};
 		},
 		context,

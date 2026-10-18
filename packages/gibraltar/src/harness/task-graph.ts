@@ -75,7 +75,7 @@ export class TaskGraphView {
 			this.#closed = true;
 			for (const observer of [...(this.#mount?.observers ?? [])]) {
 				contained(
-					() => observer.closeSession(),
+					() => observer.closeSession(this.#session.failure),
 					(error) => session.report(error),
 				);
 			}

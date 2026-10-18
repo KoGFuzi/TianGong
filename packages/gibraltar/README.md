@@ -34,6 +34,7 @@
 - [你自己的状态](#你自己的状态)
 - [用量与费用](#用量与费用)
 - [存储](#存储)
+- [错误（Errors）](#错误errors)
 - [示例](#示例)
 - [设计文档](#设计文档)
 
@@ -713,6 +714,34 @@ registerStorageConformance({ describe, expect, it }, "My Storage", async (use) =
 
 包根目录加载 TypeBox，因为工具任务用 `@OnePanda-TgSec/tg-ai` 的 `validateToolArguments()` 校验
 参数。未打包时峰值 RSS 约 23 MB，tree-shaken 后约 4 MB。
+
+## 错误（Errors）
+
+三条规则决定一个错误会发生什么：
+
+1. **存储错误终结 Harness。** 命中它的那个调用以原错误拒绝；此后每个调用与每个未决的 wait 都以
+   `SessionFailed`（其 `cause` 为该错误）拒绝；watch 与事件流以 `session_failed` 结束；运行中的任
+   务收到自己的 abort signal；`onReport` 恰好收到一次该错误。之后 Harness 自行关闭。什么都不重
+   试；自定义存储重试自己的瞬时失败。重新打开即可恢复：commit 是原子的，存储是一致的，带相同
+   `requestId` 的重试 submission 会找到已被受理的那一个。
+2. **无效请求只失败那一次调用。** 存储对坏 cursor、未知会话或文档不保留的历史抛
+   `StorageRequestError`，它不会终结 Harness。被取消的读也只失败它自己。
+3. **你的代码只失败它自己的单元。** 抛异常的任务阶段 fault 该任务；抛异常的工具得到一个错误结
+   果；抛异常的 hook 被报告并跳过（`beforeTool` 则阻断该调用）；抛异常的 commit 回调回滚该次
+   commit。抛异常的监听者被报告，其余监听者照常运行。唯一的例外是宿主 `RegistryReader` 的
+   `snapshot()` 抛异常：没有它 Harness 无法调度，所以像存储错误一样终结 Harness。
+
+Harness 在关闭完成之后，`closed` 恰好 settle 一次：`close()` 之后是 `{ reason: "closed" }`，存储
+错误（包括关闭时关不掉的存储）之后是 `{ reason: "failed", error }`。宿主据此在失败后重启：
+
+```typescript
+harness.closed.then((end) => {
+	if (end.reason === "failed") reopen(end.error);
+});
+```
+
+失败会自行关闭 Harness；`closed` 在那次关闭结束后 settle，即使存储没能干净地关掉。关闭会等运
+行中的任务代码返回，所以忽略自己 abort signal 的代码会推迟 `closed`。
 
 ## 示例
 

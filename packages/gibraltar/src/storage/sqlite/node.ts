@@ -5,6 +5,7 @@ import type { StatementSync } from "node:sqlite";
 import { DatabaseSync } from "node:sqlite";
 import type { SqliteDatabase, SqliteExecutor, SqliteHealthReport, SqliteValue } from "./database.ts";
 import { DEFAULT_PROJECT_ID, type SqliteStorageOptions } from "./migrations.ts";
+import { validateSqliteSchemaPrefix } from "./schema.ts";
 import { SqliteStorage } from "./storage.ts";
 
 /** Settings for opening storage at the default production location. */
@@ -141,9 +142,12 @@ class NodeSqliteTransaction extends NodeSqliteExecutor {
 export class NodeSqliteDatabase extends NodeSqliteExecutor implements SqliteDatabase {
 	private readonly access = new SerialOperationQueue();
 	private closed = false;
+	/** Table prefix of the durable schema, as `openNodeSqliteStorage` scoped it; empty by default. */
+	private readonly schemaPrefix: string;
 
-	constructor(database: DatabaseSync) {
+	constructor(database: DatabaseSync, schemaPrefix = "") {
 		super(database, new Map());
+		this.schemaPrefix = schemaPrefix;
 	}
 
 	/** SQLite's own view of file integrity, plus the connection settings this adapter applied. */
@@ -162,12 +166,16 @@ export class NodeSqliteDatabase extends NodeSqliteExecutor implements SqliteData
 			const hasSchema =
 				(
 					await this.get<{ present: number }>(
-						"SELECT COUNT(*) AS present FROM sqlite_master WHERE type = 'table' AND name = 'durable_schema'",
+						"SELECT COUNT(*) AS present FROM sqlite_master WHERE type = 'table' AND name = ?",
+						`${this.schemaPrefix}durable_schema`,
 					)
 				)?.present === 1;
 			const schemaVersion = hasSchema
-				? ((await this.get<{ version: number }>("SELECT version FROM durable_schema WHERE singleton = 1"))
-						?.version ?? 0)
+				? ((
+						await this.get<{ version: number }>(
+							`SELECT version FROM ${this.schemaPrefix}durable_schema WHERE singleton = 1`,
+						)
+					)?.version ?? 0)
 				: 0;
 			return {
 				ok: integrity?.integrity_check === "ok",
@@ -235,13 +243,14 @@ export class NodeSqliteDatabase extends NodeSqliteExecutor implements SqliteData
 /** Open and configure a Node-backed SQLite database facade. */
 export async function openNodeSqliteDatabase(
 	path: string,
-	options: NodeSqliteStorageOptions = {},
+	options: NodeSqliteStorageOptions & { readonly prefix?: string } = {},
 ): Promise<NodeSqliteDatabase> {
+	const { prefix } = options;
 	const checkpointPages = options.walAutoCheckpointPages ?? DEFAULT_WAL_AUTO_CHECKPOINT_PAGES;
 	const timeout = options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS;
 	if (path !== ":memory:") await mkdir(dirname(path), { recursive: true });
 	const database = new DatabaseSync(path, { timeout });
-	const adapter = new NodeSqliteDatabase(database);
+	const adapter = new NodeSqliteDatabase(database, prefix ?? "");
 	try {
 		await adapter.exec("PRAGMA journal_mode = WAL");
 		await adapter.exec("PRAGMA synchronous = NORMAL");
@@ -281,14 +290,16 @@ export async function openDefaultSqliteStorage(options: DefaultSqliteStorageOpti
 	});
 }
 
-/** Open or create file-backed durable storage using Node's built-in SQLite. */
+/** Open or create file-backed durable storage using Node's built-in SQLite, optionally under a table prefix. */
 export async function openNodeSqliteStorage(
 	path: string,
 	options: NodeSqliteStorageOptions & SqliteStorageOptions = {},
 ): Promise<SqliteStorage> {
-	const { walAutoCheckpointPages, busyTimeoutMs, ...storageOptions } = options;
-	return SqliteStorage.open(
-		await openNodeSqliteDatabase(path, { walAutoCheckpointPages, busyTimeoutMs }),
-		storageOptions,
-	);
+	const { prefix, ...rest } = options;
+	if (prefix !== undefined) validateSqliteSchemaPrefix(prefix);
+	const { walAutoCheckpointPages, busyTimeoutMs, ...storageOptions } = rest;
+	return SqliteStorage.open(await openNodeSqliteDatabase(path, { walAutoCheckpointPages, busyTimeoutMs, prefix }), {
+		...storageOptions,
+		prefix,
+	});
 }

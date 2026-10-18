@@ -41,6 +41,7 @@ import type {
 	Session,
 	SessionDocFamilyToken,
 	SessionDocToken,
+	SessionEnd,
 	Storage,
 	StorageWrite,
 	StoredDocument,
@@ -133,6 +134,7 @@ export class SessionImpl implements Session {
 	#failure: { readonly error: unknown } | undefined;
 	/** Set when close reaches the backend: calls that fail from then on fail because it closes. */
 	readonly #failed = Promise.withResolvers<never>();
+	readonly #closed = Promise.withResolvers<SessionEnd>();
 
 	/** Internal: rejects with `SessionFailed` the moment the Session fails, before work underway has ended; never resolves. */
 	get failed(): Promise<never> {
@@ -142,6 +144,10 @@ export class SessionImpl implements Session {
 	/** Internal: the error that failed the Session, if one did. */
 	get failure(): { readonly error: unknown } | undefined {
 		return this.#failure;
+	}
+
+	get closed(): Promise<SessionEnd> {
+		return this.#closed.promise;
 	}
 
 	constructor(
@@ -499,15 +505,25 @@ export class SessionImpl implements Session {
 							throw error;
 						}
 					}),
-				);
-			// Close listeners run with the document sweep cancelled: there is nothing left to evict.
-			if (this.#documentSweep?.timer !== undefined) clearTimeout(this.#documentSweep.timer);
-			this.#documentSweep = undefined;
-			const listeners = [...this.#closeListeners];
-			this.#closeListeners.clear();
-			for (const listener of listeners) contained(listener, (error) => this.report(error));
+				)
+				.finally(() => {
+					const failure = this.#failure;
+					this.#closed.resolve(
+						failure === undefined ? { reason: "closed" } : { reason: "failed", error: failure.error },
+					);
+				});
+			this.#notifyClose();
 		}
 		return awaitWithContext(this.#closing, context);
+	}
+
+	/** Run the close listeners once, each on its own: one that fails is reported, and the rest still run. */
+	#notifyClose(): void {
+		if (this.#documentSweep?.timer !== undefined) clearTimeout(this.#documentSweep.timer);
+		this.#documentSweep = undefined;
+		const listeners = [...this.#closeListeners];
+		this.#closeListeners.clear();
+		for (const listener of listeners) contained(listener, (error) => this.report(error));
 	}
 
 	/**
@@ -801,7 +817,7 @@ export class SessionImpl implements Session {
 				observer.advance(change.value, ops, frameContext);
 			}
 		});
-		unsubscribeClose = this.subscribeClose(() => observer.closeSession());
+		unsubscribeClose = this.subscribeClose(() => observer.closeSession(this.#failure));
 		return { observer, detach };
 	}
 

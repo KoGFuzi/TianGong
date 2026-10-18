@@ -232,6 +232,12 @@ export async function applySqliteMigrationsForSchema(
  */
 export type SqliteStorageOptions = {
 	/**
+	 * Prefix for every table and index in the durable schema. It must be a SQLite identifier and must not
+	 * use SQLite's reserved `sqlite_` prefix. Existing data is not migrated when this changes.
+	 */
+	readonly prefix?: string;
+
+	/**
 	 * Project id written into every row and applied as a filter to every read.
 	 *
 	 * One database file can hold several projects; this is what keeps them apart. Rows written before

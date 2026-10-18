@@ -890,7 +890,9 @@ export type DocumentState<T extends JsonObject> = AttachedReplicatedState<Readon
 /** Terminal result of one document watch. */
 export type WatchEnd =
 	| { readonly reason: "stopped" | "cancelled" | "session_closed" | "retired" }
-	| { readonly reason: "listener_error"; readonly error: Error };
+	| { readonly reason: "listener_error"; readonly error: Error }
+	/** The Session failed; `error` is what failed it, usually a storage error (see `SessionFailed`). */
+	| { readonly reason: "session_failed"; readonly error: unknown };
 
 /** Serialized exact-frame observation of an immutable value with bounded pending delivery. */
 export interface WatchHandle<T> {
@@ -941,12 +943,20 @@ export interface DocumentObserver {
 	): Promise<DocumentWatch<T> | undefined>;
 }
 
+/** Why a Session ended: `close()`, or a failed Storage call, whose error it carries. */
+export type SessionEnd = { readonly reason: "closed" } | { readonly reason: "failed"; readonly error: unknown };
+
 /** Owner of one mutation line, its records, and its tracked documents. */
 export interface Session extends DocumentObserver {
 	/** Run one atomic transaction on the Session mutation line. */
 	commit<T>(change: (tx: Tx) => T | Promise<T>, context: Context): Promise<T>;
 	/** Seal admission, settle admitted commits, then close storage. */
 	close(context: Context): Promise<void>;
+	/**
+	 * Settles once the Session has closed, Storage included: after `close()`, or after the first failed Storage call,
+	 * which closes the Session itself. A failed Session is reopened from Storage; nothing else is left to clean up.
+	 */
+	readonly closed: Promise<SessionEnd>;
 	/** Observe complete commits synchronously after adoption. The listener must not block or call Session APIs; a throw is reported. */
 	subscribeCommits(listener: (publication: CommitPublication, context: Context) => void): () => void;
 	/** Observe close synchronously when it begins. The listener must not block or call Session APIs; a throw is reported. */

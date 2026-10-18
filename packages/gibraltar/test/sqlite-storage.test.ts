@@ -208,6 +208,48 @@ describe("Pico SqliteStorage", () => {
 		await expect(openNodeSqliteStorage(path)).rejects.toThrow("Durable SQLite metadata is missing");
 	});
 
+	it("namespaces tables and indexes with a prefix across reopen", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tg-gibraltar-sqlite-"));
+		tempDirectories.add(directory);
+		const path = join(directory, "storage.sqlite");
+		const host = new DatabaseSync(path);
+		try {
+			host.exec("CREATE TABLE tasks (text TEXT)");
+		} finally {
+			host.close();
+		}
+		const storage = await openNodeSqliteStorage(path, { prefix: "tg_" });
+		expect(await createRoot(storage)).toBe(1);
+		await storage.close(context);
+
+		const reopened = await openNodeSqliteStorage(path, { prefix: "tg_" });
+		openStorages.add(reopened);
+		expect(await reopened.conversation(ROOT_CONVERSATION_ID, context)).toEqual({ id: ROOT_CONVERSATION_ID });
+		// The prefixed schema reports its health through the adapter's own prefixed table name.
+		expect(await reopened.health()).toMatchObject({ ok: true, schemaVersion: 3 });
+		const database = new DatabaseSync(path);
+		try {
+			const names = database
+				.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%'")
+				.all()
+				.map((row) => String(row.name));
+			expect(names.filter((name) => !name.startsWith("tg_"))).toEqual(["tasks"]);
+			expect(names).toContain("tg_tasks");
+		} finally {
+			database.close();
+		}
+	});
+
+	it("rejects an invalid prefix before creating the database", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tg-gibraltar-sqlite-"));
+		tempDirectories.add(directory);
+		const databaseDirectory = join(directory, "nested");
+		await expect(
+			openNodeSqliteStorage(join(databaseDirectory, "storage.sqlite"), { prefix: "bad-prefix" }),
+		).rejects.toThrow("Invalid SQLite schema prefix");
+		await expect(stat(databaseDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+	});
+
 	it("rejects a document whose required base is missing", async () => {
 		const { storage, path } = await createSqliteStorage();
 		await createRoot(storage);

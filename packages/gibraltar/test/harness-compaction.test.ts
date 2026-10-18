@@ -35,7 +35,7 @@ import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { allEntries, type ChatSetup, chatSetup, openChat, textOf, toolsNamed, waitFor } from "./chat-support.ts";
 import { addHooks, addSection, addTask, addTool } from "./harness-support.ts";
 import { ControlledStorage, context } from "./session-support.ts";
-import { aborted, type Deferred, deferred, failedOf } from "./task-support.ts";
+import { aborted, type Deferred, deferred } from "./task-support.ts";
 
 const directories = new Set<string>();
 
@@ -331,7 +331,7 @@ describe("range selection", () => {
 });
 
 describe("serialization", () => {
-	it("writes a transcript, truncates tool results, and omits system messages", () => {
+	it("writes a transcript, truncates tool results, and omits system messages and thinking", () => {
 		const call = fauxToolCall("read", { path: "a.ts" }, { id: "c" });
 		const messages: Message[] = [
 			{ role: "system", content: "", sections: { s: "hidden" }, timestamp: 0 },
@@ -343,8 +343,9 @@ describe("serialization", () => {
 		];
 		const serialized = serializeConversation(messages);
 		expect(serialized).not.toContain("hidden");
+		expect(serialized).not.toContain("hmm");
+		expect(serialized).not.toContain("[Assistant thinking]");
 		expect(serialized).toContain("[User]: hello");
-		expect(serialized).toContain("[Assistant thinking]: hmm");
 		expect(serialized).toContain("[Assistant]: sure");
 		expect(serialized).toContain('[Assistant tool calls]: read(path="a.ts")');
 		expect(serialized).toContain(`[Tool result]: ${"y".repeat(2000)}\n\n[... 500 more characters truncated]`);
@@ -400,9 +401,9 @@ describe("manual compaction", () => {
 		expect(usage.input).toBeGreaterThan(usageBefore.input);
 		await turn(chat, "next", "done");
 		const agent = chat.faux.agentRequests.at(-1)!.messages;
-		// The next request: the summary, the kept turn, the new input, then one complete system baseline.
-		expect(agent.map((message) => message.role)).toEqual(["user", "user", "assistant", "user", "system"]);
-		expect(agent[4]).toMatchObject({ sections: { preamble: "You are helpful." } });
+		// The next request: one complete system baseline leading the summary, the kept turn, and the new input (#10904).
+		expect(agent.map((message) => message.role)).toEqual(["system", "user", "user", "assistant", "user"]);
+		expect(agent[0]).toMatchObject({ sections: { preamble: "You are helpful." } });
 		await chat.harness.close(context);
 	});
 
@@ -452,9 +453,10 @@ describe("manual compaction", () => {
 		await result(chat, await chat.root.compact(undefined, context));
 		gate.resolve();
 		expect((await input.wait(context)).status).toBe("done");
-		// The continuation request starts with the summary.
+		// The continuation request starts with the new baseline, then the summary, ahead of the kept tool call (#10904).
 		const continuation = chat.faux.agentRequests.at(-1)!.messages;
-		expect(userText(continuation[0])).toContain("<summary>\nSUMMARY\n</summary>");
+		expect(continuation[0]?.role).toBe("system");
+		expect(userText(continuation[1])).toContain("<summary>\nSUMMARY\n</summary>");
 		expect((await kinds(chat.root)).slice(-4)).toEqual([
 			"tg.tool-result",
 			"tg.compaction",
@@ -482,7 +484,7 @@ describe("manual compaction", () => {
 		await result(chat, await chat.root.compact(undefined, context));
 		expect((await followUp.wait(context)).status).toBe("done");
 		const request = chat.faux.agentRequests.at(-1)!.messages;
-		expect(userText(request[0])).toContain("SUMMARY");
+		expect(firstUserText(request)).toContain("SUMMARY");
 		expect(request.some((message) => userText(message) === "follow-up")).toBe(true);
 		await chat.harness.close(context);
 	});
@@ -582,7 +584,7 @@ describe("manual compaction", () => {
 			status: "unanswered",
 			reason: "stale",
 		});
-		expect(userText((await chat.root.context(context)).messages[0])).toContain("SECOND");
+		expect(firstUserText((await chat.root.context(context)).messages)).toContain("SECOND");
 		await chat.harness.close(context);
 	});
 
@@ -599,13 +601,13 @@ describe("manual compaction", () => {
 		chat.setup.settings.compaction = { ...MANUAL, keepRecentTokens: 350 };
 		chat.faux.summaries.push(summary("B"));
 		await result(chat, await chat.root.compact(undefined, context));
-		expect(userText((await chat.root.context(context)).messages[0])).toContain("B");
+		expect(firstUserText((await chat.root.context(context)).messages)).toContain("B");
 		gate.resolve();
 		const outcome = await result(chat, a);
 		const submissionId = outcome.status === "completed" ? outcome.result.submissionId! : undefined;
 		expect((await (await chat.harness.submission(submissionId!, context))!.status(context)).status).toBe("done");
 		const messages = (await chat.root.context(context)).messages;
-		expect(userText(messages[0])).toContain("<summary>\nA\n</summary>");
+		expect(firstUserText(messages)).toContain("<summary>\nA\n</summary>");
 		expect(messages.slice(1).map(userText)).toEqual([text("u3", 100), text("a3", 100)]);
 		await chat.harness.close(context);
 	});
@@ -738,7 +740,7 @@ describe("compaction outcomes", () => {
 		const outcome = await result(chat, await chat.root.compact("why", context));
 		expect(outcome.status).toBe("completed");
 		expect(chat.faux.summaryRequests).toHaveLength(0);
-		expect(userText((await chat.root.context(context)).messages[0])).toContain("<summary>\nFROM HOOK\n</summary>");
+		expect(firstUserText((await chat.root.context(context)).messages)).toContain("<summary>\nFROM HOOK\n</summary>");
 		expect(chat.setup.reports).toEqual([expect.objectContaining({ message: "hook broke" })]);
 		const compaction = seen[0] as { entries: EntryRecord[]; messages: Message[]; firstKept: number };
 		expect(compaction).toMatchObject({ reason: "manual", instructions: "why" });
@@ -932,7 +934,7 @@ describe("background threshold compaction", () => {
 		const outcome = await result(chat, task!.id as TaskId<CompactionResult>);
 		expect(outcome.status).toBe("completed");
 		expect((await kinds(chat.root)).at(-1)).toBe("tg.compaction");
-		expect(userText((await chat.root.context(context)).messages[0])).toContain("SUMMARY");
+		expect(firstUserText((await chat.root.context(context)).messages)).toContain("SUMMARY");
 		await chat.harness.close(context);
 	});
 
@@ -1073,38 +1075,63 @@ describe("blocking threshold compaction", () => {
 		await chat.harness.close(context);
 	});
 
-	for (const [name, prepare] of [
-		[
-			"declines",
-			(chat: Chat) => addHooks(chat.setup.registry, CompactionTask, { beforeCompact: () => ({ decline: true }) }),
-		],
-		["fails", (chat: Chat) => chat.faux.summaries.push(failure("bad request"))],
-	] as const) {
-		it(`sends the request anyway when its compaction ${name}`, async () => {
-			const chat = await open({ contextWindow: 1000 });
-			await history(chat);
-			chat.setup.settings.compaction = BLOCKING;
-			prepare(chat);
-			await turn(chat, text("u4", 200), "a4");
-			expect((await kinds(chat.root)).includes("tg.compaction")).toBe(false);
-			expect(firstUserText(chat.faux.agentRequests.at(-1)!.messages)).toBe(text("u1", 100));
-			await chat.harness.close(context);
-		});
-	}
+	it("sends the request anyway when its compaction declines", async () => {
+		const chat = await open({ contextWindow: 1000 });
+		await history(chat);
+		chat.setup.settings.compaction = BLOCKING;
+		addHooks(chat.setup.registry, CompactionTask, { beforeCompact: () => ({ decline: true }) });
+		await turn(chat, text("u4", 200), "a4");
+		expect((await kinds(chat.root)).includes("tg.compaction")).toBe(false);
+		expect(firstUserText(chat.faux.agentRequests.at(-1)!.messages)).toBe(text("u1", 100));
+		expect((await live(chat)).compactionFailure).toBeUndefined();
+		await chat.harness.close(context);
+	});
 
-	it("sends the request anyway when its compaction is aborted directly", async () => {
+	// A failed compaction leaves a context it judged too large; sending it once filled a 1M window and got an empty
+	// `length` answer on every turn while the failure stayed invisible.
+	it("fails the run with the compaction's error, without a request, when its compaction fails", async () => {
+		const chat = await open({ contextWindow: 1000 });
+		await history(chat);
+		chat.setup.settings.compaction = BLOCKING;
+		chat.faux.summaries.push(failure("bad request"));
+		const requests = chat.faux.agentRequests.length;
+		const input = await chat.root.submit({ type: "input", content: text("u4", 200) }, context);
+		expect(await input.wait(context)).toMatchObject({
+			status: "unanswered",
+			reason: "model_error",
+			detail: "Compaction failed: Summarization failed: bad request",
+		});
+		expect(chat.faux.agentRequests).toHaveLength(requests);
+		expect((await kinds(chat.root)).at(-1)).toBe("tg.user");
+		const state = await live(chat);
+		expect(state.compactions).toBeUndefined();
+		expect(state.compactionFailure).toMatchObject({
+			reason: "threshold",
+			error: "Summarization failed: bad request",
+		});
+		await chat.harness.close(context);
+	});
+
+	it("fails the run when its compaction is aborted directly", async () => {
 		const chat = await open({ contextWindow: 1000 });
 		await history(chat);
 		chat.setup.settings.compaction = BLOCKING;
 		const reached = deferred();
 		chat.faux.summaries.push(gated(deferred(), summary(), reached));
-		chat.faux.agent.push(answer("a4"));
+		const requests = chat.faux.agentRequests.length;
 		const input = await chat.root.submit({ type: "input", content: text("u4", 200) }, context);
 		await reached.promise;
 		const [child] = await compactionTasks(chat);
 		await chat.harness.abortTask(child!.id, context);
-		expect((await input.wait(context)).status).toBe("done");
+		expect(await input.wait(context)).toMatchObject({
+			status: "unanswered",
+			reason: "model_error",
+			detail: "Compaction was aborted",
+		});
+		expect(chat.faux.agentRequests).toHaveLength(requests);
 		expect((await kinds(chat.root)).includes("tg.compaction")).toBe(false);
+		// Aborting is not a failure.
+		expect((await live(chat)).compactionFailure).toBeUndefined();
 		await chat.harness.close(context);
 	});
 
@@ -1183,7 +1210,8 @@ describe("overflow compaction", () => {
 		const [compaction] = (await allEntries(chat.root)).filter((record) => record.kind === "tg.compaction");
 		expect(compaction).toMatchObject({ data: { reason: "overflow" } });
 		const retry = chat.faux.agentRequests.at(-1)!.messages;
-		expect(userText(retry[0])).toContain("SUMMARY");
+		expect(retry[0]?.role).toBe("system");
+		expect(userText(retry[1])).toContain("SUMMARY");
 		expect(retry.some((message) => message.role === "assistant" && message.stopReason === "error")).toBe(false);
 		await chat.harness.close(context);
 	});
@@ -1362,7 +1390,7 @@ describe("compaction estimates and interactions", () => {
 		});
 		chat.faux.summaries.push(summary());
 		await result(chat, await chat.root.compact(undefined, context));
-		expect(userText(messages[0])).toBe("REDACTED");
+		expect(firstUserText(messages)).toBe("REDACTED");
 		expect(userText(chat.faux.summaryRequests[0]!.messages[1])).toContain("[User]: REDACTED");
 		await chat.harness.close(context);
 	});
@@ -1432,7 +1460,7 @@ describe("compaction estimates and interactions", () => {
 			statuses.push((await (await chat.harness.submission(id!, context))!.status(context)).status);
 		}
 		expect(statuses).toEqual(["done", "done"]);
-		expect(userText((await chat.root.context(context)).messages[0])).toContain("CURRENT");
+		expect(firstUserText((await chat.root.context(context)).messages)).toContain("CURRENT");
 		await chat.harness.close(context);
 	});
 
@@ -1772,7 +1800,7 @@ describe("compaction and the inbox", () => {
 		await turn(chat, "again", "ok");
 		expect((await submission.status(context)).status).toBe("done");
 		const request = chat.faux.agentRequests.at(-1)!.messages;
-		expect(userText(request[0])).toContain("SUMMARY");
+		expect(firstUserText(request)).toContain("SUMMARY");
 		expect(request.map(userText)).toContain("again");
 		await chat.harness.close(context);
 	});
@@ -1888,7 +1916,7 @@ describe("compaction edge cases", () => {
 		await chat.harness.close(context);
 	});
 
-	it("sends the request anyway when its blocking compaction faults", async () => {
+	it("fails the run when its blocking compaction faults, and records the fault", async () => {
 		const chat = await open({ contextWindow: 1000 });
 		await history(chat);
 		chat.setup.settings.compaction = BLOCKING;
@@ -1896,10 +1924,17 @@ describe("compaction edge cases", () => {
 		chat.setup.models.completeSimple = () => {
 			throw new Error("no credentials");
 		};
-		await turn(chat, text("u4", 200), "a4");
+		const input = await chat.root.submit({ type: "input", content: text("u4", 200) }, context);
+		expect(await input.wait(context)).toMatchObject({
+			status: "unanswered",
+			reason: "model_error",
+			detail: "Compaction failed: no credentials",
+		});
 		chat.setup.models.completeSimple = completeSimple;
 		expect((await kinds(chat.root)).includes("tg.compaction")).toBe(false);
-		expect((await live(chat)).compactions).toBeUndefined();
+		const state = await live(chat);
+		expect(state.compactions).toBeUndefined();
+		expect(state.compactionFailure).toMatchObject({ reason: "threshold", error: "no credentials" });
 		await chat.harness.close(context);
 	});
 
@@ -2024,7 +2059,7 @@ describe("compaction edge cases", () => {
 		const prompt = userText(chat.faux.summaryRequests[1]!.messages[1]);
 		expect(prompt).toMatch(/^<conversation>\n\[User\]: The conversation history before this point was compacted/);
 		expect(prompt).toContain("FIRST");
-		expect(userText((await chat.root.context(context)).messages[0])).toContain("SECOND");
+		expect(firstUserText((await chat.root.context(context)).messages)).toContain("SECOND");
 		await chat.harness.close(context);
 	});
 
@@ -2040,7 +2075,7 @@ describe("compaction edge cases", () => {
 			return summary();
 		});
 		const id = await chat.root.compact(undefined, context);
-		await expect(failedOf(chat.harness)).rejects.toMatchObject({ name: "SessionFailed", cause: failure });
+		expect(await chat.harness.closed).toEqual({ reason: "failed", error: failure });
 		await chat.harness.close(context);
 		// Nothing of the failed commit landed: the task is still live, without usage, entry, or submission.
 		storage.reopen();
@@ -2151,7 +2186,7 @@ describe("blocking and manual compaction together", () => {
 		await turn(chat, "u5", "a5");
 		expect((await submission.status(context)).status).toBe("done");
 		const request = chat.faux.agentRequests.at(-1)!.messages;
-		expect(userText(request[0])).toContain("SUMMARY");
+		expect(firstUserText(request)).toContain("SUMMARY");
 		expect(request.map(userText)).toContain("u5");
 		const tail = (await allEntries(chat.root)).slice(-4).map((record) => record.kind);
 		expect(tail).toEqual(["tg.compaction", "tg.user", "tg.system", "tg.assistant"]);

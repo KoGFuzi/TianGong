@@ -19,7 +19,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { addHooks, addTask, addTool, user } from "./harness-support.ts";
 import { ControlledStorage, context, flush } from "./session-support.ts";
-import { aborted, abortedWith, completed, deferred, eventually, failedOf, openTasks, settled } from "./task-support.ts";
+import { aborted, abortedWith, completed, deferred, eventually, openTasks, settled } from "./task-support.ts";
 
 type Step = { phase: "run" };
 type StepRuntime<R> = TaskRuntime<null, Step, R, object>;
@@ -755,7 +755,8 @@ describe("task scheduling", () => {
 		const failure = new Error("disk gone");
 		storage.failNextCommit(failure);
 		harness.resume();
-		await expect(failedOf(harness)).rejects.toMatchObject({ name: "SessionFailed", cause: failure });
+		const end = await harness.closed;
+		expect(end).toEqual({ reason: "failed", error: failure });
 		expect(reports).toEqual([failure]);
 		// The pending wait and every later call get SessionFailed with the storage error.
 		await expect(waiting).rejects.toMatchObject({ name: "SessionFailed", cause: failure });
@@ -787,7 +788,7 @@ describe("task scheduling", () => {
 		const { harness, root, reports } = await openRoot([Throws], { storage });
 		const id = await start(root, Throws);
 		harness.resume();
-		await expect(failedOf(harness)).rejects.toMatchObject({ name: "SessionFailed", cause: failure });
+		expect(await harness.closed).toEqual({ reason: "failed", error: failure });
 		expect(runs).toBe(1);
 		expect(reports).toEqual([failure]);
 		await harness.close(context);

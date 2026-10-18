@@ -36,6 +36,18 @@
 			"import": "./dist/tools/index.js",
 			"default": "./dist/tools/index.js"
 		},
+		"./images": {
+			"source": "./src/images/index.ts",
+			"types": "./dist/images/index.d.ts",
+			"import": "./dist/images/index.js",
+			"default": "./dist/images/index.js"
+		},
+		"./images/node": {
+			"source": "./src/images/node.ts",
+			"types": "./dist/images/node.d.ts",
+			"import": "./dist/images/node.js",
+			"default": "./dist/images/node.js"
+		},
 		"./storage/memory": {
 			"source": "./src/storage/memory.ts",
 			"types": "./dist/storage/memory.d.ts",
@@ -101,6 +113,7 @@
 	"dependencies": {
 		"@OnePanda-TgSec/chord": "^2.0.1",
 		"@OnePanda-TgSec/tg-ai": "^2.0.1",
+		"@silvia-odwyer/photon": "0.3.3",
 		"diff": "8.0.4",
 		"typebox": "1.3.27"
 	},

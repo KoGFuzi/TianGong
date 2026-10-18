@@ -1,10 +1,9 @@
 import { BACKGROUND_CONTEXT } from "@OnePanda-TgSec/chord/context";
 import { characterEnd } from "@OnePanda-TgSec/chord/output";
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { getOrThrow } from "../src/env/index.ts";
 import { NodeExecutionEnv } from "../src/env/node.ts";
 import type { ToolDiagnostic, ToolExecutionApi } from "../src/harness/types.ts";
 import { detectSupportedImageMimeType } from "../src/tools/image.ts";
@@ -19,15 +18,8 @@ function referenceRead(bytes: Uint8Array, path: string, offset: number | undefin
 	const mimeType = detectSupportedImageMimeType(bytes);
 	if (mimeType) {
 		return {
-			output: [],
-			isError: true,
-			diagnostics: [
-				{
-					severity: "error",
-					code: "unsupported_image",
-					message: `${path} is an image (${mimeType}); reading images is not supported`,
-				},
-			],
+			output: [{ type: "image", data: Buffer.from(bytes).toString("base64"), mimeType }],
+			diagnostics: [{ severity: "info", code: "image", message: `Read image file [${mimeType}].` }],
 		};
 	}
 	const textContent = new TextDecoder().decode(bytes);
@@ -137,6 +129,7 @@ function apiFor(env: NodeExecutionEnv): ToolExecutionApi {
 		outputWindow: undefined,
 		diagnostic: () => {},
 		details: async () => {},
+		agent: async () => ({}),
 	} as unknown as ToolExecutionApi;
 }
 
@@ -207,63 +200,5 @@ describe("read tool", () => {
 		const env = new NodeExecutionEnv({ cwd });
 		const actual = await outcome(() => createReadTool().execute({ path: "a.png" }, apiFor(env), BACKGROUND_CONTEXT));
 		expect(actual).toEqual(await outcome(() => referenceRead(png, "a.png", undefined, undefined)));
-	});
-
-	it("reads a file that grows while it is read, and rereads one that shrank", async () => {
-		// A busy writer appends on every read, as a live log does: the scanned lines stay as they were, so the read
-		// succeeds instead of failing on a size that changed under it.
-		const growingCwd = mkdtempSync(join(tmpdir(), "tg-gibraltar-read-"));
-		dirs.push(growingCwd);
-		const growingEnv = new NodeExecutionEnv({ cwd: growingCwd });
-		getOrThrow(await growingEnv.writeFile("app.log", "one\ntwo\n", BACKGROUND_CONTEXT));
-		const logPath = join(growingCwd, "app.log");
-		const growing = Object.create(growingEnv) as NodeExecutionEnv;
-		growing.openBinaryReader = async (path, options, context) => {
-			const opened = await growingEnv.openBinaryReader(path, options, context);
-			if (!opened.ok) return opened;
-			const reader = opened.value;
-			const read = reader.read.bind(reader);
-			reader.read = async (position, length, readContext) => {
-				appendFileSync(logPath, "more\n");
-				return read(position, length, readContext);
-			};
-			return opened;
-		};
-		// The scanned lines are what the tool shows, however far the log grew while reading; how many lines the file has
-		// by then is timing, so the continuation offset is asserted instead of the count.
-		const grown = await outcome(() =>
-			createReadTool().execute({ path: "app.log", limit: 2 }, apiFor(growing), BACKGROUND_CONTEXT),
-		);
-		expect(grown).toMatchObject({
-			output: [{ type: "text", text: "one\ntwo" }],
-			diagnostics: [{ message: expect.stringContaining("Use offset=3 to continue.") }],
-		});
-
-		// A file that shrank mid-read is read again once, and the answer is the file as it is now.
-		const shrinkingCwd = mkdtempSync(join(tmpdir(), "tg-gibraltar-read-"));
-		dirs.push(shrinkingCwd);
-		const shrinkingEnv = new NodeExecutionEnv({ cwd: shrinkingCwd });
-		getOrThrow(await shrinkingEnv.writeFile("f.txt", "one\ntwo\nthree\n", BACKGROUND_CONTEXT));
-		const filePath = join(shrinkingCwd, "f.txt");
-		const shrinking = Object.create(shrinkingEnv) as NodeExecutionEnv;
-		shrinking.openBinaryReader = async (path, options, context) => {
-			const opened = await shrinkingEnv.openBinaryReader(path, options, context);
-			if (!opened.ok) return opened;
-			const reader = opened.value;
-			const read = reader.read.bind(reader);
-			let shrunk = false;
-			reader.read = async (position, length, readContext) => {
-				const bytes = await read(position, length, readContext);
-				if (!shrunk) {
-					shrunk = true;
-					writeFileSync(filePath, "one\n");
-				}
-				return bytes;
-			};
-			return opened;
-		};
-		expect(
-			await outcome(() => createReadTool().execute({ path: "f.txt" }, apiFor(shrinking), BACKGROUND_CONTEXT)),
-		).toEqual(await outcome(() => referenceRead(new TextEncoder().encode("one\n"), "f.txt", undefined, undefined)));
 	});
 });

@@ -1,7 +1,7 @@
 import type { Context } from "@OnePanda-TgSec/chord";
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { constants, createWriteStream, type Dir, type Stats, type WriteStream } from "node:fs";
+import { constants, createWriteStream, type Dir, type Dirent, type Stats, type WriteStream } from "node:fs";
 import {
 	access,
 	appendFile,
@@ -19,7 +19,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { homedir, constants as osConstants, tmpdir } from "node:os";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StreamDecoder } from "./decode.ts";
 import {
@@ -31,8 +31,11 @@ import {
 	FileError,
 	type FileInfo,
 	type FileKind,
+	type FileListEntry,
+	type FileListing,
 	type FileWatcher,
 	type LineScan,
+	type ListFilesOptions,
 	ok,
 	type Result,
 	type ShellExecOptions,
@@ -600,6 +603,133 @@ function symlinkRefused(path: string, cause?: Error): FileError {
 	return new FileError("invalid", "Refusing to follow a symbolic link", path, cause);
 }
 
+/** The bounds of `NodeExecutionEnv.listFiles`. */
+const LIST_FILES_MAX_ENTRIES = 50_000;
+const LIST_FILES_DEFAULT_BYTES = 4 * 1024 * 1024;
+/** The interface bound of `ListFilesOptions.maxBytes`, 15.9 MiB of listing text. */
+const LIST_FILES_MAX_BYTES = 16_672_358;
+const LIST_FILES_TIMEOUT_MS = 10_000;
+
+/** Consequence of an `.gitignore` rule, or of the pattern of a negation. */
+type IgnorePattern = {
+	readonly negate: boolean;
+	/** Only directories match, for a pattern with a trailing `/`. */
+	readonly dirOnly: boolean;
+	/** Matched against the whole path below its directory, not only against the last segment. */
+	readonly anchored: boolean;
+	/** `/`-separated glob segments; `*` and `?` within one, `**` across several. */
+	readonly segments: readonly string[];
+};
+
+/** The rules of one directory: its `.gitignore`, and, at the work tree's root, the excludes and the global file. */
+type IgnoreRules = readonly IgnorePattern[];
+
+/** Parses the rules of one git-ignores file: comments and blank lines out, negations and directories marked. */
+function parseIgnoreRules(content: string): IgnoreRules {
+	const patterns: IgnorePattern[] = [];
+	for (const rawLine of content.split("\n")) {
+		const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+		if (line === "" || line.startsWith("#")) continue;
+		const negate = line.startsWith("!");
+		const body = negate ? line.slice(1) : line;
+		if (body === "") continue;
+		const dirOnly = body.endsWith("/");
+		const withoutSlash = dirOnly ? body.slice(0, -1) : body;
+		if (withoutSlash === "") continue;
+		const anchored = withoutSlash.includes("/");
+		patterns.push({
+			negate,
+			dirOnly,
+			anchored,
+			segments: withoutSlash.split("/"),
+		});
+	}
+	return patterns;
+}
+
+/** Shell glob of one path segment: `*` matches any run of it, `?` exactly one character. */
+function segmentGlob(pattern: string, value: string): boolean {
+	// One asterisk stretch per backtracking loop, indexes instead of allocation: patterns repeat per entry.
+	let p = 0;
+	let v = 0;
+	let star = -1;
+	let starValue = -1;
+	while (v < value.length) {
+		if (p < pattern.length && (pattern[p] === "?" || pattern[p] === value[v])) {
+			p++;
+			v++;
+		} else if (p < pattern.length && pattern[p] === "*") {
+			star = p++;
+			starValue = v;
+		} else if (star !== -1) {
+			p = star + 1;
+			v = ++starValue;
+		} else return false;
+	}
+	while (p < pattern.length && pattern[p] === "*") p++;
+	return p === pattern.length;
+}
+
+/** `path` glob of one pattern: equal segment counts, with a `**` segment as any run of directories. */
+function patternGlob(pattern: readonly string[], value: readonly string[]): boolean {
+	if (value[0] === undefined) return pattern.length === 0 || (pattern.length === 1 && pattern[0] === "**");
+	if (pattern.length === 0) return false;
+	if (pattern[0] === "**") {
+		for (let skip = 0; skip <= value.length; skip++) {
+			if (patternGlob(pattern.slice(1), value.slice(skip))) return true;
+		}
+		return false;
+	}
+	return segmentGlob(pattern[0]!, value[0]) && patternGlob(pattern.slice(1), value.slice(1));
+}
+
+/**
+ * Whether git would ignore `path` (the segments from the work tree's root; the last one is the entry): the deepest
+ * directory with a rule for it decides, and within that directory the last matching rule. The `rules` array is sparse,
+ * indexed by the depth of each directory below the work tree's root; unset levels hold no rules.
+ */
+function ignoreDecides(rules: readonly IgnoreRules[], path: readonly string[], isDir: boolean): boolean {
+	for (let level = path.length - 1; level >= 0; level--) {
+		const directory = rules[level];
+		if (directory === undefined) continue;
+		const below = path.slice(level);
+		const name = below[below.length - 1]!;
+		let decided: boolean | undefined;
+		for (const pattern of directory) {
+			const matches =
+				(!pattern.dirOnly || isDir) &&
+				(pattern.anchored ? patternGlob(pattern.segments, below) : segmentGlob(pattern.segments[0]!, name));
+			if (matches) decided = !pattern.negate;
+		}
+		if (decided !== undefined) return decided;
+	}
+	return false;
+}
+
+/**
+ * The rules of one git-ignores file, parsed; empty when the file is missing or unreadable.
+ */
+async function readIgnoreRules(file: string): Promise<IgnoreRules> {
+	try {
+		return parseIgnoreRules(await readFile(file, "utf8"));
+	} catch {
+		return [];
+	}
+}
+
+/** The global excludes file: `XDG_CONFIG_HOME/git/ignore` with the default config directory in its place. */
+function globalExcludesFile(): string {
+	return join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "git", "ignore");
+}
+
+/** The OS path of a relative path as `/`-separated segments, empty and duplicate parts out. */
+function workPathSegments(path: string): readonly string[] {
+	return path.split(/[/\\]+/).filter((part) => part !== "");
+}
+
+/** Sentinel thrown out of the walk when the caller aborted; never escapes `listFiles`. */
+const ListAborted = Symbol("list files aborted");
+
 export class NodeExecutionEnv implements ExecutionEnv {
 	/** Every local environment sees the same files. */
 	readonly id: string = "node:local";
@@ -1143,6 +1273,133 @@ export class NodeExecutionEnv implements ExecutionEnv {
 			}
 			return ok(new NodeDirReader(dir, resolved));
 		} catch (error) {
+			return err(toFileError(error, resolved));
+		}
+	}
+
+	async listFiles(
+		path: string,
+		options: ListFilesOptions | undefined,
+		context: Context,
+	): Promise<Result<FileListing, FileError>> {
+		const resolved = resolvePath(this.cwd, path);
+		const aborted = abortResult<FileListing>(context.abortSignal, resolved);
+		if (aborted) return aborted;
+		const maxEntries = options?.maxEntries ?? LIST_FILES_MAX_ENTRIES;
+		const maxBytes = Math.min(options?.maxBytes ?? LIST_FILES_DEFAULT_BYTES, LIST_FILES_MAX_BYTES);
+		const timeoutMs = options?.timeoutMs ?? LIST_FILES_TIMEOUT_MS;
+		if (
+			!Number.isSafeInteger(maxEntries) ||
+			maxEntries < 0 ||
+			!Number.isSafeInteger(maxBytes) ||
+			maxBytes < 0 ||
+			!Number.isSafeInteger(timeoutMs) ||
+			timeoutMs < 0
+		) {
+			return err(new FileError("invalid", "listFiles bounds must be non-negative safe integers", resolved));
+		}
+		const deadline = Date.now() + timeoutMs;
+		const encoder = new TextEncoder();
+		const hidden = options?.hidden ?? true;
+		const excluded = new Set(options?.exclude ?? []);
+		const entries: FileListEntry[] = [];
+		let bytes = 0;
+		let truncated = false;
+		try {
+			const root = await realpath(resolved);
+			// Ignore rules count only inside a git work tree, the walk from the listed directory up to whose `.git`.
+			let workRoot: string | undefined;
+			for (let dir = root; ; ) {
+				if (await pathExists(join(dir, ".git"))) {
+					workRoot = dir;
+					break;
+				}
+				const parent = dirname(dir);
+				if (parent === dir) break;
+				dir = parent;
+			}
+			const respectsGitignore = (options?.gitignore ?? true) && workRoot !== undefined;
+			const listedRoot = respectsGitignore ? workPathSegments(relative(workRoot!, root)) : [];
+			// `rules[level]` holds the rules of the work-tree directory `level` steps in. One directory occupies each
+			// level while the walk descends, so the sparse array stays coherent for the whole listing.
+			const rules: IgnoreRules[] = [];
+			if (respectsGitignore) {
+				// Inside the work tree's root, git orders global excludes, then `.git/info/exclude`, then `.gitignore`.
+				rules[0] = [
+					...(await readIgnoreRules(globalExcludesFile())),
+					...(await readIgnoreRules(join(workRoot!, ".git", "info", "exclude"))),
+					...(await readIgnoreRules(join(workRoot!, ".gitignore"))),
+				];
+				// The directories between the work tree's root and the listed one are never entered; their rules first.
+				for (let level = 1; level < listedRoot.length; level++) {
+					const found = await readIgnoreRules(join(workRoot!, ...listedRoot.slice(0, level), ".gitignore"));
+					if (found.length > 0) rules[level] = found;
+				}
+			}
+			// One directory of the walk: false keeps going, true stopped because a bound ran out (`truncated` was set).
+			const walk = async (absoluteDir: string, segments: readonly string[], level: number): Promise<boolean> => {
+				if (respectsGitignore && level > 0) {
+					const own = await readIgnoreRules(join(workRoot!, ...listedRoot, ...segments, ".gitignore"));
+					if (own.length > 0) rules[level] = own;
+				}
+				// The listed directory's failure is the listing's error; a child's means a skipped subtree.
+				let dirents: Dirent[] | undefined;
+				if (level === 0) dirents = await readdir(absoluteDir, { withFileTypes: true });
+				else {
+					dirents = await readdir(absoluteDir, { withFileTypes: true }).catch(() => undefined);
+					if (dirents === undefined) return false;
+				}
+				if (dirents === undefined) return false;
+				const named = dirents.map((entry) => ({ entry, bytes: encoder.encode(entry.name) }));
+				// Siblings in byte order of their names.
+				named.sort((first, second) => {
+					const common = Math.min(first.bytes.length, second.bytes.length);
+					for (let index = 0; index < common; index++) {
+						if (first.bytes[index] !== second.bytes[index]) return first.bytes[index]! - second.bytes[index]!;
+					}
+					return first.bytes.length - second.bytes.length;
+				});
+				for (const listing of named) {
+					if (context.abortSignal?.aborted) throw ListAborted;
+					const name = listing.entry.name;
+					if (name === ".git" || (!hidden && name.startsWith(".")) || excluded.has(name)) continue;
+					const kind: FileKind | undefined = listing.entry.isDirectory()
+						? "directory"
+						: listing.entry.isFile()
+							? "file"
+							: listing.entry.isSymbolicLink()
+								? "symlink"
+								: undefined;
+					// Unsupported kinds are not listed; symlinks are listed and neither followed nor descended into.
+					if (kind === undefined) continue;
+					if (
+						respectsGitignore &&
+						ignoreDecides(rules, [...listedRoot, ...segments, name], kind === "directory")
+					) {
+						continue;
+					}
+					// Budgets are checked before an entry is emitted, so a listing that fits exactly is not truncated.
+					if (
+						entries.length + 1 > maxEntries ||
+						bytes + listing.bytes.length + 2 > maxBytes ||
+						Date.now() >= deadline
+					) {
+						truncated = true;
+						return true;
+					}
+					const relativePath = segments.length === 0 ? name : [...segments, name].join("/");
+					entries.push({ path: relativePath, kind });
+					bytes += listing.bytes.length + 2;
+					if (kind === "directory" && (await walk(join(absoluteDir, name), [...segments, name], level + 1))) {
+						return true;
+					}
+				}
+				return false;
+			};
+			await walk(root, [], listedRoot.length);
+			return ok({ entries, truncated });
+		} catch (error) {
+			if (error === ListAborted) return err(new FileError("aborted", "aborted", resolved));
 			return err(toFileError(error, resolved));
 		}
 	}

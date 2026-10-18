@@ -42,7 +42,7 @@ registerEnvConformance(
 		}
 	},
 	// Git Bash's `ln -s` copies instead of linking unless native symlinks are enabled.
-	windows ? { shell: [gitBash, "-c"], symlinks: false } : {},
+	windows ? { shell: [gitBash, "-c"], symlinks: false, listFiles: true } : { listFiles: true },
 );
 
 registerEnvConformance(
@@ -56,7 +56,7 @@ registerEnvConformance(
 			await removeTempDir(cwd);
 		}
 	},
-	windows ? { shell: [gitBash, "-c"], symlinks: false } : {},
+	windows ? { shell: [gitBash, "-c"], symlinks: false, listFiles: true } : { listFiles: true },
 );
 
 describe("NodeExecutionEnv watch limits", () => {

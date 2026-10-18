@@ -43,6 +43,11 @@
   offered, from `agent.callable`, what `executeTool()` nested calls resolve among. A nested call of a
   `["model"]`-only tool is now `tool_unavailable`, and a `["tools"]`-only tool is no longer offered to the
   model. Every tool was callable by both before.
+- The `read` tool returns a supported image (PNG, JPEG, GIF, WebP) as one image block, where it answered
+  `unsupported_image` before. An image beyond the model's limits (`maxWidth`/`maxHeight`/`maxBytes`, defaults
+  2000x2000 and 4.5 MiB) is still an error result, without decoding the whole file; a format providers do not
+  take inline (BMP) is an error again unless `ReadToolOptions.images` supplies a processor that can convert it.
+  A model without image input sees a placeholder, and `read` says so in its diagnostic.
 
 ### Added
 
@@ -176,6 +181,28 @@
 - `TaskRuntime.abortOwned(id, context)` aborts a task this task owns and resolves once it is terminal, and
   `TaskRuntime.ownedTasks(context)` lists the live tasks this task owns directly, in ID order, including an
   earlier invocation's.
+- Image preparation. `src/tools/image.ts` gains `imageDimensions(bytes, mimeType)`, which reads a PNG, JPEG,
+  GIF, or WebP header (animated apNG and VP8/VP8L/VP8X included) instead of decoding it, and
+  `src/tools/image-processor.ts` exports `ImageLimits`, `DEFAULT_IMAGE_LIMITS` (2000x2000, 4.5 MiB), the
+  `ImageProcessor` type, `PreparedImage`, `INLINE_IMAGE_TYPES`, and `toBase64`, which encodes standard base64
+  in 8 KiB chunks so a 3 MiB image fits a small heap.
+- `@OnePanda-TgSec/tg-gibraltar/images` and `@OnePanda-TgSec/tg-gibraltar/images/node`, a
+  [Photon](https://github.com/silvia-odwyer/photon) (WebAssembly) image processor. `createPhotonImages(wasm)`
+  takes a compiled module, as a worker host passes it; `createNodePhotonImages({ worker?, idleMs? })` runs it
+  in a Node worker thread, exits after 30 seconds idle, and starts a new worker on the next image. The module
+  is not loaded - and no worker is started - unless it is imported; `Image` decoding, EXIF orientation
+  (`exifOrientation` in `src/images/exif.ts`), bytes and dimensions travel over the worker boundary as data.
+- `createCodingTools(options)` and `createReadTool({ images })` pass an `ImageProcessor` to `read`, which
+  then orients, resizes, and converts the images it finds so the model can take them, and names `bmp` in its
+  description only when a processor can convert it.
+- `FileSystem.listFiles(path, options?, context?)` returns a bounded, gitignore-aware depth-listed tree:
+  `ListFilesOptions` takes `exclude`, `ignore` (additional pattern files), `maxEntries`, `maxBytes`,
+  `maxDepth`, and `timeoutMs`, and `FileListing` reports `entries` (`FileListEntry`: `path`, `size?`),
+  `ignoredBy`, `truncated`, and `aborted`. `listFiles` is optional on `FileSystem`; only environments that
+  implement it need to answer conformance's `listFiles` option. `NodeExecutionEnv` implements it from the
+  environment's directory walker and windows-style `gitignore` matching: `.git` is never listed, a deeper
+  pattern file wins over a shallower one, a later rule in one file wins over an earlier one, a pattern with a
+  `/` besides its trailing one is anchored, and the default global excludes file is `$XDG_CONFIG_HOME/git/ignore`.
 
 ### Changed
 

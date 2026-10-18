@@ -1,4 +1,5 @@
 import type { JsonValue } from "@OnePanda-TgSec/chord";
+import { PROGRESS_BYTES_PER_SECOND } from "@OnePanda-TgSec/chord/output";
 import {
 	type AssistantMessage,
 	type FauxResponseStep,
@@ -34,7 +35,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { NodeExecutionEnv } from "../src/env/node.ts";
-import { PROGRESS_BYTES_PER_SECOND } from "../src/harness/output.ts";
 import { createBashTool, createEditTool, createReadTool } from "../src/tools/index.ts";
 import { allEntries, type ChatSetup, chatSetup, openChat, textOf } from "./chat-support.ts";
 import { addHooks, addTask, addTool, type Installed } from "./harness-support.ts";

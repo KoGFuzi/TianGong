@@ -1,6 +1,6 @@
+import { OutputBuffer, type OutputLimits } from "@OnePanda-TgSec/chord/output";
 import { describe, expect, it } from "vitest";
 import type { ShellOutputSkip } from "../src/env/index.ts";
-import { OutputBuffer, type OutputLimits } from "../src/harness/output.ts";
 
 /** Deterministic PRNG (mulberry32) so failures reproduce from the printed seed. */
 function random(seed: number): () => number {

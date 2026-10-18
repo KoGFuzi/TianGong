@@ -245,6 +245,28 @@ rewritten in place before it can be opened.
   parent's rows were gone.
 - Design-document links in the README now point at the in-repo `docs/` files instead of upstream
   GitHub URLs.
+- A wait that closes a cycle through waits and held owners is rejected by `runtime.commit()`, naming the
+  cycle, instead of leaving every task on it waiting forever; waiting on itself or on an owner chain were
+  the only cycles caught. A background task may now wait on the owner of its conversation, which is no
+  cycle (upstream pi #10411; tests and approach from #10533).
+- The scheduler no longer visits every live task on each pass: abort cascades start only from tasks with
+  cancellation intent, owned live work and idle scopes are walks down an in-memory ownership index, and
+  reservation, finalization, and failFast checks keep their own candidate sets. A chain of 500 owned
+  tasks that took 12 s to settle takes 50 ms, 20,000 take 1.5 s; a tool making 8000 parallel nested calls
+  finishes in 2.7 s instead of 18.8 s, with one document per nested call instead of one growing index
+  (`bun run bench:scheduler-fanout`).
+- The scheduler's ownership indexes are bounded by live work: it keeps a conversation's owner and an
+  ended task's ownership only while live work is below them, instead of every conversation and subagent
+  chain it ever saw. Work that later appears in an old conversation loads its chain from storage again.
+  After 10,000 ended subagent calls under a live parent it kept 10,000 ended tasks and 10,001 conversation
+  edges; now none of either beyond the parent's conversation (`bun run bench:scheduler-memory`). A queued
+  input no longer makes the scheduler scan every queued submission when nothing is being cancelled.
+- The Session's document cache is bounded by use: a loaded document that no watch or document state
+  observes leaves memory once it was not read or written for `documentRetentionMs` (new in
+  `HarnessSettings` and `createSession()` options; default ten minutes, `0` drops it right after use) and
+  loads from Storage again on its next access. It held every conversation and session document ever
+  touched, built-in and third-party, for the life of the process: 5,000 conversations kept 26,000
+  documents and about 3.8 KB each; with retention 0 they keep none (`bun run bench:document-cache`).
 
 ## [1.0.1] - 2026-10-03
 

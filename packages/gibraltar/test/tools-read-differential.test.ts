@@ -1,11 +1,11 @@
 import { BACKGROUND_CONTEXT } from "@OnePanda-TgSec/chord/context";
+import { characterEnd } from "@OnePanda-TgSec/chord/output";
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { getOrThrow } from "../src/env/index.ts";
 import { NodeExecutionEnv } from "../src/env/node.ts";
-import { characterEnd } from "../src/harness/output.ts";
 import type { ToolDiagnostic, ToolExecutionApi } from "../src/harness/types.ts";
 import { detectSupportedImageMimeType } from "../src/tools/image.ts";
 import { createReadTool } from "../src/tools/read.ts";

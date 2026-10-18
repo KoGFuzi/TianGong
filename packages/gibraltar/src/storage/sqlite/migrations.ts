@@ -140,7 +140,7 @@ function renderProjectIsolation(schema: SqliteSchema): readonly string[] {
 		`CREATE INDEX ${indexes.submissionsByConversation} ON ${tables.submissions} (project_id, conversation_id, id)`,
 		`CREATE INDEX ${indexes.submissionsByStatus} ON ${tables.submissions} (project_id, status, id)`,
 		`CREATE INDEX ${indexes.documentsByAddress}
-			ON ${tables.documents} (project_id, kind, scope_kind, owner_id, family, key_value, created_at DESC, retired_at)`,
+		ON ${tables.documents} (project_id, kind, scope_kind, owner_id, family, key_value, created_at DESC, retired_at)`,
 		`CREATE INDEX ${indexes.documentsByScope} ON ${tables.documents} (project_id, scope_kind, owner_id, id)`,
 		`CREATE INDEX ${indexes.documentsByScopeKind} ON ${tables.documents} (project_id, scope_kind, owner_id, kind, id)`,
 		`CREATE TABLE ${tables.projects} (

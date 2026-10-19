@@ -109,3 +109,9 @@
 
 ## 4. 回滚矩阵
 G1→G7 按序提交；G2 依赖 G1（判别联合与 output 改名先行）；G3-4 依赖 chord wholesale（已完成）；G6 依赖 G2-1（嵌套调用）+ vendored codemode 1.3.0（已完成）；G4 独立，可与 G2/G3 并行；G5/G7 独立。跨批文件冲突点集中在 `harness/tool.ts`/`scheduler.ts`——严格串行，不并行。
+
+## 5. 实施期勘误（2026-10-19，G1-6/G2-5/G2-6 的两个上游单测补齐）
+
+1. **`harness-scheduler-indexes.test.ts`**：新建，整文件对应上游同名套件（G2-6 的测试面）；与上游唯一差异是 mkdtemp 前缀 `pi-durable-indexes-` → `tg-gibraltar-indexes-`。主控复核通过。
+2. **`harness-input-entries.test.ts` 按 8/3 拆分补齐**：上游同名文件共 11 例，其中 8 例在房规落地时已并入 `packages/gibraltar/test/harness-inbox.test.ts`（display-only writes 两例 :544/:580，`describe("input entries")` 块六例 :992-1205）；上游 1.3.0 的 `packages/durable/test/harness-inbox.test.ts` 不含这批用例，整文件移植会造成重复执行与双副本 re-sync，故**新建** `packages/gibraltar/test/harness-input-entries.test.ts` 只承载其余 3 例（上游 :333/:361/:418）。房规术语 **display-only** 对应上游 **data-only**；文件头注释记录拆分事实供下次 re-sync 对账。
+3. **CHANGELOG 不记**：`packages/gibraltar/CHANGELOG.md` 的 `[Unreleased]` 面向使用者 API 变更，测试补齐不属于该面。

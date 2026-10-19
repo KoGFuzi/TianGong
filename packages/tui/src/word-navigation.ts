@@ -1,6 +1,8 @@
 import { getWordSegmenter, isWhitespaceChar, PUNCTUATION_REGEX } from "./utils.ts";
 
 const wordSegmenter = getWordSegmenter();
+// matchAll clones the pattern it is given, so a shared global regex is safe to reuse across calls.
+const PUNCTUATION_REGEX_GLOBAL = new RegExp(PUNCTUATION_REGEX.source, "g");
 
 /**
  * Options for word navigation functions.
@@ -47,7 +49,7 @@ export function findWordBackward(text: string, cursor: number, options?: WordNav
 	} else if (last.isWordLike) {
 		// Skip inside one word-like segment, preserving ASCII punctuation boundaries.
 		const segment = last.segment;
-		const matches = [...segment.matchAll(new RegExp(PUNCTUATION_REGEX, "g"))];
+		const matches = [...segment.matchAll(PUNCTUATION_REGEX_GLOBAL)];
 		if (matches.length <= 0) {
 			newCursor -= segment.length;
 		} else {

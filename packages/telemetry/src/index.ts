@@ -23,8 +23,6 @@ export interface TelemetrySpan extends TelemetryContext {
 
 export { NOOP_TELEMETRY_CONTEXT } from "./noop.ts";
 
-export type TelemetryAttributeType = "string" | "number" | "boolean" | "string[]" | "number[]" | "boolean[]";
-
 export interface TelemetryAttributeMetadata {
 	description: string;
 	sensitive?: boolean;
@@ -236,21 +234,6 @@ export type SchemaTelemetrySpan<
 		attributes: ExactTelemetryAttributes<TelemetrySchemaSpanEndAttributes<Schema, Name>, Attributes>,
 	): void;
 };
-
-export type TelemetrySchemaSpanUnion<Schema extends TelemetrySchemaDefinition> = {
-	[Name in TelemetrySchemaSpanName<Schema>]: {
-		name: Name;
-		startAttributes: TelemetrySchemaSpanStartAttributes<Schema, Name>;
-		endAttributes: TelemetrySchemaSpanEndAttributes<Schema, Name>;
-		events: {
-			[EventName in TelemetrySchemaSpanEventName<Schema, Name>]: TelemetrySchemaSpanEventAttributes<
-				Schema,
-				Name,
-				EventName
-			>;
-		};
-	};
-}[TelemetrySchemaSpanName<Schema>];
 
 type TelemetrySchemaTuple = readonly [TelemetrySchemaDefinition, ...TelemetrySchemaDefinition[]];
 

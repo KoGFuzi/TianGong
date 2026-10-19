@@ -422,6 +422,9 @@ export class Container implements Component {
  */
 const SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07";
 
+/** Upper bound on cached normalized lines; past it the cache restarts so one-off lines cannot grow it. */
+const NORMALIZED_LINE_CACHE_LIMIT = 8192;
+
 /** Composite overlay content into a terminal line at a fixed column. */
 export function compositeTuiLine(
 	baseLine: string,
@@ -529,6 +532,8 @@ export abstract class TuiBase extends Container implements TUI {
 	private terminalColorSchemeNotificationsEnabled = false;
 	/** Directory for debug/crash logs. When undefined, debug logging is disabled and crash dumps fall back to the OS temp directory. */
 	protected readonly logDirectory: string | undefined;
+	/** Normalized lines by raw line, so unchanged lines skip normalization and allocation each frame. */
+	private normalizedLineCache = new Map<string, string>();
 
 	// Overlay stack for modal components rendered on top of base content
 	private focusOrderCounter = 0;
@@ -1422,12 +1427,16 @@ export abstract class TuiBase extends Container implements TUI {
 	}
 
 	protected applyLineResets(lines: string[]): string[] {
-		const reset = SEGMENT_RESET;
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
-			if (!isImageLine(line)) {
-				lines[i] = normalizeTerminalOutput(line) + reset;
+			if (isImageLine(line)) continue;
+			let normalized = this.normalizedLineCache.get(line);
+			if (normalized === undefined) {
+				normalized = normalizeTerminalOutput(line) + SEGMENT_RESET;
+				if (this.normalizedLineCache.size >= NORMALIZED_LINE_CACHE_LIMIT) this.normalizedLineCache.clear();
+				this.normalizedLineCache.set(line, normalized);
 			}
+			lines[i] = normalized;
 		}
 		return lines;
 	}
@@ -1476,6 +1485,7 @@ export abstract class TuiBase extends Container implements TUI {
 	 * of components without focus have no CURSOR_MARKER and stay visible.
 	 */
 	protected resolveFakeCursors(lines: string[]): string[] {
+		if (!lines.some((line) => line.includes(FAKE_CURSOR_START))) return lines;
 		return lines.map((line) => {
 			if (!line.includes(FAKE_CURSOR_START)) return line;
 			const resolved = this.showHardwareCursor ? line.replace(FOCUSED_FAKE_CURSOR, "$1$2") : line;

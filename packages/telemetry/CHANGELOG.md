@@ -19,6 +19,12 @@
   `tg.span.agent.tool`, declared as typed schema data. Every attribute is a count or a closed
   enumeration; no span carries prompt text, tool arguments, or paths.
 
+### Removed
+
+- The `TelemetryAttributeType` and `TelemetrySchemaSpanUnion` aliases: declared and never used.
+  The attribute type unions are inlined in `TelemetryAttributeDefinition`, which is what
+  adapters actually consume.
+
 ## [2.0.1] - 2026-10-03
 
 ### Added

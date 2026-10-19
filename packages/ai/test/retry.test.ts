@@ -320,4 +320,38 @@ describe("retryAssistantCall", () => {
 		expect(produce).toHaveBeenCalledTimes(1);
 		expect(onRetryFinished).toHaveBeenCalledWith(false, 1, "terminated");
 	});
+
+	it("removes each backoff's abort listener when the sleep completes", async () => {
+		// Regression for the 2026-10 audit: the retry sleep added an "abort" listener on the caller's
+		// signal and only removed it on abort, so a shared signal accumulated one listener per retry.
+		const controller = new AbortController();
+		const signal = controller.signal;
+		const originalAdd = signal.addEventListener.bind(signal);
+		const originalRemove = signal.removeEventListener.bind(signal);
+		let added = 0;
+		let removed = 0;
+		signal.addEventListener = (type, listener, options) => {
+			if (type === "abort") added++;
+			originalAdd(type, listener, options);
+		};
+		signal.removeEventListener = (type, listener, options) => {
+			if (type === "abort") removed++;
+			originalRemove(type, listener, options);
+		};
+		const policy: RetryPolicy = { enabled: true, maxRetries: 3, baseDelayMs: 1 };
+		let calls = 0;
+		const res = await retryAssistantCall(
+			async () => {
+				calls++;
+				if (calls < 3) return fauxAssistantMessage("", { stopReason: "error", errorMessage: "terminated" });
+				return fauxAssistantMessage("recovered");
+			},
+			policy,
+			signal,
+		);
+		expect(res.stopReason).toBe("stop");
+		expect(calls).toBe(3);
+		expect(added).toBe(2);
+		expect(removed).toBe(added);
+	});
 });

@@ -1,15 +1,27 @@
 /**
- * Generic undo stack with clone-on-push semantics.
+ * Bounded undo stack.
  *
- * Stores deep clones of state snapshots. Popped snapshots are returned
- * directly (no re-cloning) since they are already detached.
+ * Callers push snapshots that are already detached from live state; the stack stores and pops
+ * them as-is. Strings are immutable and safe to share across snapshots, so detaching is a shallow
+ * copy of the mutable container, not a deep clone. `push` drops the oldest snapshot past the
+ * capacity so a long session cannot grow the stack without bound.
  */
 export class UndoStack<S> {
-	private stack: S[] = [];
+	static readonly DEFAULT_CAPACITY = 200;
 
-	/** Push a deep clone of the given state onto the stack. */
+	private readonly stack: S[] = [];
+	private readonly capacity: number;
+
+	constructor(capacity: number = UndoStack.DEFAULT_CAPACITY) {
+		this.capacity = capacity;
+	}
+
+	/** Store a detached snapshot, evicting the oldest one over capacity. */
 	push(state: S): void {
-		this.stack.push(structuredClone(state));
+		this.stack.push(state);
+		if (this.stack.length > this.capacity) {
+			this.stack.shift();
+		}
 	}
 
 	/** Pop and return the most recent snapshot, or undefined if empty. */

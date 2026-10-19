@@ -1005,18 +1005,16 @@ function wrapSingleLine(line: string, width: number): string[] {
 
 export const PUNCTUATION_REGEX = /[(){}[\]<>.,;:'"!?+\-=*/\\|&%^$#@~`]/;
 
+/** Escapes regex metacharacters so `text` matches as a literal inside a RegExp. */
+export function escapeRegExp(text: string): string {
+	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
  * Check if a character is whitespace.
  */
 export function isWhitespaceChar(char: string): boolean {
 	return /\s/.test(char);
-}
-
-/**
- * Check if a character is punctuation.
- */
-export function isPunctuationChar(char: string): boolean {
-	return PUNCTUATION_REGEX.test(char);
 }
 
 function breakLongWord(word: string, width: number, tracker: AnsiCodeTracker): string[] {

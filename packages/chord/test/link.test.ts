@@ -17,8 +17,10 @@ import {
 	remote,
 	type Self,
 	type StateEvent,
+	type WebSocketLike,
+	webSocketLink,
 } from "../src/index.ts";
-import { Packed, unpack } from "../src/link.ts";
+import { MAX_OUTBOX_BYTES, MAX_QUEUED_FRAMES, Packed, unpack } from "../src/link.ts";
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -627,5 +629,34 @@ describe("links: IPC", () => {
 		assert.equal(sent.length, 1);
 		link.send({ t: "ping", n: 2 });
 		assert.equal(sent.length, 1, "a closed link sends nothing more");
+	});
+});
+
+describe("links: bounded queues", () => {
+	it("ends a link whose receive queue outgrows any possible receiver", async () => {
+		const [down, up] = memoryLinkPair();
+		const reasons: string[] = [];
+		up.onClose((reason) => reasons.push(reason));
+		for (let i = 0; i <= MAX_QUEUED_FRAMES; i++) down.send({ t: "ping", n: i });
+		for (let i = 0; i < 100 && !up.closed; i++) await tick();
+		assert.equal(up.closed, true);
+		assert.deepEqual(reasons, ["receive queue overflow"]);
+	});
+
+	it("ends a WebSocket link whose outbox outgrows the connect window", () => {
+		const socket = {
+			readyState: 0,
+			send: () => {
+				throw new Error("a connecting socket cannot send");
+			},
+			close: () => {},
+			addEventListener: () => {},
+		} as unknown as WebSocketLike;
+		const link = webSocketLink(socket);
+		const reasons: string[] = [];
+		link.onClose((reason) => reasons.push(reason));
+		link.send({ t: "bye", reason: "x".repeat(MAX_OUTBOX_BYTES) });
+		assert.equal(link.closed, true);
+		assert.deepEqual(reasons, ["websocket send queue overflow"]);
 	});
 });

@@ -76,8 +76,6 @@ export {
 	type StackOptions,
 	VStack,
 } from "./components/v-stack.ts";
-// Editor component interface (for custom editors)
-export type { EditorComponent } from "./editor-component.ts";
 // Fuzzy matching
 export { type FuzzyMatch, fuzzyFilter, fuzzyMatch } from "./fuzzy.ts";
 // Keybindings

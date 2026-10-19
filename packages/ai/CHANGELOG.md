@@ -18,6 +18,20 @@
   module was added, removed, or restructured, and the public API is unchanged.
 - Imports of the telemetry contracts now use `@OnePanda-TgSec/tg-telemetry`.
 - The `pi-ai` binary is now published as `tg-ai`.
+- `repairJson()` rebuilds the repaired text from an array of chunks instead of per-character `+=`
+  concatenation. The streaming tool-argument parser can run it over the whole partial-arguments
+  buffer, and character-by-character concatenation copied that buffer once per character.
+- `validateToolArguments()` returns `JsonObject`, not `any`. The docstring already promised the
+  validated arguments, and every caller's cast was hiding nothing.
+- Streaming chat adapters re-parse a tool call's accumulating arguments at most once every 50 ms
+  (`parseStreamingJsonThrottled`) instead of once per delta. Deltas still reach consumers unchanged
+  and completed calls are parsed in full, so only the parsed preview lags, while the repeated scans
+  over the whole buffer disappear.
+- `Models.complete()`, `completeSimple()`, and `fetchDeferred()` drain the completion stream while
+  awaiting its result. They never read its events, and the undrained stream retained one event
+  object per streamed delta.
+- `declarationsEqual()` serializes each tool declaration once instead of cloning both parameter
+  schemas with a JSON round-trip before comparing them.
 
 ### Changed: identifiers
 
@@ -184,6 +198,24 @@
   connection are retried again. The provider error classifier now recognizes Node's
   `ERR_HTTP2_STREAM_CANCEL` wording, which the Bedrock SDK raises once its HTTP/2 session times out.
   Ported from upstream pi 1.0.4 (#10379).
+
+- Retry backoff no longer leaks abort listeners. The `sleep()` helpers in `utils/retry.ts` and in
+  the Codex stream attached an `abort` listener to the caller's signal and removed it only on
+  abort, so one shared signal accumulated a listener per retry in the loop. The timer path now
+  removes the listener; `test/retry.test.ts` fails on the old code.
+- `closeOpenAICodexWebSocketSessions()` now also drops the per-session WebSocket debug stats and
+  the SSE-fallback flags. Only the socket cache was dropped before, and the two maps grew with
+  every session id the process ever served.
+
+### Removed
+
+- The `legacy-api-aliases.ts` module: the sixteen `@deprecated` `stream*`/`streamSimple*` provider
+  aliases had no importer anywhere; use the `api/*.lazy.ts` factories or the
+  `@OnePanda-TgSec/tg-ai/api/*` subpaths.
+- `./api/llama-cpp-classify.lazy.ts`, an orphan wrapper: no registry entry and no test imported
+  it. The classifier implementation and its tests remain.
+- Unused exports `getApiProviders`, `validateToolCall`, `getOverflowPatterns`,
+  `mapStopReasonString`, `getImageProviders`, and `getImageModels`.
 
 ## [2.0.1] - 2026-10-03
 

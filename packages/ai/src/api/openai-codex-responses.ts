@@ -183,11 +183,15 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 			reject(new Error("Request was aborted"));
 			return;
 		}
-		const timeout = setTimeout(resolve, ms);
-		signal?.addEventListener("abort", () => {
+		const onAbort = () => {
 			clearTimeout(timeout);
 			reject(new Error("Request was aborted"));
-		});
+		};
+		const timeout = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		signal?.addEventListener("abort", onAbort, { once: true });
 	});
 }
 
@@ -956,15 +960,21 @@ export function closeOpenAICodexWebSocketSessions(sessionId?: string): void {
 		if (entry.idleTimer) clearTimeout(entry.idleTimer);
 		closeWebSocketSilently(entry.socket, 1000, "debug_close");
 	};
+	// Closing a session is its lifecycle end: its per-session debug stats and fallback flag go
+	// with it, otherwise the maps grow with every session id the process ever served.
 	if (sessionId) {
 		for (const entry of websocketSessionCache.get(sessionId)?.values() ?? []) closeEntry(entry);
 		websocketSessionCache.delete(sessionId);
+		websocketDebugStats.delete(sessionId);
+		websocketSseFallbackSessions.delete(sessionId);
 		return;
 	}
 	for (const accountEntries of websocketSessionCache.values()) {
 		for (const entry of accountEntries.values()) closeEntry(entry);
 	}
 	websocketSessionCache.clear();
+	websocketDebugStats.clear();
+	websocketSseFallbackSessions.clear();
 }
 
 registerSessionResourceCleanup(closeOpenAICodexWebSocketSessions);

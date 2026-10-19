@@ -57,7 +57,9 @@ function prepareEditArguments(input: unknown): EditToolInput {
 			} else if (isSingleEditInput(parsed)) {
 				args.edits = [parsed];
 			}
-		} catch {}
+		} catch {
+			// A non-JSON `edits` string is left as sent; downstream validation reports it.
+		}
 	} else if (isSingleEditInput(args.edits)) {
 		args.edits = [args.edits];
 	}

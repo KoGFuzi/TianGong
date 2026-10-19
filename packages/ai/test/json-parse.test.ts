@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { parseStreamingJson, parseToolCallArguments } from "../src/utils/json-parse.ts";
+import { describe, expect, it, vi } from "vitest";
+import { parseStreamingJson, parseStreamingJsonThrottled, parseToolCallArguments } from "../src/utils/json-parse.ts";
 
 describe("parseStreamingJson", () => {
 	// #10868
@@ -18,6 +18,32 @@ describe("parseStreamingJson", () => {
 
 	it("omits a \\u escape that is cut off mid-stream", () => {
 		expect(parseStreamingJson(String.raw`{"text":"ab\u00`)).toEqual({ text: "ab" });
+	});
+});
+
+describe("parseStreamingJsonThrottled", () => {
+	it("reuses the last parse until the interval elapses", () => {
+		vi.useFakeTimers();
+		try {
+			const owner = {};
+			expect(parseStreamingJsonThrottled(owner, '{"a":')).toEqual({});
+			expect(parseStreamingJsonThrottled(owner, '{"a":1')).toEqual({});
+			vi.advanceTimersByTime(50);
+			expect(parseStreamingJsonThrottled(owner, '{"a":1}')).toEqual({ a: 1 });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("parses a buffer that shrank without waiting for the interval", () => {
+		vi.useFakeTimers();
+		try {
+			const owner = {};
+			expect(parseStreamingJsonThrottled(owner, '{"a":1}')).toEqual({ a: 1 });
+			expect(parseStreamingJsonThrottled(owner, '{"a":')).toEqual({});
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 

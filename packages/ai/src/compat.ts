@@ -25,7 +25,6 @@ export * from "./image-models.ts";
 export * from "./images.ts";
 export * from "./images-api-registry.ts";
 export * from "./index.ts";
-export * from "./legacy-api-aliases.ts";
 export * from "./providers/images/register-builtins.ts";
 
 import { anthropicMessagesApi } from "./api/anthropic-messages.lazy.ts";
@@ -141,10 +140,6 @@ export function registerApiProvider<TApi extends Api, TOptions extends StreamOpt
 
 export function getApiProvider(api: Api): ApiProviderInternal | undefined {
 	return apiProviderRegistry.get(api)?.provider;
-}
-
-export function getApiProviders(): ApiProviderInternal[] {
-	return Array.from(apiProviderRegistry.values(), (entry) => entry.provider);
 }
 
 export function unregisterApiProviders(sourceId: string): void {

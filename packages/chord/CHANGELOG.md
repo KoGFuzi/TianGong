@@ -16,7 +16,11 @@
   boundOutput, sanitizeOutput, characterEnd, utf8ByteLength).
 - Depends on typebox instead of esbuild.
 
-## [Unreleased]
+### Added
+
+- README documenting services, replicated state, facets, remote services, contexts, and the delta
+  engine.
+- `vitest.config.ts`, resolving sibling packages through the shared `vitest.base.ts` aliases.
 
 ### Changed
 
@@ -27,12 +31,18 @@
   whole. Recorded in `AGENTS.md` so the exception is not treated as an oversight.
 - `test/boundary.test.ts` now rejects `@OnePanda-TgSec/*` and `@earendil-works/*` dependencies,
   not only `@earendil-works/pi-*`. The intent is the same: Chord stays standalone.
+- Link pending queues are bounded. A link ends with `receive queue overflow` after
+  `MAX_QUEUED_FRAMES` (1024) frames arrive before `receive()` attaches, and a WebSocket link ends
+  with `websocket send queue overflow` after `MAX_OUTBOX_BYTES` (16 MiB) accumulates while the
+  socket is still connecting.
 
-### Added
+### Removed
 
-- README documenting services, replicated state, facets, remote services, contexts, and the delta
-  engine.
-- `vitest.config.ts`, resolving sibling packages through the shared `vitest.base.ts` aliases.
+- `src/delta/revision-validator.ts` (`JsonRevisionValidator`): never re-exported from `./delta`
+  or the root barrel, and no module or test imported it.
+- `isReplace` from `./delta` (no consumer; `isBase` is what the flush path checks), and the
+  `WireReloadOptions`/`WireReloadReport` type aliases from `./wire` — the schemas stay on the
+  wire frame union, the standalone aliases were never named.
 
 ## [2.0.1] - 2026-10-03
 

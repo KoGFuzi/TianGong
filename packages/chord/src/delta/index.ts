@@ -67,8 +67,6 @@ export type WireOp =
 
 // ─── Classification ──────────────────────────────────────────────────────────
 
-export const isReplace = (op: Op | WireOp): boolean => op[0] === "r";
-
 /**
  * A batch begins with a replacement. Flush guarantees `r` is at index 0 or absent,
  * so this is exact rather than a heuristic.

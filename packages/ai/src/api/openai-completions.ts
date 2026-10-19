@@ -39,7 +39,7 @@ import { formatProviderError, normalizeProviderError } from "../utils/error-body
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
-import { parseStreamingJson, parseToolCallArguments } from "../utils/json-parse.ts";
+import { parseStreamingJsonThrottled, parseToolCallArguments } from "../utils/json-parse.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { retryProviderRequest } from "../utils/provider-retry.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
@@ -571,8 +571,9 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 
 				// Fallback: some providers (e.g., Moonshot) return usage
 				// in choice.usage instead of the standard chunk.usage
-				if (!chunk.usage && (choice as any).usage) {
-					output.usage = parseChunkUsage((choice as any).usage, model);
+				const choiceWithUsage = choice as { usage?: Parameters<typeof parseChunkUsage>[0] };
+				if (!chunk.usage && choiceWithUsage.usage) {
+					output.usage = parseChunkUsage(choiceWithUsage.usage, model);
 				}
 
 				if (choice.finish_reason) {
@@ -665,7 +666,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 							if (toolCall.function?.arguments) {
 								delta = toolCall.function.arguments;
 								block.partialArgs = (block.partialArgs ?? "") + toolCall.function.arguments;
-								block.arguments = parseStreamingJson(block.partialArgs);
+								block.arguments = parseStreamingJsonThrottled(block, block.partialArgs);
 							} else if (toolCall.custom?.input) {
 								const nextInput = getCustomToolCallInput(block) + toolCall.custom.input;
 								delta = appendCustomToolCallInput(block, nextInput, false) ?? "";
@@ -800,6 +801,21 @@ function createClient(
 	});
 }
 
+/** Chat-completion params plus the vendor fields the OpenAI SDK types do not carry. */
+type NonStandardChatCompletionParams = Omit<
+	OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
+	"reasoning_effort"
+> & {
+	enable_thinking?: boolean;
+	priority?: number;
+	reasoning_effort?: string;
+	chat_template_kwargs?: Record<string, unknown>;
+	thinking?: { type: "enabled" | "disabled" };
+	tool_stream?: boolean;
+	provider?: unknown;
+	providerOptions?: unknown;
+};
+
 function buildParams(
 	model: Model<"openai-completions">,
 	context: TranscriptContext,
@@ -832,6 +848,8 @@ function buildParams(
 		prompt_cache_retention: cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined,
 	};
 
+	const vendorParams = params as NonStandardChatCompletionParams;
+
 	if (compat.supportsUsageInStreaming !== false) {
 		params.stream_options = { include_usage: true };
 	}
@@ -856,7 +874,7 @@ function buildParams(
 	if (transcriptTools.requestTools.length > 0) {
 		params.tools = convertTools(transcriptTools.requestTools, compat);
 		if (compat.zaiToolStream) {
-			(params as any).tool_stream = true;
+			vendorParams.tool_stream = true;
 		}
 	} else if (hasToolHistory(context.messages)) {
 		// Anthropic (via LiteLLM/proxy) requires tools param when conversation has tool_calls/tool_results
@@ -872,7 +890,7 @@ function buildParams(
 	}
 
 	if (compat.vllmPriority !== undefined) {
-		(params as any).priority = compat.vllmPriority;
+		vendorParams.priority = compat.vllmPriority;
 	}
 
 	const thinkingTokenBudgetField = resolveThinkingTokenBudgetField(compat);
@@ -892,22 +910,22 @@ function buildParams(
 			}
 		}
 	} else if (compat.thinkingFormat === "qwen" && model.reasoning) {
-		(params as any).enable_thinking = !!options?.reasoningEffort;
+		vendorParams.enable_thinking = !!options?.reasoningEffort;
 		if (options?.reasoningEffort && compat.supportsReasoningEffort) {
 			const effort = model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
 			if (typeof effort === "string") {
-				(params as any).reasoning_effort = effort;
+				vendorParams.reasoning_effort = effort;
 			}
 		}
 	} else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
-		(params as any).chat_template_kwargs = {
+		vendorParams.chat_template_kwargs = {
 			enable_thinking: !!options?.reasoningEffort,
 			preserve_thinking: true,
 		};
 	} else if (compat.thinkingFormat === "chat-template" && model.reasoning) {
 		const chatTemplateKwargs = buildChatTemplateValues(model, options, compat.chatTemplateKwargs, thinkingBudget);
 		if (chatTemplateKwargs) {
-			(params as any).chat_template_kwargs = chatTemplateKwargs;
+			vendorParams.chat_template_kwargs = chatTemplateKwargs;
 		}
 	} else if (compat.thinkingFormat === "baseten" && model.reasoning) {
 		const basetenParams = params as Omit<typeof params, "reasoning_effort"> & {
@@ -928,13 +946,12 @@ function buildParams(
 		}
 	} else if (compat.thinkingFormat === "deepseek" && model.reasoning) {
 		if (options?.reasoningEffort) {
-			(params as any).thinking = { type: "enabled" };
+			vendorParams.thinking = { type: "enabled" };
 		} else if (model.thinkingLevelMap?.off !== null) {
-			(params as any).thinking = { type: "disabled" };
+			vendorParams.thinking = { type: "disabled" };
 		}
 		if (options?.reasoningEffort && compat.supportsReasoningEffort) {
-			(params as any).reasoning_effort =
-				model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+			vendorParams.reasoning_effort = model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
 		}
 	} else if (compat.thinkingFormat === "openrouter" && model.reasoning) {
 		// OpenRouter normalizes reasoning across providers via a nested reasoning object.
@@ -969,11 +986,11 @@ function buildParams(
 		}
 	} else if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
 		// OpenAI-style reasoning_effort
-		(params as any).reasoning_effort = model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+		vendorParams.reasoning_effort = model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
 	} else if (!options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
 		const offValue = model.thinkingLevelMap?.off;
 		if (typeof offValue === "string") {
-			(params as any).reasoning_effort = offValue;
+			vendorParams.reasoning_effort = offValue;
 		}
 	}
 
@@ -987,7 +1004,7 @@ function buildParams(
 
 	// OpenRouter provider routing preferences
 	if (model.compat?.openRouterRouting) {
-		(params as any).provider = model.compat.openRouterRouting;
+		vendorParams.provider = model.compat.openRouterRouting;
 	}
 
 	// Vercel AI Gateway provider routing preferences
@@ -997,7 +1014,7 @@ function buildParams(
 			const gatewayOptions: Record<string, string[]> = {};
 			if (routing.only) gatewayOptions.only = routing.only;
 			if (routing.order) gatewayOptions.order = routing.order;
-			(params as any).providerOptions = { gateway: gatewayOptions };
+			vendorParams.providerOptions = { gateway: gatewayOptions };
 		}
 	}
 

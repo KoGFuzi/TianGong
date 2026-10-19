@@ -130,15 +130,22 @@ export function toToolDeclaration(tool: Tool): Tool {
 }
 
 /**
- * Whether two tools declare the same interface to the model.
- *
- * Both sides go through {@link toToolDeclaration} first: its JSON round-trip drops the
- * typebox symbol keys and `undefined` fields that a structural comparison would see, and
- * builds both objects with the same key order, so comparing the serialized declarations
- * is exact. This avoids a deep-equal dependency in a browser-safe package.
+ * The serialized declaration compared by {@link declarationsEqual}. `JSON.stringify` drops symbol
+ * keys and `undefined` fields, exactly as the clone round-trip it replaces did, so comparing these
+ * strings is exact. Serializing the declaration directly avoids cloning both schemas first.
  */
+function declarationKey(tool: Tool): string {
+	return JSON.stringify({
+		name: tool.name,
+		description: tool.description,
+		parameters: tool.parameters,
+		...(tool.constrainedSampling === undefined ? {} : { constrainedSampling: tool.constrainedSampling }),
+	});
+}
+
+/** Whether two tools declare the same interface to the model. */
 export function declarationsEqual(left: Tool, right: Tool): boolean {
-	return JSON.stringify(toToolDeclaration(left)) === JSON.stringify(toToolDeclaration(right));
+	return declarationKey(left) === declarationKey(right);
 }
 
 export interface ToolStateChanges {

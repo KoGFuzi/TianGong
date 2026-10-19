@@ -35,16 +35,3 @@ export function getImageModel<TProvider extends BuiltinImageProvider, TModelId e
 ): BuiltinImageModel<TProvider, TModelId> {
 	return imageModelsByProvider.get(provider)?.get(modelId as string) as BuiltinImageModel<TProvider, TModelId>;
 }
-
-/** @deprecated Static catalog read. Use `Models.getProviders()`. */
-export function getImageProviders(): BuiltinImageProvider[] {
-	return Array.from(imageModelsByProvider.keys()) as BuiltinImageProvider[];
-}
-
-/** @deprecated Static catalog read. Use `getBuiltinImageModels` from "@OnePanda-TgSec/tg-ai/providers/all" or `Models.getModelsOfType("image")`. */
-export function getImageModels<TProvider extends BuiltinImageProvider>(
-	provider: TProvider,
-): BuiltinImageModel<TProvider, ImageModelIds<TProvider>>[] {
-	const models = imageModelsByProvider.get(provider);
-	return models ? (Array.from(models.values()) as BuiltinImageModel<TProvider, ImageModelIds<TProvider>>[]) : [];
-}

@@ -2114,7 +2114,13 @@ export class Editor implements Component, Focusable {
 	}
 
 	private pushUndoSnapshot(): void {
-		this.undoStack.push({ state: this.state, pastes: this.pastes, pasteCounter: this.pasteCounter });
+		// The state needs a deep clone; the pastes map only a shallow one: its string values are
+		// immutable and were already deep-copied when they were captured.
+		this.undoStack.push({
+			state: structuredClone(this.state),
+			pastes: new Map(this.pastes),
+			pasteCounter: this.pasteCounter,
+		});
 	}
 
 	private undo(): void {

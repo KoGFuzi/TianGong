@@ -44,7 +44,6 @@ const WireReloadOptionsSchema = Type.Object({
 	gateDeadline: Type.Optional(Type.Number()),
 	retireDeadline: Type.Optional(Type.Number()),
 });
-export type WireReloadOptions = Static<typeof WireReloadOptionsSchema>;
 
 /** A child's prepared reload, sent with its vote (same fields as `ReloadReport`, without children). */
 const WireReloadReportSchema = Type.Object({
@@ -55,7 +54,6 @@ const WireReloadReportSchema = Type.Object({
 	prepared: List(Type.String()),
 	gated: List(Type.String()),
 });
-export type WireReloadReport = Static<typeof WireReloadReportSchema>;
 
 const FrameSchema = Type.Union([
 	Type.Object({

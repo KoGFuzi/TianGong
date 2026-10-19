@@ -1,7 +1,7 @@
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
 import { Value } from "typebox/value";
-import type { Tool, ToolCall } from "../types.ts";
+import type { JsonObject, Tool, ToolCall } from "../types.ts";
 
 const validatorCache = new WeakMap<object, ReturnType<typeof Compile>>();
 const TYPEBOX_KIND = Symbol.for("TypeBox.Kind");
@@ -293,28 +293,13 @@ function formatValidationPath(error: TLocalizedValidationError): string {
 }
 
 /**
- * Finds a tool by name and validates the tool call arguments against its TypeBox schema
- * @param tools Array of tool definitions
- * @param toolCall The tool call from the LLM
- * @returns The validated arguments
- * @throws Error if tool is not found or validation fails
- */
-export function validateToolCall(tools: Tool[], toolCall: ToolCall): any {
-	const tool = tools.find((t) => t.name === toolCall.name);
-	if (!tool) {
-		throw new Error(`Tool "${toolCall.name}" not found`);
-	}
-	return validateToolArguments(tool, toolCall);
-}
-
-/**
  * Validates tool call arguments against the tool's TypeBox schema
  * @param tool The tool definition with TypeBox schema
  * @param toolCall The tool call from the LLM
  * @returns The validated (and potentially coerced) arguments
  * @throws Error with formatted message if validation fails
  */
-export function validateToolArguments(tool: Tool, toolCall: ToolCall): any {
+export function validateToolArguments(tool: Tool, toolCall: ToolCall): JsonObject {
 	if (toolCall.argumentsError) {
 		throw new Error(`Invalid arguments for tool "${toolCall.name}": ${toolCall.argumentsError}`);
 	}
@@ -332,7 +317,8 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): any {
 				}
 				Object.assign(args, coerced);
 			} else {
-				return validator.Check(coerced) ? coerced : args;
+				// The schema, not this function, is the arbiter of what a tool accepts as arguments.
+				return validator.Check(coerced) ? (coerced as JsonObject) : args;
 			}
 		}
 	}

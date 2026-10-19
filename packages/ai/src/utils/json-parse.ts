@@ -2,6 +2,7 @@ import { parse as partialParse } from "partial-json";
 import type { ToolCall } from "../types.ts";
 
 const VALID_JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t"]);
+const UNICODE_ESCAPE_DIGITS_PATTERN = /^[0-9a-fA-F]{4}$/;
 
 function isControlCharacter(char: string): boolean {
 	const codePoint = char.codePointAt(0);
@@ -31,14 +32,16 @@ function escapeControlCharacter(char: string): string {
  * - doubling backslashes before invalid escape characters
  */
 export function repairJson(json: string): string {
-	let repaired = "";
+	// Chunked, not `+=` per character: this runs over the whole accumulated tool-arguments buffer
+	// on every streaming repair attempt, and string concatenation copies the prefix each time.
+	const chunks: string[] = [];
 	let inString = false;
 
 	for (let index = 0; index < json.length; index++) {
 		const char = json[index];
 
 		if (!inString) {
-			repaired += char;
+			chunks.push(char);
 			if (char === '"') {
 				inString = true;
 			}
@@ -46,7 +49,7 @@ export function repairJson(json: string): string {
 		}
 
 		if (char === '"') {
-			repaired += char;
+			chunks.push(char);
 			inString = false;
 			continue;
 		}
@@ -54,33 +57,33 @@ export function repairJson(json: string): string {
 		if (char === "\\") {
 			const nextChar = json[index + 1];
 			if (nextChar === undefined) {
-				repaired += "\\\\";
+				chunks.push("\\\\");
 				continue;
 			}
 
 			if (nextChar === "u") {
 				const unicodeDigits = json.slice(index + 2, index + 6);
-				if (/^[0-9a-fA-F]{4}$/.test(unicodeDigits)) {
-					repaired += `\\u${unicodeDigits}`;
+				if (UNICODE_ESCAPE_DIGITS_PATTERN.test(unicodeDigits)) {
+					chunks.push(`\\u${unicodeDigits}`);
 					index += 5;
 					continue;
 				}
 			}
 
 			if (VALID_JSON_ESCAPES.has(nextChar)) {
-				repaired += `\\${nextChar}`;
+				chunks.push(`\\${nextChar}`);
 				index += 1;
 				continue;
 			}
 
-			repaired += "\\\\";
+			chunks.push("\\\\");
 			continue;
 		}
 
-		repaired += isControlCharacter(char) ? escapeControlCharacter(char) : char;
+		chunks.push(isControlCharacter(char) ? escapeControlCharacter(char) : char);
 	}
 
-	return repaired;
+	return chunks.join("");
 }
 
 export function parseJsonWithRepair<T>(json: string): T {
@@ -117,6 +120,37 @@ export function parseToolCallArguments(json: string | undefined): Pick<ToolCall,
 			argumentsError: `${error instanceof Error ? error.message : String(error)}\n\nReceived arguments:\n${json}`,
 		};
 	}
+}
+
+/** Minimum interval between re-parses of one streaming tool call's accumulated JSON. */
+const STREAMING_PARSE_INTERVAL_MS = 50;
+
+interface StreamingParseState {
+	at: number;
+	length: number;
+	value: unknown;
+}
+
+/** Parse progress per tool-call block; a weak key keeps the state alive exactly as long as the block. */
+const streamingParseStates = new WeakMap<object, StreamingParseState>();
+
+/**
+ * Parses an accumulating tool-call arguments buffer for streaming previews, at most once per
+ * {@link STREAMING_PARSE_INTERVAL_MS}. Every delta still reaches consumers; only the parsed object
+ * updates at this cadence. The completed call is parsed in full by its adapter.
+ *
+ * `owner` is the block the buffer belongs to; its buffer only ever grows, so an unchanged length
+ * means unchanged text.
+ */
+export function parseStreamingJsonThrottled<T = Record<string, unknown>>(owner: object, json: string): T {
+	const state = streamingParseStates.get(owner);
+	if (state !== undefined) {
+		if (json.length === state.length) return state.value as T;
+		if (json.length > state.length && Date.now() - state.at < STREAMING_PARSE_INTERVAL_MS) return state.value as T;
+	}
+	const value = parseStreamingJson<T>(json);
+	streamingParseStates.set(owner, { at: Date.now(), length: json.length, value });
+	return value;
 }
 
 /**

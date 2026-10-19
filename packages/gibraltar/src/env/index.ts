@@ -16,10 +16,6 @@ export function getOrThrow<TValue, TError>(result: Result<TValue, TError>): TVal
 	return result.value;
 }
 
-export function getOrUndefined<TValue extends object, TError>(result: Result<TValue, TError>): TValue | undefined {
-	return result.ok ? result.value : undefined;
-}
-
 export function toError(error: unknown): Error {
 	if (error instanceof Error) return error;
 	if (typeof error === "string") return new Error(error);

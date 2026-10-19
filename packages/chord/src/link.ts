@@ -17,6 +17,9 @@ export interface Link {
 	close(reason?: string): void;
 }
 
+/** Frames a link may hold before `receive()` attaches. Past this the peer cannot be draining, so the link ends. */
+export const MAX_QUEUED_FRAMES = 1024;
+
 /** Shared plumbing: receive queue, close handlers, `bye`. Transports implement `transmit` and `shutdown`. */
 abstract class BaseLink implements Link {
 	#handler: ((frame: Frame) => void) | undefined;
@@ -84,8 +87,15 @@ abstract class BaseLink implements Link {
 			this.ended(frame.reason ?? "peer closed");
 			return;
 		}
-		if (this.#handler === undefined) this.#queue.push(frame);
-		else this.#handler(frame);
+		if (this.#handler !== undefined) {
+			this.#handler(frame);
+			return;
+		}
+		if (this.#queue.length >= MAX_QUEUED_FRAMES) {
+			this.ended("receive queue overflow");
+			return;
+		}
+		this.#queue.push(frame);
 	}
 
 	/** Marks the link closed (transport ended) and notifies once. */
@@ -351,6 +361,9 @@ export interface WebSocketLike {
 
 const OPEN = 1;
 
+/** Bytes buffered while the socket is still connecting. A connect that never opens must not grow without limit. */
+export const MAX_OUTBOX_BYTES = 16 * 1024 * 1024;
+
 export interface WebSocketLinkOptions {
 	/** Deflate large payloads of outgoing frames (default false; the server's side of client sockets). */
 	readonly compress?: boolean;
@@ -362,6 +375,7 @@ export class WebSocketLink extends BaseLink {
 	readonly #socket: WebSocketLike;
 	readonly #compress: boolean;
 	#outbox: (string | Uint8Array)[] = [];
+	#outboxBytes = 0;
 
 	constructor(socket: WebSocketLike, options: WebSocketLinkOptions = {}) {
 		super();
@@ -372,6 +386,7 @@ export class WebSocketLink extends BaseLink {
 		if ("binaryType" in socket) (socket as { binaryType: string }).binaryType = "arraybuffer";
 		socket.addEventListener("open", () => {
 			for (const data of this.#outbox.splice(0)) socket.send(data);
+			this.#outboxBytes = 0;
 		});
 		socket.addEventListener("message", (event) => {
 			try {
@@ -400,13 +415,23 @@ export class WebSocketLink extends BaseLink {
 
 	protected transmit(frame: Frame): number {
 		const data = packMessage(frame, this.#compress);
-		if (this.#socket.readyState === OPEN) this.#socket.send(data);
-		else this.#outbox.push(data);
-		return typeof data === "string" ? data.length : data.byteLength;
+		const size = typeof data === "string" ? data.length : data.byteLength;
+		if (this.#socket.readyState === OPEN) {
+			this.#socket.send(data);
+		} else {
+			if (this.#outboxBytes + size > MAX_OUTBOX_BYTES) {
+				this.ended("websocket send queue overflow");
+				return 0;
+			}
+			this.#outbox.push(data);
+			this.#outboxBytes += size;
+		}
+		return size;
 	}
 
 	protected shutdown(): void {
 		this.#outbox = [];
+		this.#outboxBytes = 0;
 		if (this.#socket.readyState <= OPEN) this.#socket.close(1000);
 	}
 }

@@ -49,11 +49,6 @@ export const VENDORED_PACKAGES = {
 	},
 } as const;
 
-export type VendoredPackageName = keyof typeof VENDORED_PACKAGES;
-
-/** Every specifier a house package is allowed to borrow from the vendored upstream set. */
-export const VENDORED_SPECIFIERS: readonly string[] = Object.keys(VENDORED_PACKAGES);
-
 /**
  * Upstream names that house packages used before adoption. House **code** may not import them;
  * house **documentation** may, because a changelog entry and a provenance section have to name
@@ -67,9 +62,6 @@ export const FORMER_SPECIFIERS = {
 	"@earendil-works/pi-telemetry": "@OnePanda-TgSec/tg-telemetry",
 	"@earendil-works/pi-agent-core": "@OnePanda-TgSec/tg-agent-core",
 } as const;
-
-/** Specifiers house code may import: our own packages plus the two vendored ones. */
-export const ALLOWED_HOUSE_SPECIFIERS: readonly string[] = [...HOUSE_NAMES, ...VENDORED_SPECIFIERS];
 
 export type PackageOrigin = "house" | "vendored";
 
@@ -123,7 +115,7 @@ export async function listPackages(root: string = repoRoot()): Promise<Workspace
 }
 
 /** Workspace package names a package declares as a runtime dependency. */
-export function workspaceDependencies(pkg: WorkspacePackage, packages: WorkspacePackage[]): string[] {
+function workspaceDependencies(pkg: WorkspacePackage, packages: WorkspacePackage[]): string[] {
 	const manifest = pkg.manifest as Manifest;
 	const declared = { ...manifest.dependencies, ...manifest.peerDependencies };
 	const byName = new Map(packages.map((candidate) => [candidate.name, candidate]));

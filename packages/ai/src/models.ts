@@ -402,6 +402,17 @@ function mergeHeaders(
 	return merged;
 }
 
+/**
+ * The terminal result of a stream nobody iterates. Completions need only the final message, but an
+ * undrained stream retains one event object per streamed delta until it is collected.
+ */
+async function drainToResult(stream: AssistantMessageEventStream): Promise<AssistantMessage> {
+	for await (const _event of stream) {
+		// Discard intermediate events.
+	}
+	return stream.result();
+}
+
 class ModelsImpl implements MutableModels {
 	private providers = new Map<string, Provider>();
 	private credentials: CredentialStore;
@@ -975,7 +986,7 @@ class ModelsImpl implements MutableModels {
 		context: Context,
 		options?: ModelsApiStreamOptions<TApi>,
 	): Promise<AssistantMessage> {
-		return this.stream(model, context, options).result();
+		return drainToResult(this.stream(model, context, options));
 	}
 
 	streamSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): AssistantMessageEventStream {
@@ -1005,7 +1016,7 @@ class ModelsImpl implements MutableModels {
 		context: Context,
 		options?: ModelsSimpleStreamOptions,
 	): Promise<AssistantMessage> {
-		return this.streamSimple(model, context, options).result();
+		return drainToResult(this.streamSimple(model, context, options));
 	}
 
 	streamDeferred(
@@ -1028,7 +1039,7 @@ class ModelsImpl implements MutableModels {
 		handle: DeferredHandle,
 		options?: ModelsDeferredFetchOptions,
 	): Promise<AssistantMessage> {
-		return this.streamDeferred(model, handle, options).result();
+		return drainToResult(this.streamDeferred(model, handle, options));
 	}
 
 	async cancelDeferred(

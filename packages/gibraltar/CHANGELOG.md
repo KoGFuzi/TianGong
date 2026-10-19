@@ -259,7 +259,6 @@
   changed. No module was added, removed, or restructured, and the public API is unchanged.
 - Cross-package imports now use `@OnePanda-TgSec/chord` and `@OnePanda-TgSec/tg-ai`.
 - `repository.directory` corrected from `packages/durable` to `packages/gibraltar`.
-
 ### Changed: persisted identifiers
 
 Entry kinds (`pi.user`, `pi.assistant`, `pi.system`, `pi.reset`, `pi.tool-result`, `pi.compaction`),
@@ -332,6 +331,11 @@ rewritten in place before it can be opened.
   session at 996K of a 1M window got an empty `length` answer on every turn, with no visible error.
 - A task whose fault write failed no longer runs again in the same process (landed with the G1 scheduler
   port; recorded here with the batch that closes it out).
+
+### Removed
+
+- `getOrUndefined` from `./env`: no caller in or outside the workspace; `getOrThrow` is the
+  `Result` accessor consumers use.
 
 ## [1.0.1] - 2026-10-03
 

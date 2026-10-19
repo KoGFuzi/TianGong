@@ -34,6 +34,16 @@
   transcript top/bottom moved to `Ctrl+Home`/`Ctrl+End`, which no longer move the editor cursor: in fullscreen
   the alt screen consumed `Home`/`End` first, so the editor could never reach its own line start or end. A host
   that binds `tui.altScreen.top` / `tui.altScreen.bottom` keeps its own keys.
+- `UndoStack` is now bounded (200 snapshots) and stores what callers hand it. The editor detaches an
+  undo snapshot with a deep clone of the buffer and a shallow copy of the paste map instead of a deep
+  clone of both, so a snapshot no longer copies every paste's full content on every edit, and the
+  stack can no longer grow without bound over a long session.
+- One `escapeRegExp()` in `utils.ts` replaces the byte-identical private copies in `autocomplete.ts`
+  and `alt-screen-search.ts`.
+- Word navigation reuses a module-level global punctuation regex instead of constructing one per call.
+- The screens cache normalized lines between frames, so an unchanged line skips normalization and
+  suffix allocation. The fake-cursor pass also returns the render array untouched when no line
+  carries a cursor marker, instead of allocating a mapped copy every frame.
 
 ### Fixed
 
@@ -71,6 +81,12 @@ No aliases are provided.
 must use the same macros because it compiles against `native/napi.h`. Neither is reachable from
 TypeScript. `src/latex.ts` keeps bare LaTeX names such as `pi` and `alpha`, which are symbol-table
 keys rather than identifiers.
+
+### Removed
+
+- `isPunctuationChar` from `utils.ts` and the `EditorComponent` interface (`editor-component.ts`,
+  with its root-barrel re-export): no consumer inside the package, and no documented host uses
+  them. `Editor` itself is what custom editors extend.
 
 ## [1.0.1] - 2026-10-03
 

@@ -1,7 +1,7 @@
 import { Input } from "./components/input.ts";
 import { getKeybindings } from "./keybindings.ts";
 import type { Component, Focusable } from "./tui.ts";
-import { getGraphemeSegmenter, stripTerminalSequences, truncateToWidth, visibleWidth } from "./utils.ts";
+import { escapeRegExp, getGraphemeSegmenter, stripTerminalSequences, truncateToWidth, visibleWidth } from "./utils.ts";
 
 const segmenter = getGraphemeSegmenter();
 
@@ -107,10 +107,6 @@ function buildSearchCorpus(lines: readonly string[]): SearchCorpus {
 
 function normalizeQuery(query: string): string {
 	return query.replace(/\s+/gu, " ").trim();
-}
-
-function escapeRegExp(text: string): string {
-	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function findSearchCorpusMatches(corpus: SearchCorpus, normalizedQuery: string): AltScreenSearchMatch[] {

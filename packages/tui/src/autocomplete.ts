@@ -3,7 +3,7 @@ import { readdirSync, statSync } from "fs";
 import { homedir } from "os";
 import { basename, dirname, join } from "path";
 import { fuzzyFilter } from "./fuzzy.ts";
-import { autocompleteBoundaryRegex, autocompleteSeparatorRegex } from "./utils.ts";
+import { autocompleteBoundaryRegex, autocompleteSeparatorRegex, escapeRegExp } from "./utils.ts";
 
 const PATH_DELIMITERS = new Set([" ", "\t", '"', "'", "="]);
 const tokenStartRegex = new RegExp(`${autocompleteBoundaryRegex.source}$`, "u");
@@ -12,10 +12,6 @@ const PATH_WRAPPERS: Record<string, string> = { "(": ")", "[": "]", "{": "}", "<
 
 function toDisplayPath(value: string): string {
 	return value.replace(/\\/g, "/");
-}
-
-function escapeRegex(value: string): string {
-	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function buildFdPathQuery(query: string): string {
@@ -34,7 +30,7 @@ function buildFdPathQuery(query: string): string {
 	const segments = trimmed
 		.split("/")
 		.filter(Boolean)
-		.map((segment) => escapeRegex(segment));
+		.map((segment) => escapeRegExp(segment));
 	if (segments.length === 0) {
 		return normalized;
 	}

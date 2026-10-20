@@ -137,8 +137,21 @@
   model, and the System One and llama.cpp classifier APIs reject them before sending.
   Ported from upstream pi 1.1.0.
 
+- `MiniMax-M3.1-Flash` is in the `minimax` and `minimax-cn` catalogs with thinking levels low through
+  max sent as `output_config.effort`; thinking cannot be turned off for it. New MiniMax models from
+  models.dev now appear without a manual allowlist entry, and only the older M2, M2.1, M2.5, and
+  M2.5-highspeed models stay hidden. Ported from upstream pi.
+
 ### Fixed
 
+- Whitespace-only tool output, such as a bare `\r\n` from bash, is treated as empty by the OpenAI
+  Completions, OpenAI Responses, and Google adapters and uses the same placeholder as empty output.
+  Some providers reject whitespace-only tool content with a 400 that then repeats on every request in
+  the session. Ported from upstream pi.
+- Retry classification recognizes gateway upstream failures (`upstream_error`,
+  `upstream_stream_read_error`, interrupted streams, and HTTP/2 stream failures) and node-fetch
+  `request to ... failed, reason:` transport errors, including Google Vertex OAuth token refreshes.
+  Ported from upstream pi.
 - The assistant message frame codec no longer swallows message-level fields it does not name.
   `cloneStartMessage` rebuilds the start frame from a hard-coded field list, so `durationMs` was
   dropped on the encode/reduce round trip. The field is now carried through, and a message that was

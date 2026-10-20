@@ -58,6 +58,11 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	// Gateway failure relaying the upstream response stream, sent as an OpenAI
 	// Responses `response.failed` event without an error code (#10920).
 	"unable to forward upstream",
+	// Other gateway upstream failures relayed as `response.failed` error codes (#10920).
+	"upstream.?request.?failed",
+	"upstream_stream_read_error",
+	"stream was interrupted",
+	"http/?2 stream failed",
 	// Mistral reports a mid-stream termination as `finish_reason: "error"`; without this the
 	// message looks terminal and the turn ends as model_error instead of retrying (#10487). The
 	// literal phrase is scoped to that finish reason: other providers' `Provider stopped with:
@@ -73,6 +78,9 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"connection.?lost",
 	"other side closed",
 	"fetch failed",
+	// node-fetch system errors, e.g. the Google ADC OAuth token refresh used by
+	// google-vertex. The reason is often empty (#10996).
+	"request to \\S+ failed, reason:",
 	"getaddrinfo",
 	"ENOTFOUND",
 	"EAI_AGAIN",

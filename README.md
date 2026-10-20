@@ -14,7 +14,7 @@
 ```bash
 bun install              # 安装工作区
 bun run generate:models  # 生成 packages/ai/src/providers/data（gitignore，需联网）
-bun run build            # 按依赖顺序构建全部 8 个包
+bun run build            # 按依赖顺序构建全部 9 个包
 bun run test             # 按依赖顺序运行每个包的测试套件
 bun run check            # house standard、格式、类型、相对导入
 ```
@@ -29,6 +29,7 @@ bun run check            # house standard、格式、类型、相对导入
 | --- | --- | --- |
 | [`@OnePanda-TgSec/tg-ai`](packages/ai) | `packages/ai` | 统一 LLM API：模型发现、provider 注册、流式调用、OAuth、图片模型注册表，全部收敛在一个接口后面。每个 provider 调用自动记录 telemetry span。 |
 | [`@OnePanda-TgSec/tg-agent-core`](packages/agent) | `packages/agent` | Agent 循环：传输抽象、状态管理、工具执行、附件；turn 与工具调用各有一层 telemetry span。 |
+| [`@OnePanda-TgSec/tg-env`](packages/env) | `packages/env` | 远程执行环境：通过 SSH 部署并在远端运行的 `tg-env` daemon，以及与之通信的 `RemoteExecutionEnv`；文件、命令、监听与伪终端。 |
 | [`@OnePanda-TgSec/tg-gibraltar`](packages/gibraltar) | `packages/gibraltar` | 持久化会话、任务与文档运行时。生产环境只用 SQLite；一切内容先落库再展示，进程被杀也能从断点恢复；带会话删除/导出/备份与项目级用量聚合。 |
 | [`@OnePanda-TgSec/tg-tui`](packages/tui) | `packages/tui` | 终端 UI 库：差分渲染、全功能文本编辑器、Markdown 与 LaTeX 渲染、终端内图片。 |
 | [`@OnePanda-TgSec/tg-telemetry`](packages/telemetry) | `packages/telemetry` | 厂商中立的 telemetry 契约、类型化 span 词表（`TG_SPAN_SCHEMA`），以及面向适配器实现的 conformance 套件。 |
@@ -39,12 +40,12 @@ bun run check            # house standard、格式、类型、相对导入
 ```text
 telemetry ──▶ ai ──┬──▶ agent
    └───────────────┘
-                   └──▶ gibraltar ▲
-chord ────────────────────────────┘
+                   └──▶ gibraltar ──▶ env ▲
+chord ─────────────┴───────────────────────┘
 ```
 
 `tg-agent-core` 同时依赖 `tg-ai` 与 `tg-telemetry`（turn/tool span 记录在共享词表上）；
-`tg-gibraltar` 依赖 `chord` 与 `tg-ai`。
+`tg-gibraltar` 依赖 `chord` 与 `tg-ai`；`tg-env` 依赖 `chord` 与 `tg-gibraltar`。
 
 `chord`、`tui`、`telemetry`、`codemode`、`mcp` 是叶子：它们不引用工作区内任何包。这正是 `chord`
 能够独立发布的原因。
@@ -225,7 +226,7 @@ span）。不传则全部是 NOOP，事件序列与无 telemetry 时逐事件一
 ├── docs/provenance.md     包来源，含 vendored 声明
 ├── scripts/               Bun 编排与 house-standard 检查
 ├── .githooks/             pre-commit 门禁，`bun run prepare` 安装
-└── packages/              八个工作区包
+└── packages/              九个工作区包
 ```
 
 ## License

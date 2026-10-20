@@ -16,6 +16,7 @@ check:house-standard` asserts against that record, so the two cannot drift apart
 | `packages/telemetry` | `@OnePanda-TgSec/tg-telemetry` | pi agent, adopted and rebranded | House |
 | `packages/ai` | `@OnePanda-TgSec/tg-ai` | pi agent, adopted and rebranded | House |
 | `packages/gibraltar` | `@OnePanda-TgSec/tg-gibraltar` | pi agent, adopted and rebranded | House |
+| `packages/env` | `@OnePanda-TgSec/tg-env` | pi agent, adopted and rebranded | House |
 | `packages/agent` | `@OnePanda-TgSec/tg-agent-core` | pi agent, adopted and rebranded | House |
 | `packages/codemode` | `@earendil-works/pi-codemode` | **pi agent 1.3.0, migrated verbatim** | **Vendored, frozen** |
 | `packages/mcp` | `@earendil-works/pi-mcp` | **pi agent 1.3.0, migrated verbatim** | **Vendored, frozen** |
@@ -169,7 +170,7 @@ in the calling house package, not in the vendored directory.
 
 ## House packages: adopted and rebranded
 
-These six started as pi agent packages and were brought under the TianGong house standard. Their
+These seven started as pi agent packages and were brought under the TianGong house standard. Their
 source, layout, and public API shape are upstream's; the **naming layer** is ours.
 
 What "rebranded" means concretely, for every one of them:
@@ -177,6 +178,9 @@ What "rebranded" means concretely, for every one of them:
 - `package.json` `name` moved to `@OnePanda-TgSec/*`, version to the shared `2.0.1` line,
   `author` to `KoGFuzi`, `license` to MIT, `repository` to `github.com/KoGFuzi/TianGong`.
 - Every import specifier of a sibling package rewritten to its `@OnePanda-TgSec/*` name.
+- `packages/env` additionally renamed the daemon and its binary to `tg-env`, the `PI_ENV_*` environment
+  variables to `TG_ENV_*`, and its remote deployment directory from `~/.pi/mobile/tools` to
+  `~/.tiangong/mobile/tools`.
 - Root `tsconfig.json` path map, `vitest.base.ts` aliases, and per-package `tsconfig.build.json`
   paths updated to match.
 - `README.md` and `CHANGELOG.md` written for the TianGong names and install commands.
@@ -194,6 +198,7 @@ no public API changed. Module layout is the one thing carried over untouched.
 | `@earendil-works/pi-tui` | `@OnePanda-TgSec/tg-tui` |
 | `@earendil-works/pi-telemetry` | `@OnePanda-TgSec/tg-telemetry` |
 | `@earendil-works/pi-agent-core` | `@OnePanda-TgSec/tg-agent-core` |
+| `@earendil-works/pi-env` | `@OnePanda-TgSec/tg-env` |
 | `@earendil-works/pi-mcp` | *unchanged, vendored* |
 | `@earendil-works/pi-codemode` | *unchanged, vendored* |
 
@@ -297,7 +302,7 @@ name changed. `packages/agent` likewise holds `@OnePanda-TgSec/tg-agent-core`.
 ## Upstream packages deliberately not carried over
 
 The pi agent repository also publishes `pi-coding-agent`, `pi-protocol`, `pi-client`, `pi-server`,
-and `pi-evals`. None of them are part of TianGong. The eight directories listed in the summary
+and `pi-evals`. None of them are part of TianGong. The nine directories listed in the summary
 table are the whole workspace.
 
 `packages/ai/test/codex-websocket-cached-probe.ts` references an upstream

@@ -13,7 +13,7 @@ suites already are.
 ```bash
 bun install          # workspace install, hoisted node_modules, exact versions
 bun run check        # house standard + formatting + types + relative imports
-bun run build        # builds all 8 packages in dependency order
+bun run build        # builds all 9 packages in dependency order
 bun run test         # runs every package suite in dependency order
 bun run clean        # removes dist/ and generated model data
 ```
@@ -30,7 +30,7 @@ Never hand-run `tsc`, `biome`, or `vitest` from a package root when a root scrip
 | Concern | Value |
 | --- | --- |
 | Scope | `@OnePanda-TgSec` |
-| Packages | `@OnePanda-TgSec/tg-ai`, `tg-agent-core`, `tg-gibraltar`, `tg-telemetry`, `tg-tui`, and `chord` |
+| Packages | `@OnePanda-TgSec/tg-ai`, `tg-agent-core`, `tg-env`, `tg-gibraltar`, `tg-telemetry`, `tg-tui`, and `chord` |
 | Root repo name | `tiangong` |
 | Upstream repo | `https://github.com/KoGFuzi/TianGong` |
 | Author field | `KoGFuzi` |
@@ -247,17 +247,17 @@ Dependency edges, verified by `packages/chord/test/boundary.test.ts` and by the 
 ```text
 telemetry ──▶ ai ──┬──▶ agent
    └───────────────┘
-                   └──▶ gibraltar ▲
-chord ────────────────────────────┘
+                   └──▶ gibraltar ──▶ env ▲
+chord ─────────────┴───────────────────────┘
 
 codemode   mcp                     (vendored, no edges in or out)
 ```
 
 Arrows point from a package toward the packages that depend on it. `tg-agent-core` depends on
 both `tg-ai` and `tg-telemetry` (it records turn/tool spans against the shared vocabulary);
-`tg-gibraltar` depends on `chord` and `tg-ai`. `chord`, `tui`, `telemetry`, `codemode`, and
-`mcp` are leaves: they import nothing from this workspace. That is what keeps `chord`
-publishable on its own.
+`tg-gibraltar` depends on `chord` and `tg-ai`, and `tg-env` depends on `chord` and `tg-gibraltar`.
+`chord`, `tui`, `telemetry`, `codemode`, and `mcp` are leaves: they import nothing from this
+workspace. That is what keeps `chord` publishable on its own.
 
 Do not call `bun test`. Bun reserves that name for its own runner, which would silently bypass
 every per-package Vitest and `node:test` configuration. Use `bun run test`.

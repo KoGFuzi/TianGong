@@ -1,0 +1,55 @@
+{
+	"name": "@OnePanda-TgSec/tg-env",
+	"version": "2.0.1",
+	"description": "Remote execution environments: a small daemon deployed over SSH and its ExecutionEnv client",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"source": "./src/index.ts",
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js",
+			"default": "./dist/index.js"
+		}
+	},
+	"sideEffects": false,
+	"files": [
+		"dist",
+		"bin",
+		"docs",
+		"README.md",
+		"CHANGELOG.md"
+	],
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"build": "tsc -p tsconfig.build.json",
+		"build:daemon": "cargo build --manifest-path daemon/Cargo.toml --locked",
+		"test": "vitest --run",
+		"prepublishOnly": "bun run clean && bun run build"
+	},
+	"keywords": [
+		"remote-execution",
+		"agents",
+		"ssh",
+		"environments"
+	],
+	"author": "KoGFuzi",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/KoGFuzi/TianGong.git",
+		"directory": "packages/env"
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"dependencies": {
+		"@OnePanda-TgSec/chord": "^2.0.1",
+		"@OnePanda-TgSec/tg-gibraltar": "^2.0.1"
+	},
+	"devDependencies": {
+		"shx": "0.4.0",
+		"vitest": "4.1.11"
+	}
+}

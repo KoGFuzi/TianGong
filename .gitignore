@@ -12,6 +12,9 @@ dist-firefox/
 packages/ai/src/providers/data/
 packages/ai/src/providers/.model-*/
 
+# Rust build output
+packages/env/daemon/target/
+
 # Environment
 .env
 .env.*

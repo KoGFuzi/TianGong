@@ -14,6 +14,7 @@ export const HOUSE_NAMES = [
 	"@OnePanda-TgSec/tg-agent-core",
 	"@OnePanda-TgSec/tg-ai",
 	"@OnePanda-TgSec/chord",
+	"@OnePanda-TgSec/tg-env",
 	"@OnePanda-TgSec/tg-gibraltar",
 	"@OnePanda-TgSec/tg-telemetry",
 	"@OnePanda-TgSec/tg-tui",
@@ -61,6 +62,7 @@ export const FORMER_SPECIFIERS = {
 	"@earendil-works/pi-tui": "@OnePanda-TgSec/tg-tui",
 	"@earendil-works/pi-telemetry": "@OnePanda-TgSec/tg-telemetry",
 	"@earendil-works/pi-agent-core": "@OnePanda-TgSec/tg-agent-core",
+	"@earendil-works/pi-env": "@OnePanda-TgSec/tg-env",
 } as const;
 
 export type PackageOrigin = "house" | "vendored";

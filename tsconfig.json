@@ -30,6 +30,8 @@
 			"@OnePanda-TgSec/tg-agent-core": ["./packages/agent/src/index.ts"],
 			"@OnePanda-TgSec/tg-tui": ["./packages/tui/src/index.ts"],
 			"@OnePanda-TgSec/tg-tui/*": ["./packages/tui/src/*"],
+			"@OnePanda-TgSec/tg-sec-agent": ["./packages/sec-agent/src/index.ts"],
+			"@OnePanda-TgSec/tg-sec-agent/*": ["./packages/sec-agent/src/*"],
 			"@earendil-works/pi-codemode": ["./packages/codemode/src/index.ts"],
 			"@earendil-works/pi-codemode/declarations": ["./packages/codemode/src/declarations.ts"],
 			"@earendil-works/pi-codemode/portable": ["./packages/codemode/src/portable.ts"],

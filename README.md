@@ -2,10 +2,10 @@
 
 > 面向 OnePanda-TgSec 的 agent、模型与终端技术栈的全 Bun monorepo。
 
-八个包。一套运行时。一个 scope。Bun 同时是包管理器、脚本运行器和编排层；`tsc` 只为发布产物生成
+十个包。一套运行时。一个 scope。Bun 同时是包管理器、脚本运行器和编排层；`tsc` 只为发布产物生成
 类型声明，工具链里没有任何一环依赖 Node。
 
-本工作区源自 [pi agent](https://github.com/earendil-works/pi) 项目的一个子集：六个包被采用并改牌到
+本工作区源自 [pi agent](https://github.com/earendil-works/pi) 项目的一个子集：八个包被采用并改牌到
 `@OnePanda-TgSec` scope 下，另两个包原样迁移、保留上游名字。这一划分是刻意的，完整陈述见
 [`docs/provenance.md`](docs/provenance.md)。
 
@@ -14,7 +14,7 @@
 ```bash
 bun install              # 安装工作区
 bun run generate:models  # 生成 packages/ai/src/providers/data（gitignore，需联网）
-bun run build            # 按依赖顺序构建全部 9 个包
+bun run build            # 按依赖顺序构建全部 10 个包
 bun run test             # 按依赖顺序运行每个包的测试套件
 bun run check            # house standard、格式、类型、相对导入
 ```
@@ -29,6 +29,7 @@ bun run check            # house standard、格式、类型、相对导入
 | --- | --- | --- |
 | [`@OnePanda-TgSec/tg-ai`](packages/ai) | `packages/ai` | 统一 LLM API：模型发现、provider 注册、流式调用、OAuth、图片模型注册表，全部收敛在一个接口后面。每个 provider 调用自动记录 telemetry span。 |
 | [`@OnePanda-TgSec/tg-agent-core`](packages/agent) | `packages/agent` | Agent 循环：传输抽象、状态管理、工具执行、附件；turn 与工具调用各有一层 telemetry span。 |
+| [`@OnePanda-TgSec/tg-sec-agent`](packages/sec-agent) | `packages/sec-agent` | 编码 agent CLI（`tg`）：read/bash/edit/write 工具、会话管理、扩展、skills、prompt 模板、主题、交互式与 RPC/JSON 模式。 |
 | [`@OnePanda-TgSec/tg-env`](packages/env) | `packages/env` | 远程执行环境：通过 SSH 部署并在远端运行的 `tg-env` daemon，以及与之通信的 `RemoteExecutionEnv`；文件、命令、监听与伪终端。 |
 | [`@OnePanda-TgSec/tg-gibraltar`](packages/gibraltar) | `packages/gibraltar` | 持久化会话、任务与文档运行时。生产环境只用 SQLite；一切内容先落库再展示，进程被杀也能从断点恢复；带会话删除/导出/备份与项目级用量聚合。 |
 | [`@OnePanda-TgSec/tg-tui`](packages/tui) | `packages/tui` | 终端 UI 库：差分渲染、全功能文本编辑器、Markdown 与 LaTeX 渲染、终端内图片。 |
@@ -38,14 +39,16 @@ bun run check            # house standard、格式、类型、相对导入
 依赖关系（箭头从被依赖方指向依赖方）：
 
 ```text
-telemetry ──▶ ai ──┬──▶ agent
-   └───────────────┘
+telemetry ──▶ ai ──┬──▶ agent ──▶ sec-agent
+   └───────────────┘                 ▲
                    └──▶ gibraltar ──▶ env ▲
 chord ─────────────┴───────────────────────┘
+tui ──────────────────────────────────────▶ sec-agent
 ```
 
 `tg-agent-core` 同时依赖 `tg-ai` 与 `tg-telemetry`（turn/tool span 记录在共享词表上）；
-`tg-gibraltar` 依赖 `chord` 与 `tg-ai`；`tg-env` 依赖 `chord` 与 `tg-gibraltar`。
+`tg-gibraltar` 依赖 `chord` 与 `tg-ai`；`tg-env` 依赖 `chord` 与 `tg-gibraltar`；
+`tg-sec-agent` 依赖 `tg-ai`、`tg-agent-core`、`tg-tui`，以及 vendored 的 `pi-mcp`/`pi-codemode`。
 
 `chord`、`tui`、`telemetry`、`codemode`、`mcp` 是叶子：它们不引用工作区内任何包。这正是 `chord`
 能够独立发布的原因。
@@ -54,8 +57,8 @@ chord ─────────────┴──────────�
 
 | 包 | 目录 | 上游版本 | 说明 |
 | --- | --- | --- | --- |
-| `@earendil-works/pi-codemode` | `packages/codemode` | `1.0.1` | 沙箱化 JavaScript 执行，唯一能力是调用注入的工具（QuickJS/WASI）。 |
-| `@earendil-works/pi-mcp` | `packages/mcp` | `1.0.1` | 独立 Model Context Protocol 客户端：传输层中立核心、stdio 与 Streamable HTTP 传输、OAuth 子集、内存测试传输。 |
+| `@earendil-works/pi-codemode` | `packages/codemode` | `1.3.0` | 沙箱化 JavaScript 执行，唯一能力是调用注入的工具（QuickJS/WASI）。 |
+| `@earendil-works/pi-mcp` | `packages/mcp` | `1.3.0` | 独立 Model Context Protocol 客户端：传输层中立核心、stdio 与 Streamable HTTP 传输、OAuth 子集、内存测试传输。 |
 
 ## 迁移声明：codemode 与 mcp
 
@@ -82,9 +85,11 @@ House 包以原名引用它们。这两个 specifier 是任何 house 包唯一�
 ~/.config/TianGong/          设置                $TIANGONG_CONFIG_DIR, $XDG_CONFIG_HOME
 ~/.local/share/TianGong/     机器状态            $TIANGONG_DATA_DIR,   $XDG_DATA_HOME
 ├── auth.json                provider 凭证，由 `tg-ai login` 写入
-└── session.sqlite           默认会话数据库
+├── session.sqlite           默认会话数据库
+├── sessions/                `tg-sec-agent` 的会话文件
+└── tg-debug.log             `tg-sec-agent` 调试日志（启用时）
 ~/.local/state/TianGong/     锁                  $TIANGONG_STATE_DIR,  $XDG_STATE_HOME
-~/.cache/TianGong/           一次性缓存          $TIANGONG_CACHE_DIR,  $TIANGONG_CACHE_HOME
+~/.cache/TianGong/           一次性缓存          $TIANGONG_CACHE_DIR,  $XDG_CACHE_HOME
 os.tmpdir()/TianGong         临时草稿
 ```
 
@@ -111,6 +116,8 @@ tiangongDataPath("auth.json");
 | `TG_TUI_DEBUG`, `TG_TUI_DEBUG_REDRAW` | `tg-tui` | 主界面调试输出、全量重绘追踪。 |
 | `TG_TUI_ESC_TIMEOUT` | `tg-tui` | 转义序列判定时窗，毫秒。 |
 | `TG_TRUE_COLOR`, `TG_HYPERLINKS`, `TG_IMAGE_PROTOCOL` | `tg-tui` | 终端能力覆盖。 |
+| `TG_CODING_AGENT_DIR` | `tg-sec-agent` | 把配置根与数据根重定向到同一目录；测试与嵌入使用。 |
+| `TG_VERSION_CHECK_URL`, `TG_MODEL_CATALOG_URL`, `TG_MCP_CLIENT_METADATA_BASE_URL`, `TG_INSTALLER_API_BASE`, `TG_SHARE_VIEWER_URL` | `tg-sec-agent` | 上游托管服务端点；未设置时对应功能保持本地/关闭。 |
 
 有两处保留上游命名、TypeScript 刻意不可达：`packages/tui/native/`（C/Objective-C 插件保留
 `PI_NAPI_*` 与 `PI_CLIPBOARD_*` 预处理宏）和 `packages/tui/test/fixtures/*.c`（对着

@@ -129,11 +129,9 @@ async function resolveStoredOAuth(
 					if (current?.type !== "oauth") return undefined; // logged out meanwhile
 					if (!expiresSoon(current)) return undefined; // another process/request refreshed
 					try {
-						const refreshSignal = AbortSignal.any([
-							signal,
-							AbortSignal.timeout(DEFAULT_OAUTH_REFRESH_TIMEOUT_MS),
-						]);
-						return await oauth.refresh(current, refreshSignal);
+						// A started refresh may already have rotated the refresh token, so finish
+						// and persist it even when the caller aborts. Only the timeout cancels it.
+						return await oauth.refresh(current, AbortSignal.timeout(DEFAULT_OAUTH_REFRESH_TIMEOUT_MS));
 					} catch (error) {
 						throw new ModelsError("oauth", `OAuth refresh failed for ${providerId}`, { cause: error });
 					}

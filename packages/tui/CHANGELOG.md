@@ -10,6 +10,8 @@
 
 ### Added
 
+- Restored the `EditorComponent` interface and its root-barrel export. The coding agent accepts
+  custom editor implementations through it, so it is no longer dead code.
 - `Terminal.setProgramStatus()` and `formatProgramStatus()` for the Program Status Protocol (OSC 7501), plus the
   `ProgramStatus` type. `ProcessTerminal` asks the terminal for support at startup and sends reports only if it
   answers; `TG_PROGRAM_STATUS=1|0` overrides detection. The latest status is re-sent when support is confirmed or
@@ -84,9 +86,7 @@ keys rather than identifiers.
 
 ### Removed
 
-- `isPunctuationChar` from `utils.ts` and the `EditorComponent` interface (`editor-component.ts`,
-  with its root-barrel re-export): no consumer inside the package, and no documented host uses
-  them. `Editor` itself is what custom editors extend.
+- `isPunctuationChar` from `utils.ts`: no consumer inside the package.
 
 ## [1.0.1] - 2026-10-03
 

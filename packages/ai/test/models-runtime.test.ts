@@ -766,7 +766,7 @@ describe("Models runtime", () => {
 		expect(await credentials.read("p1")).toEqual({ type: "api_key", key: "first" });
 	});
 
-	it("passes cancellation to OAuth refresh and persists the credential it produced", async () => {
+	it("finishes and persists an OAuth refresh after the request is cancelled", async () => {
 		const credentials = new InMemoryCredentialStore();
 		const previous: OAuthCredential = { type: "oauth", access: "old", refresh: "old-refresh", expires: 0 };
 		await credentials.modify("p1", async () => previous);
@@ -801,8 +801,9 @@ describe("Models runtime", () => {
 
 		await expect(auth).rejects.toMatchObject({ name: "AbortError" });
 		expect(receivedSignal).toBeInstanceOf(AbortSignal);
-		expect(receivedSignal?.aborted).toBe(true);
-		expect(receivedSignal?.reason).toBe(controller.signal.reason);
+		// A started refresh is detached from the request: it finishes and persists on its own
+		// deadline, because the provider may already have rotated the old token.
+		expect(receivedSignal?.aborted).toBe(false);
 		finishRefresh?.({ ...previous, access: "new", expires: Date.now() + 60_000 });
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		// The refresh already rotated the token server-side before the caller aborted, so the write

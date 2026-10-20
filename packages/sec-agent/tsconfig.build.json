@@ -1,0 +1,21 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"outDir": "./dist",
+		"paths": {
+			"@OnePanda-TgSec/tg-agent-core": ["../agent/dist/index.d.ts"],
+			"@OnePanda-TgSec/tg-agent-core/*": ["../agent/dist/*.d.ts"],
+			"@OnePanda-TgSec/tg-ai": ["../ai/dist/index.d.ts"],
+			"@OnePanda-TgSec/tg-ai/*": ["../ai/dist/*.d.ts", "../ai/dist/providers/*.d.ts"],
+			"@OnePanda-TgSec/tg-tui": ["../tui/dist/index.d.ts"],
+			"@OnePanda-TgSec/tg-tui/*": ["../tui/dist/*.d.ts", "../tui/dist/components/*.d.ts"],
+			"@earendil-works/pi-codemode": ["../codemode/dist/index.d.ts"],
+			"@earendil-works/pi-codemode/*": ["../codemode/dist/*.d.ts"],
+			"@earendil-works/pi-mcp": ["../mcp/dist/index.d.ts"],
+			"@earendil-works/pi-mcp/*": ["../mcp/dist/*.d.ts", "../mcp/dist/*/index.d.ts"]
+		},
+		"rootDir": "./src"
+	},
+	"include": ["src/**/*.ts", "src/**/*.d.ts"],
+	"exclude": ["node_modules", "dist", "src/experimental"]
+}

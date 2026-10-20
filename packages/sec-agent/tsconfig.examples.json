@@ -1,0 +1,15 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"paths": {
+			"@OnePanda-TgSec/tg-sec-agent": ["./src/index.ts"],
+			"@OnePanda-TgSec/tg-tui": ["../tui/src/index.ts"],
+			"@OnePanda-TgSec/tg-ai": ["../ai/src/index.ts"],
+			"typebox": ["../../node_modules/typebox"]
+		},
+		"skipLibCheck": true
+	},
+	"include": ["examples/**/*.ts"],
+	"exclude": ["node_modules", "dist"]
+}

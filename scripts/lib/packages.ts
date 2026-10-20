@@ -16,6 +16,7 @@ export const HOUSE_NAMES = [
 	"@OnePanda-TgSec/chord",
 	"@OnePanda-TgSec/tg-env",
 	"@OnePanda-TgSec/tg-gibraltar",
+	"@OnePanda-TgSec/tg-sec-agent",
 	"@OnePanda-TgSec/tg-telemetry",
 	"@OnePanda-TgSec/tg-tui",
 ] as const;
@@ -51,9 +52,10 @@ export const VENDORED_PACKAGES = {
 } as const;
 
 /**
- * Upstream names that house packages used before adoption. House **code** may not import them;
- * house **documentation** may, because a changelog entry and a provenance section have to name
- * what the package was called before. Each one appears in the mapping table in `docs/provenance.md`.
+ * Upstream names that house code or documentation may still name. House **code** may not import
+ * them; house **documentation** may, because changelog history and provenance have to name what the
+ * package was called before. Most map to the adopted package; names that were never carried over map
+ * to a marker. Each one appears in the mapping table in `docs/provenance.md`.
  */
 export const FORMER_SPECIFIERS = {
 	"@earendil-works/pi-ai": "@OnePanda-TgSec/tg-ai",
@@ -62,6 +64,10 @@ export const FORMER_SPECIFIERS = {
 	"@earendil-works/pi-tui": "@OnePanda-TgSec/tg-tui",
 	"@earendil-works/pi-telemetry": "@OnePanda-TgSec/tg-telemetry",
 	"@earendil-works/pi-agent-core": "@OnePanda-TgSec/tg-agent-core",
+	"@earendil-works/pi-coding-agent": "@OnePanda-TgSec/tg-sec-agent",
+	"@earendil-works/pi-client": "(not carried over)",
+	"@earendil-works/pi-protocol": "(not carried over)",
+	"@earendil-works/pi-server": "(not carried over)",
 	"@earendil-works/pi-env": "@OnePanda-TgSec/tg-env",
 } as const;
 

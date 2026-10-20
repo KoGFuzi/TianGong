@@ -48,6 +48,8 @@
 
 ### Added
 
+- Restored the `./api/llama-cpp-classify.lazy` module. The coding agent loads the classifier API
+  through this lazy entrypoint, so removing it as unused broke its llama.cpp provider.
 - `test/usage-accounting.test.ts` pins the token accounting every adapter owes a caller: cached and
   cache-write tokens are deducted from the reported prompt/input count in the openai-completions
   family (including the DeepSeek `prompt_cache_hit_tokens` and top-level `cached_tokens` dialects),
@@ -144,6 +146,8 @@
 
 ### Fixed
 
+- An OAuth refresh that has already started now finishes and persists its rotated credential even
+  when the caller aborts the request; only the refresh timeout cancels it. Ported from upstream pi.
 - Whitespace-only tool output, such as a bare `\r\n` from bash, is treated as empty by the OpenAI
   Completions, OpenAI Responses, and Google adapters and uses the same placeholder as empty output.
   Some providers reject whitespace-only tool content with a 400 that then repeats on every request in
@@ -225,8 +229,6 @@
 - The `legacy-api-aliases.ts` module: the sixteen `@deprecated` `stream*`/`streamSimple*` provider
   aliases had no importer anywhere; use the `api/*.lazy.ts` factories or the
   `@OnePanda-TgSec/tg-ai/api/*` subpaths.
-- `./api/llama-cpp-classify.lazy.ts`, an orphan wrapper: no registry entry and no test imported
-  it. The classifier implementation and its tests remain.
 - Unused exports `getApiProviders`, `validateToolCall`, `getOverflowPatterns`,
   `mapStopReasonString`, `getImageProviders`, and `getImageModels`.
 

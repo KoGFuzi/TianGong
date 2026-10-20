@@ -1,7 +1,7 @@
 # TianGong 实地部署运维手册
 
 版本：V1（`2.0.1`）
-适用范围：`@OnePanda-TgSec/tg-ai`、`@OnePanda-TgSec/tg-gibraltar`
+适用范围：`@OnePanda-TgSec/tg-ai`、`@OnePanda-TgSec/tg-gibraltar`、`@OnePanda-TgSec/tg-sec-agent`
 更新日期：2026-10-09
 
 本手册只写已经过测试或在本仓库内验证过的行为。凡本手册与代码不符，以代码为准，并请回报，因为那是本手册的缺陷。
@@ -36,7 +36,9 @@ data 目录下的两个关键文件：
 ```text
 ~/.local/share/TianGong/
 ├── auth.json        tg-ai login 写入的 provider 凭据
-└── session.sqlite   默认会话数据库
+├── session.sqlite   默认会话数据库
+├── sessions/        tg-sec-agent 的会话文件
+└── tg-debug.log     tg-sec-agent 的调试日志（启用时）
 ```
 
 **凭据为什么在 data 而不在 config**：`auth.json` 是程序运行时生成的状态，不是用户手写的配置。`opencode` 把自己的 `auth.json` 放在 data 根，TianGong 与其一致。排查权限问题时请检查 data 目录，而不是 config。
@@ -64,6 +66,18 @@ tiangongDataDir();           // ~/.local/share/TianGong
 tiangongDataPath("auth.json");
 tiangongConfigPath("settings.json");
 ```
+
+### 2.4 编码 agent（`tg-sec-agent`）的路径
+
+`tg-sec-agent` 复用同一个路径解析器，并按职责拆到两个根：
+
+```text
+~/.config/TianGong/      settings.json、models.json、themes/、prompts/、tools/、bin/
+~/.local/share/TianGong/ auth.json、sessions/、tg-debug.log
+<project>/.tiangong/     项目级 extensions/、skills/、MCP 配置、packages/
+```
+
+`TG_CODING_AGENT_DIR` 是单目录覆盖：设置后，两个根都指向该目录。它供测试和嵌入式进程使用，不能用相对路径。上游服务（版本检查、远端模型目录、managed 安装、`/share` 查看器）默认关闭，分别由 `TG_VERSION_CHECK_URL`、`TG_MODEL_CATALOG_URL`、`TG_INSTALLER_API_BASE`、`TG_SHARE_VIEWER_URL` 显式开启。
 
 ---
 

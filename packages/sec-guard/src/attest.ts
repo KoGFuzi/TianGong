@@ -1,16 +1,24 @@
 import type { Context } from "@OnePanda-TgSec/chord";
+import type { HookApi, ToolHookCall } from "@OnePanda-TgSec/tg-gibraltar";
+import { InMemoryTelemetryContext } from "@OnePanda-TgSec/tg-telemetry";
+import type { TgSecGuard } from "./guard.ts";
 import type { TgSecModeReader } from "./mode.ts";
-import type { TgSecDecision, TgSecRequest } from "./types.ts";
+import {
+	type TgSecDangerEvaluator,
+	type TgSecDecision,
+	type TgSecPermissionMode,
+	type TgSecScopeResolver,
+	toTgSecRequest,
+} from "./types.ts";
 
 /**
  * One attestation probe. A probe is a pure function over its injected inputs and fails by throwing;
  * `runTgSecAttestation` executes probes in order and the first throw ends the attestation
  * (fail-closed: the host refuses to start work on a failed attestation).
  *
- * Batch 0.5a lands probes 1, 4, 5, and 7. The remaining slots are reserved, not stubbed:
- *   - probe 2 (a scope-outside call must not yield allow): batch 1, with the scope resolver.
+ * Batch 0.5a landed probes 1, 4, 5, and 7; batch 1b added probes 2 and 6 with the scope wiring.
+ * The remaining slot is reserved, not stubbed:
  *   - probe 3 (a danger-set sample must force ask past grants): batch 2, with the danger regex set.
- *   - probe 6 (a placement-free or resumed call still enters the chain): batch 1, with scope wiring.
  */
 export type TgSecProbe = {
 	readonly name: string;
@@ -28,8 +36,22 @@ export type TgSecAttestContext = {
 	/** Probe 4: the tools actually registered, against the track preset's declared set. */
 	registeredTools: readonly string[];
 	declaredTools: readonly string[];
-	/** Probe 7: a sample request the chain must force to human review. */
-	forcedAskSample: TgSecRequest;
+	/** Probes 2 and 7: a scope-outside sample tool call — probe 2 asserts its decision, probe 7 asserts the block. */
+	forcedAskSample: ToolHookCall;
+	/** Probe 7: the live document reader the probe's own `beforeTool` call reads the mode through. */
+	hookApi: HookApi;
+	/**
+	 * The chain pieces the decision probes build their guards from. Inputs only, never outputs:
+	 * the probes execute the chain themselves instead of trusting host-reported decisions.
+	 */
+	probeGuard: TgSecProbeGuardPieces;
+};
+
+/** The chain inputs the decision probes (2, 6, 7) need to construct a working guard: resolver, danger evaluator, mode. */
+export type TgSecProbeGuardPieces = {
+	mode: TgSecPermissionMode;
+	scopeResolver: TgSecScopeResolver;
+	dangerEvaluator: TgSecDangerEvaluator;
 };
 
 function errorCode(error: unknown): string | undefined {
@@ -53,6 +75,28 @@ export function probeRestrictedEnv(read: () => Promise<unknown>): TgSecProbe {
 				throw new Error(`expected an EACCES refusal, got ${code ?? String(error)}`);
 			}
 			throw new Error("the forbidden read succeeded; the confined ExecutionEnv is not in effect");
+		},
+	};
+}
+
+/**
+ * Probe 2: a scope-outside sample must never resolve to allow. The probe builds its own guard
+ * through `createGuard` and runs `decisionFor` on the sample: the decision must be a forced ask.
+ * The sample is expected to be scope-only — a sample that also trips hard deny would surface as a
+ * deny and fail the probe, which is the honest signal that the sample is not testing what it claims.
+ */
+export function probeScopeOutsideNotAllows(sample: ToolHookCall, createGuard: () => TgSecGuard): TgSecProbe {
+	return {
+		name: "scope-outside-not-allow",
+		async run(): Promise<void> {
+			const guard = createGuard();
+			const decision = await guard.decisionFor(toTgSecRequest(sample));
+			if (decision.effect === "allow") {
+				throw new Error("a scope-outside sample must never resolve to allow");
+			}
+			if (decision.effect !== "ask" || !decision.forced) {
+				throw new Error(`a scope-outside sample must produce a forced ask, got ${decision.effect}`);
+			}
 		},
 	};
 }
@@ -90,17 +134,61 @@ export function probeModeDocument(read: () => Promise<unknown>): TgSecProbe {
 }
 
 /**
- * Probe 7: with no ask channel wired, a forced ask must surface as a block, never as a pass.
- * `blocked` is what `toBeforeToolBlocks` produced for the sample decision without an ask channel.
+ * Probe 6: a call that never walked the regular `beforeTool` path — resumed, placement-free, with
+ * no associated assistant message — must still enter the chain. The probe feeds such a sample
+ * straight to `decisionFor` (the entry point the batch-0 wiring review found bypassable) and
+ * asserts two things: an answer with a real decision shape comes back — never the P1-5
+ * "no match, return undefined" bypass — and exactly one `tg.span.sec.guard` span was recorded.
+ * `createGuard` receives the probe's own telemetry sink so the span claim is checked, not trusted.
  */
-export function probeForcedAskBlocks(decision: TgSecDecision, blocked: boolean): TgSecProbe {
+export function probeUnaffiliatedCallEntersChain(
+	sample: ToolHookCall,
+	createGuard: (telemetry: InMemoryTelemetryContext) => TgSecGuard,
+): TgSecProbe {
+	return {
+		name: "unaffiliated-call-enters-chain",
+		async run(): Promise<void> {
+			const telemetry = new InMemoryTelemetryContext();
+			const guard = createGuard(telemetry);
+			// The cast is the probe: a bypassing chain answers `undefined`, which the real type says
+			// cannot happen. Checking the shape at runtime is what proves the chain was entered.
+			const decision = (await guard.decisionFor(toTgSecRequest(sample))) as TgSecDecision | undefined;
+			if (decision === undefined || typeof decision.effect !== "string") {
+				throw new Error("the unaffiliated call produced no decision: the chain was bypassed, not entered");
+			}
+			const spans = telemetry.getSpans().filter((span) => span.name === "tg.span.sec.guard");
+			if (spans.length !== 1) {
+				throw new Error(`every decision must record exactly one tg.span.sec.guard span, saw ${spans.length}`);
+			}
+		},
+	};
+}
+
+/**
+ * Probe 7: with no ask channel wired, a forced ask must surface as a block, never as a pass.
+ * The probe takes no decision and no pass/fail boolean from the host: it builds its own guard
+ * through `createGuard` (which must pass no ask channel), runs `decisionFor` on the sample
+ * expecting a forced ask, and runs `beforeTool` expecting the block mapping. A host that only
+ * claims the chain fails closed now fails the probe instead.
+ */
+export function probeForcedAskBlocks(
+	sample: ToolHookCall,
+	hookApi: HookApi,
+	context: Context,
+	createGuard: () => TgSecGuard,
+): TgSecProbe {
 	return {
 		name: "forced-ask-fails-closed",
 		async run(): Promise<void> {
+			const guard = createGuard();
+			const decision = await guard.decisionFor(toTgSecRequest(sample));
 			if (decision.effect !== "ask" || !decision.forced) {
-				throw new Error(`the attestation sample must force an ask, got ${decision.effect}`);
+				throw new Error(`the probe guard's own chain must force an ask on the sample, got ${decision.effect}`);
 			}
-			if (!blocked) throw new Error("a forced ask without an ask channel must block the call, not pass it");
+			const result = await guard.beforeTool(sample, hookApi, context);
+			if (result === undefined || result.block === undefined) {
+				throw new Error("a forced ask without an ask channel must block the call, not pass it");
+			}
 		},
 	};
 }

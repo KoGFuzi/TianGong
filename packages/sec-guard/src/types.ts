@@ -1,6 +1,7 @@
+import type { ToolHookCall } from "@OnePanda-TgSec/tg-gibraltar";
+
 /** The four permission modes. Session-level state; see `tg.sec.mode` in `./mode.ts`. */
 export type TgSecPermissionMode = "strict" | "judge-auto" | "auto" | "yolo";
-
 /**
  * One guard decision. `deny` is produced only by the built-in hard deny (`hard: true` is a type-level
  * statement: this batch has no configurable deny rules, so a non-hard deny cannot exist). `ask` carries
@@ -18,7 +19,11 @@ export type TgSecRequest = {
 	arguments: Record<string, unknown>;
 };
 
-/** Batch 1 lands host/URL extraction and scope-table comparison. This batch declares the interface only. */
+/**
+ * Scope verdict for one request. Batch 1b lands the resolver seam (`createTgSecScopeResolver` in
+ * `./scope.ts`) over the shared connection-target extraction; the registry matching engine (kinds,
+ * precedence, persistence) is batch 1c.
+ */
 export type TgSecScopeResolver = (request: TgSecRequest) => { inScope: boolean; reason?: string };
 
 /** Batch 2 lands the dangerous-instruction regex set. This batch declares the interface only. */
@@ -32,3 +37,8 @@ export type TgSecJudge = (request: TgSecRequest) => Promise<{ decision: "allow" 
 
 /** The human reply to an ask. `always` grants the exact resource only, never a pattern. */
 export type TgSecAskReply = "allow" | "deny" | "always";
+
+/** One tool call as the guard sees it. The resource is `tool:<name>`, the legacy `permission.ts` shape. */
+export function toTgSecRequest(call: ToolHookCall): TgSecRequest {
+	return { toolName: call.name, resource: `tool:${call.name}`, arguments: call.arguments };
+}

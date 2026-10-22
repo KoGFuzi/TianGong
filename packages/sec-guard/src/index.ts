@@ -2,11 +2,22 @@ export {
 	probeForcedAskBlocks,
 	probeModeDocument,
 	probeRestrictedEnv,
+	probeScopeOutsideNotAllows,
 	probeToolSetAlignment,
+	probeUnaffiliatedCallEntersChain,
 	runTgSecAttestation,
 	type TgSecAttestContext,
 	type TgSecProbe,
+	type TgSecProbeGuardPieces,
 } from "./attest.ts";
+export {
+	extractCommandSurface,
+	extractConnectionTargets,
+	TG_SEC_SUBCOMMAND_DEPTH_LIMIT,
+	type TgSecCommandSurface,
+	type TgSecToken,
+	tokenize,
+} from "./command-text.ts";
 export {
 	createInMemoryGrantStore,
 	createTgSecGuard,
@@ -16,8 +27,6 @@ export {
 	type TgSecGuard,
 	type TgSecGuardOptions,
 	type TgSecMatchedLayer,
-	toBeforeToolBlocks,
-	toTgSecRequest,
 } from "./guard.ts";
 export {
 	evaluateHardDeny,
@@ -36,12 +45,18 @@ export {
 	type TgSecModeValue,
 	type TgSecSessionPort,
 } from "./mode.ts";
-export type {
-	TgSecAskReply,
-	TgSecDangerEvaluator,
-	TgSecDecision,
-	TgSecJudge,
-	TgSecPermissionMode,
-	TgSecRequest,
-	TgSecScopeResolver,
+export {
+	createInMemoryScopeRegistry,
+	createTgSecScopeResolver,
+	type TgSecScopeRegistry,
+} from "./scope.ts";
+export {
+	type TgSecAskReply,
+	type TgSecDangerEvaluator,
+	type TgSecDecision,
+	type TgSecJudge,
+	type TgSecPermissionMode,
+	type TgSecRequest,
+	type TgSecScopeResolver,
+	toTgSecRequest,
 } from "./types.ts";

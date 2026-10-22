@@ -11,21 +11,24 @@ import {
 	probeForcedAskBlocks,
 	probeModeDocument,
 	probeRestrictedEnv,
+	probeScopeOutsideNotAllows,
 	probeToolSetAlignment,
+	probeUnaffiliatedCallEntersChain,
 	runTgSecAttestation,
 	type TgSecAttestContext,
 	type TgSecProbe,
 } from "./attest.ts";
 import { evaluateHardDeny, localInterfaceAddresses, type TgSecHardDenyRuleId } from "./hard-deny.ts";
 import { isTgSecMode, readTgSecMode, switchTgSecMode, type TgSecSessionPort } from "./mode.ts";
-import type {
-	TgSecAskReply,
-	TgSecDangerEvaluator,
-	TgSecDecision,
-	TgSecJudge,
-	TgSecPermissionMode,
-	TgSecRequest,
-	TgSecScopeResolver,
+import {
+	type TgSecAskReply,
+	type TgSecDangerEvaluator,
+	type TgSecDecision,
+	type TgSecJudge,
+	type TgSecPermissionMode,
+	type TgSecRequest,
+	type TgSecScopeResolver,
+	toTgSecRequest,
 } from "./types.ts";
 
 /** The layer of the chain that produced a decision, recorded on the guard span. */
@@ -95,11 +98,6 @@ export type TgSecGuard = {
 	/** One decision for one request at the guard's current mode. Emits exactly one guard span. */
 	decisionFor(request: TgSecRequest): Promise<TgSecDecision>;
 };
-
-/** One tool call as the guard sees it. The resource is `tool:<name>`, the legacy `permission.ts` shape. */
-export function toTgSecRequest(call: ToolHookCall): TgSecRequest {
-	return { toolName: call.name, resource: `tool:${call.name}`, arguments: call.arguments };
-}
 
 /** Deterministic JSON with sorted keys, so equal arguments always produce equal digests. */
 function canonicalJson(value: unknown): string {
@@ -282,23 +280,35 @@ export function createTgSecGuard(options: TgSecGuardOptions): TgSecGuard {
 	}
 
 	async function attest(attestContext: TgSecAttestContext): Promise<void> {
-		const sample = await decisionFor(attestContext.forcedAskSample);
-		const blocked = toBeforeToolBlocks(sample, options.askChannel === undefined);
+		const pieces = attestContext.probeGuard;
+		const chainProbeGuard = (telemetry: TelemetryContext) =>
+			createTgSecGuard({
+				mode: pieces.mode,
+				scopeResolver: pieces.scopeResolver,
+				dangerEvaluator: pieces.dangerEvaluator,
+				telemetry,
+			});
+		// Probe 6's sample is a deliberately unaffiliated call: no assistant message backs it and it
+		// is never carried by beforeTool. That is the shape the wiring review (P1-5) found bypassable.
+		const unaffiliatedSample: ToolHookCall = {
+			type: "toolCall",
+			id: "attestation-unaffiliated",
+			name: "read",
+			arguments: { path: "tg-sec-attestation-probe-6" },
+		};
 		const probes: TgSecProbe[] = [
 			probeRestrictedEnv(attestContext.forbiddenRead),
+			probeScopeOutsideNotAllows(attestContext.forcedAskSample, () => chainProbeGuard(NOOP_TELEMETRY_CONTEXT)),
 			probeToolSetAlignment(attestContext.registeredTools, attestContext.declaredTools),
 			probeModeDocument(() => readTgSecMode(attestContext.modeReader, attestContext.context)),
-			probeForcedAskBlocks(sample, blocked),
+			probeUnaffiliatedCallEntersChain(unaffiliatedSample, (telemetry) => chainProbeGuard(telemetry)),
+			// Probe 7 builds its guard right here, deliberately without an ask channel: fail-closed is what it proves.
+			probeForcedAskBlocks(attestContext.forcedAskSample, attestContext.hookApi, attestContext.context, () =>
+				chainProbeGuard(NOOP_TELEMETRY_CONTEXT),
+			),
 		];
 		await runTgSecAttestation(probes);
 	}
 
 	return { beforeTool, attest, switchMode, decisionFor };
-}
-
-/** Whether a decision resolves to a block when the ask channel is absent. Shared with attestation. */
-export function toBeforeToolBlocks(decision: TgSecDecision, askChannelAbsent: boolean): boolean {
-	if (decision.effect === "deny") return true;
-	if (decision.effect !== "ask") return false;
-	return askChannelAbsent;
 }

@@ -46,9 +46,23 @@ env 抽象留在 gibraltar，tg-sec-guard 只做编排、策略、证明、留�
    等级**均不可豁免**。
 4. **硬 deny 凌驾四级之上**：平台自保护（loopback/本机网卡/网关/docker 网桥）与本机自毁
    （`rm -rf /`、`mkfs`、`dd of=/dev`、fork bomb、shutdown）在任何模式直接拒绝，不进人工通道。
-   批0.5a 实测边界：`node:os` 无可移植的默认网关查询 API，故本批硬 deny 覆盖 loopback
+   批0.5a 实测边界：`node:os` 无可移植的默认网关查询 API，故硬 deny 覆盖 loopback
    （hostname + v4/v6）、本机网卡地址（`networkInterfaces()` 枚举）、docker 网桥；
-   **默认网关判定顺延到批1**，由 scope 注册表承载（`hard-deny.ts:32-52`）。
+   **默认网关判定由 scope 注册表承载**（批1c）。位置随重构漂移，批1b 后现状：
+   `localInterfaceAddresses` 在 `hard-deny.ts:55-68`、loopback 规则 `:83-87`、自毁类判定
+   `:89-136`、`dd` 良性目标排除 `:127-133`（原文引的 `:32-52` 与批1a 的 `:53-66/:80-84/:86-123`
+   均已作废）。**行号会持续漂移，引用前先核当前代码。**
+
+   **两条 2026-10-22 用户拍板的收窄（后续批次不得放宽）**：
+   - **自保护类只判"连接目标"**：命令本身的 host/URL、`-u`/`--url`/`--host` 的值、递归
+     `sh -c` 内的目标。`-d`/`-H`/`-F`/`--data*` 等**数据值里的 localhost 一律放行**——
+     SSRF/重定向测试载荷是正当打法，而硬 deny 无申诉通道，误杀不可接受。这与既定
+     "值是数据不参与主机解析"的原则同源，批1b 的主机抽取必须同时供 scope 判定与硬 deny
+     自保护类使用，**不允许两套文本匹配面并存**。
+   - **`rm` 只盖 `/`、`/*`、`~`、`$HOME`、`${HOME}`**；`/etc`、`/usr`、`/var`、`/boot`、
+     `/dev`、`/sys`、`/proc` 等关键路径**归批2 危险集强制 ask**（人可批），不进硬 deny。
+     另：`dd of=/dev/null` 必须排除（基准测试，无破坏性）——批1a 的 `hitsDdDevice` 只判
+     `of=/dev/` 前缀，属误杀，批1b 修。
 5. **优先序**：硬 deny 高于 scope 外强制 ask（与危险集强制 ask 同级），两者都高于模式分派
    （strict/judge/auto/yolo），后者高于默认 allow。forced ask 都不接受 grants/模式豁免。
 6. **judge 只是 `judge-auto` 的模式组件**，不是全局层；其余模式的判定路径全程确定性，零 LLM
@@ -105,6 +119,10 @@ export type TgSecPermissionMode = "strict" | "judge-auto" | "auto" | "yolo";
   （`/^tg\.span\.[a-z][a-z0-9.]*$/`，不接受下划线），且现有词表一律是 `tg.span.<layer>.<event>`
   两段式（`provider.acquire`、`agent.turn`）——按代码现实收敛为 `tg.span.sec.mode`。
 - campaign 默认值来自 scope 注册（操作者侧 `.tiangong/` 配置，不做仓库可控文件）。
+- **未配置时的回退 = `auto`（2026-10-22 用户拍板保留，`mode.ts:15` `TG_SEC_DEFAULT_MODE`）**。
+  我曾建议回退取 `strict`，理由是首启会话尚未登记 scope 时 `auto` 会先放行一批调用再靠 scope
+  兜底；用户选择保留 `auto`，依据是工具不外流、使用者是专业人士。**后续批次不得把它当缺陷改掉**；
+  scope 注册仍可在战役开始时覆盖该值，且 scope 外目标与危险集强制 ask 与默认模式无关，兜底不变。
 
 ### 决策与求值
 
@@ -171,17 +189,38 @@ bash 类工具调用过 scope 判定前的主机抽取，行为规格：
 - **值是数据、不参与主机解析**的 flag：`-d --data --data-raw --data-binary --data-ascii
   --data-urlencode --form-string -F --form -H --header -b --cookie --cookie-jar -A
   --user-agent -e --referer --json --url-query --mail-from --mail-rcpt --aws-sigv4
-  --oauth2-bearer -x --proxy --socks5 --socks5-hostname -o -D -L -R`。
+  --oauth2-bearer -x --proxy --socks5 --socks5-hostname -o -D`。批1b 勘误：`-L`/`-R` 在 curl
+  是**布尔** flag（无值），实现按布尔处理、不吞下一个 token（`command-text.ts:68-74`），原文把
+  它们与值型 flag 并列是错的。
 - **值是连接目标**的 flag：`-u --url --host`（ffuf/sqlmap 的 -u；curl 的 -u user:pass 无主机，
-  天然不误报）。
+  天然不误报）。批1b 已实测固定：短 flag 粘连值（`-dfoo`、`-uhttp://…`）**不解析**，只认精确
+  token 与 `--flag=value` 两式——已知局限。
 - **包装器跳过**：`env sudo nohup stdbuf nice setsid time proxychains proxychains4 sshpass`，
   `timeout <dur>` 跳两个 token，行首 `VAR=val` 赋值跳过。
-- **递归**：`sh -c '...'` 子命令值递归解析（depth < 2）；解释器（python/ruby/node/perl/php）
-  的 `-c/-e/-r` 是脚本体**整体跳过**，只扫其中回环 URL。
-- URL 只取 authority（SSRF/重定向 payload 不误伤）；裸 IP/域名须整 token 匹配，域名须真实
-  TLD 且非文件扩展名。
+- **递归**：`sh -c '...'` 子命令值递归解析（深度上限 2）；子命令 shell 集合批1b 补全为
+  `sh bash zsh dash ksh`。解释器（python/ruby/node/perl/php）的 `-c/-e/-r` 是脚本体，实现为
+  **整体跳过**（单个 quoted token，内嵌 URL 不再单独扫）——原文"只扫其中回环 URL"半句未实现，
+  按代码现实作废。
+- URL 只取 authority（SSRF/重定向 payload 不误伤，含 userinfo 与端口剥离、IPv6 方括号）；裸
+  IP/域名须整 token 匹配，域名须真实 TLD 且非文件扩展名；无点单标签裸 token 不算候选。
 - 抽取结果与 scope 注册表比对：未注册主机 → 按当前模式分派（strict/ask，auto/yolo 下 scope
-  外目标同样降级 ask——**scope 是唯一许可来源**，这条不受宽松默认影响）。
+  外目标同样降级 ask——**scope 是唯一许可来源**，这条不受宽松默认影响）。**无连接目标的请求
+  视为 in scope**（否则 read/write/edit 每次都被 forced ask，守卫的可用面被掏空）。
+
+### 候选证据分层与参数名过滤（2026-10-22 用户拍板，批1c 落地）
+
+批1b 实测暴露的误杀：`scanCommand` 对任何裸 token 都产候选，不看命令是否真发起连接，于是
+`grep 127.0.0.1 access.log` 被自保护硬 deny（无申诉）；更严重的是 `write` 工具的报告正文里出现
+`localhost` 也会被 tokenize 成候选而硬 deny——等于模型不能写任何提到回环地址的报告。收口方案：
+
+1. **参数名过滤**：只对"命令味"参数名（`command`/`cmd`/`url`/`host`/`target`/`uri`/`endpoint`
+   一类）做抽取；`write` 的正文、`read` 的路径、笔记类字段不产候选。
+2. **证据分层**：
+   - **强证据**（带 scheme 的 URL、`-u`/`--url`/`--host` 的值）→ 自保护类保持**硬 deny**；
+   - **弱证据**（裸 token 形态的 `127.0.0.1`/`localhost`/本机网卡地址）→ 降为**强制 ask**
+     （人可批），不进硬 deny。
+   理由与整体姿态一致：硬 deny 是"无申诉的一票否决"，只该留给确定的自打；模糊情形交人工。
+   注意这**不放宽** scope 判定——弱证据候选仍参与注册表比对，scope 外照样 forced ask。
 
 ### 拦截规则表
 

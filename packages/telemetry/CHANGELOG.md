@@ -22,6 +22,8 @@
   `@OnePanda-TgSec/tg-sec-guard`: one span per guard decision (allow included) carrying mode,
   matching layer, effect, forced flag, and a truncated argument digest, and one span per permission
   mode switch carrying `from`, `to`, and `actor`. No span carries command text or argument values.
+- `self-destruction.rm-home` in the `tg.span.sec.guard` `rule` values: the new hard-deny rule for
+  `rm -rf ~` / `rm -rf $HOME`, kept in sync with `TgSecHardDenyRuleId` in `@OnePanda-TgSec/tg-sec-guard`.
 
 ### Removed
 

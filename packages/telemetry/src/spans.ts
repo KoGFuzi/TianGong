@@ -177,6 +177,7 @@ export const TG_SPAN_SCHEMA = defineTelemetrySchema({
 						"self-protection.loopback-v6",
 						"self-protection.local-interface",
 						"self-destruction.rm-root",
+						"self-destruction.rm-home",
 						"self-destruction.mkfs",
 						"self-destruction.dd-device",
 						"self-destruction.fork-bomb",

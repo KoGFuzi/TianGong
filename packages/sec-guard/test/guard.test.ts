@@ -4,13 +4,18 @@ import { InMemoryTelemetryContext } from "@OnePanda-TgSec/tg-telemetry";
 import { describe, expect, it } from "vitest";
 import {
 	createInMemoryGrantStore,
+	createTgSecDangerEvaluator,
 	createTgSecGuard,
+	createTgSecRuleTable,
+	createTgSecTwoAxisJudge,
 	TG_SEC_MODES,
 	type TgSecAskChannel,
 	type TgSecDangerEvaluator,
 	type TgSecGuardOptions,
+	type TgSecJudgeTransport,
 	type TgSecPermissionMode,
 	type TgSecRequest,
+	type TgSecRule,
 	type TgSecScopeResolver,
 } from "../src/index.ts";
 
@@ -286,6 +291,170 @@ describe("beforeTool adapter", () => {
 	});
 });
 
+describe("weak self-protection evidence (batch 1c)", () => {
+	it("a loopback mention in a command that never connects is a forced ask, not a deny", async () => {
+		// The demotion of weak evidence lands on its own layer, ahead of the scope resolver and of
+		// mode dispatch, so it asks in every mode and no grant can clear it.
+		const telemetry = new InMemoryTelemetryContext();
+		const decision = await guard("yolo", { telemetry }).decisionFor(
+			request("shell", { command: "grep 127.0.0.1 access.log" }),
+		);
+		expect(decision).toEqual({ effect: "ask", reason: expect.stringContaining("127.0.0.1"), forced: true });
+		const spans = telemetry.getSpans().filter((span) => span.name === "tg.span.sec.guard");
+		expect(spans[0].attributes).toMatchObject({
+			layer: "self-protection",
+			effect: "ask",
+			forced: true,
+			rule: "self-protection.loopback-v4",
+		});
+	});
+
+	it("a weak-evidence forced ask is immune to grants", async () => {
+		const grants = createInMemoryGrantStore();
+		grants.add("tool:shell");
+		const decision = await guard("yolo", { grants }).decisionFor(request("shell", { command: "ping 127.0.0.1" }));
+		expect(decision.effect).toBe("ask");
+		if (decision.effect === "ask") expect(decision.forced).toBe(true);
+	});
+
+	it("a local interface address named as a bare token asks instead of denying", async () => {
+		const decision = await guard("auto", { hostAddresses: ["192.168.1.5"] }).decisionFor(
+			request("shell", { command: "nc 192.168.1.5 4444" }),
+		);
+		expect(decision).toEqual({ effect: "ask", reason: expect.stringContaining("192.168.1.5"), forced: true });
+	});
+
+	it("a report body that mentions loopback addresses is allowed outright", async () => {
+		// False positive 2: the write body is a detail parameter, so it produces no candidate at all —
+		// neither a deny nor an ask. A model must be able to write a report about the loopback address.
+		const decision = await guard("yolo").decisionFor(
+			request("write", { file_path: "report.md", content: "scanned localhost and 127.0.0.1; both answered" }),
+		);
+		expect(decision).toEqual({ effect: "allow" });
+	});
+
+	it("strong evidence still denies in every mode", async () => {
+		for (const mode of TG_SEC_MODES) {
+			const decision = await guard(mode).decisionFor(request("shell", { command: "curl http://localhost:8080/" }));
+			expect(decision.effect).toBe("deny");
+			if (decision.effect === "deny") expect(decision.hard).toBe(true);
+		}
+	});
+
+	it("asks on a weak mention even when the registry has approved that host", async () => {
+		// The two questions stay separate on purpose: registration answers "is this host permitted",
+		// self-protection answers "is this host possibly this machine", and an approved loopback
+		// mention still goes to a human because a hard deny would have no appeal.
+		const decision = await guard("yolo").decisionFor(request("shell", { command: "ping 127.0.0.1" }));
+		expect(decision).toEqual({ effect: "ask", reason: expect.stringContaining("127.0.0.1"), forced: true });
+	});
+
+	it("keeps the strict-mode answer an ask", async () => {
+		// Unchanged in effect: strict asked before and asks now. It becomes a *forced* ask, so the
+		// human reply cannot bank a standing grant for a call that may be hitting this machine.
+		const decision = await guard("strict").decisionFor(request("shell", { command: "ping 127.0.0.1" }));
+		expect(decision).toEqual({ effect: "ask", reason: expect.stringContaining("weak evidence"), forced: true });
+	});
+
+	it("an always reply to a weak-evidence ask banks no grant", async () => {
+		let asked = 0;
+		const askChannel: TgSecAskChannel = async () => {
+			asked += 1;
+			return "always";
+		};
+		const g = guard("auto", { askChannel });
+		const command = { command: "ping localhost" };
+		await expect(g.beforeTool(toolCall("shell", command), fakeApi("auto"), context)).resolves.toBeUndefined();
+		expect(asked).toBe(1);
+		// The reply banked nothing, so the second identical call reaches the human again.
+		await expect(g.beforeTool(toolCall("shell", command), fakeApi("auto"), context)).resolves.toBeUndefined();
+		expect(asked).toBe(2);
+	});
+
+	it("fails closed on a weak-evidence ask with no ask channel", async () => {
+		const result = await guard("yolo").beforeTool(
+			toolCall("shell", { command: "ping 127.0.0.1" }),
+			fakeApi("yolo"),
+			context,
+		);
+		expect(result?.block).toMatch(/fails closed without an ask channel/);
+	});
+});
+
+describe("danger set in the chain (batch 2a)", () => {
+	const REDTEAM = createTgSecDangerEvaluator({ objective: "redteam" });
+	const DANGER_CALL = request("shell", { command: "crontab -e" });
+
+	it("a danger hit is a forced ask under yolo with a standing always grant on the resource", async () => {
+		// Both exemptions at once, the strongest allow-shaped setting the chain can be put in: the mode
+		// that exempts everything and a grant for this exact resource. The answer is still an ask.
+		const grants = createInMemoryGrantStore();
+		grants.add("tool:shell");
+		const telemetry = new InMemoryTelemetryContext();
+		const marked = request("shell", { command: "crontab -e top-secret-token" });
+		const decision = await guard("yolo", { dangerEvaluator: REDTEAM, grants, telemetry }).decisionFor(marked);
+		expect(decision).toEqual({ effect: "ask", reason: expect.stringContaining("danger set"), forced: true });
+		const spans = telemetry.getSpans().filter((span) => span.name === "tg.span.sec.guard");
+		expect(spans.length).toBe(1);
+		expect(spans[0].attributes).toMatchObject({
+			mode: "yolo",
+			layer: "danger",
+			effect: "ask",
+			forced: true,
+			rule: "danger.persist.crontab",
+		});
+		// The span stays closed-vocabulary. The leak test reads for the argument value, not for a token
+		// the rule id legitimately shares with it: `danger.persist.crontab` names the matched family.
+		const serialized = JSON.stringify(telemetry.getSpans());
+		expect(serialized).not.toContain("top-secret-token");
+		expect(serialized).not.toContain("crontab -e");
+	});
+
+	it("the danger ask is forced in every mode, unlike the mode-layer ask", async () => {
+		for (const mode of TG_SEC_MODES) {
+			const decision = await guard(mode, { dangerEvaluator: REDTEAM }).decisionFor(DANGER_CALL);
+			expect(decision.effect, mode).toBe("ask");
+			if (decision.effect === "ask") expect(decision.forced, mode).toBe(true);
+		}
+	});
+
+	it("an always reply to a danger ask approves the call and banks no grant", async () => {
+		let asked = 0;
+		const askChannel: TgSecAskChannel = async () => {
+			asked += 1;
+			return "always";
+		};
+		const grants = createInMemoryGrantStore();
+		const g = guard("auto", { askChannel, dangerEvaluator: REDTEAM, grants });
+		await expect(
+			g.beforeTool(toolCall("shell", { command: "crontab -e" }), fakeApi("auto"), context),
+		).resolves.toBeUndefined();
+		expect(asked).toBe(1);
+		expect(grants.has("tool:shell")).toBe(false);
+		// The second identical call reaches the human again: the reply was for that call only.
+		await expect(
+			g.beforeTool(toolCall("shell", { command: "crontab -e" }), fakeApi("auto"), context),
+		).resolves.toBeUndefined();
+		expect(asked).toBe(2);
+	});
+
+	it("an injected evaluator that hits without naming a rule leaves the span's rule attribute absent", async () => {
+		// The seam widens, it does not force: `rule` is optional on the hit and optional on the span,
+		// so a host evaluator keeps working while the built-in ids remain the closed vocabulary.
+		const anonymous: TgSecDangerEvaluator = () => ({ hit: true, reason: "host rule fired" });
+		const telemetry = new InMemoryTelemetryContext();
+		const decision = await guard("auto", { dangerEvaluator: anonymous, telemetry }).decisionFor(NORMAL);
+		expect(decision).toEqual({ effect: "ask", reason: "host rule fired", forced: true });
+		const spans = telemetry.getSpans().filter((span) => span.name === "tg.span.sec.guard");
+		expect("rule" in spans[0].attributes).toBe(false);
+	});
+
+	it("a clean call still reaches mode dispatch and allows, so the set is not a blanket ask", async () => {
+		const decision = await guard("yolo", { dangerEvaluator: REDTEAM }).decisionFor(NORMAL);
+		expect(decision).toEqual({ effect: "allow" });
+	});
+});
+
 describe("switchMode", () => {
 	function fakeSessionPort(stored: { mode: string }) {
 		return {
@@ -370,5 +539,271 @@ describe("guard spans", () => {
 		expect(digests.length).toBe(3);
 		expect(digests[0]).toBe(digests[1]);
 		expect(digests[0]).not.toBe(digests[2]);
+	});
+});
+
+describe("intercept rules table in the chain (batch 2b)", () => {
+	const rule = (
+		id: string,
+		pattern: string,
+		effect: "allow" | "deny" | "ask",
+		over: Partial<TgSecRule> = {},
+	): TgSecRule => ({ id, priority: 1000, pattern, effect, enabled: true, ...over });
+	const outForNetfetch: TgSecScopeResolver = (req) =>
+		req.toolName === "netfetch" ? { inScope: false } : { inScope: true };
+
+	it("a rule deny is a forced ask in every mode, immune to the mode and to a standing grant", async () => {
+		for (const mode of TG_SEC_MODES) {
+			const grants = createInMemoryGrantStore();
+			grants.add("tool:shell");
+			const g = guard(mode, { grants, rules: createTgSecRuleTable([rule("ops.no-shell", "tool:shell", "deny")]) });
+			const decision = await g.decisionFor(request("shell", { command: "ls -la" }));
+			expect(decision.effect, mode).toBe("ask");
+			if (decision.effect === "ask") {
+				expect(decision.forced, mode).toBe(true);
+				expect(decision.reason).toContain('intercept rule "ops.no-shell" (tool:shell)');
+				expect(decision.reason).toContain("no grant and no mode exempts it");
+			}
+		}
+	});
+
+	it("the rule deny span records the rules layer and carries no rule attribute: operator ids stay out of the closed vocabulary", async () => {
+		const telemetry = new InMemoryTelemetryContext();
+		const g = guard("auto", { rules: createTgSecRuleTable([rule("ops.no-shell", "tool:shell", "deny")]), telemetry });
+		const decision = await g.decisionFor(request("shell", { command: "ls -la" }));
+		expect(decision.effect).toBe("ask");
+		const spans = telemetry.getSpans().filter((span) => span.name === "tg.span.sec.guard");
+		expect(spans.length).toBe(1);
+		expect(spans[0].attributes).toMatchObject({ layer: "rules", effect: "ask", forced: true });
+		expect("rule" in spans[0].attributes).toBe(false);
+	});
+
+	it("a rule note is appended to the human-facing reason", async () => {
+		const g = guard("auto", {
+			rules: createTgSecRuleTable([
+				rule("ops.no-shell", "tool:shell", "deny", { note: "engagement scope forbids shell" }),
+			]),
+		});
+		const decision = await g.decisionFor(request("shell", { command: "ls -la" }));
+		expect(decision).toEqual({
+			effect: "ask",
+			reason: expect.stringContaining("engagement scope forbids shell"),
+			forced: true,
+		});
+	});
+
+	it("hard deny stays ahead of the rules table: no allow rule can rescue rm -rf /", async () => {
+		const g = guard("yolo", { rules: createTgSecRuleTable([rule("allow-everything", "tool:*", "allow")]) });
+		const decision = await g.decisionFor(RM_ROOT);
+		expect(decision.effect).toBe("deny");
+		if (decision.effect === "deny") expect(decision.hard).toBe(true);
+	});
+
+	it("the rule deny precedes weak self-protection: the winning layer attributes the ask", async () => {
+		const telemetry = new InMemoryTelemetryContext();
+		const g = guard("yolo", {
+			rules: createTgSecRuleTable([rule("ops.no-shell", "tool:shell", "deny")]),
+			telemetry,
+			hostAddresses: [],
+		});
+		const decision = await g.decisionFor(request("shell", { command: "ping 127.0.0.1" }));
+		expect(decision).toEqual({ effect: "ask", reason: expect.stringContaining("ops.no-shell"), forced: true });
+		const spans = telemetry.getSpans().filter((span) => span.name === "tg.span.sec.guard");
+		expect(spans[0].attributes).toMatchObject({ layer: "rules" });
+	});
+
+	it("a rule allow cannot beat a forced-ask layer: scope still refuses its host in yolo", async () => {
+		const g = guard("yolo", {
+			scopeResolver: outForNetfetch,
+			rules: createTgSecRuleTable([rule("allow-fetch", "tool:netfetch", "allow")]),
+		});
+		const decision = await g.decisionFor(request("netfetch", { url: "http://target.invalid/x" }));
+		expect(decision).toEqual({ effect: "ask", reason: "the target is outside the registered scope", forced: true });
+	});
+
+	it("a rule allow cannot beat the danger set", async () => {
+		const g = guard("yolo", {
+			dangerEvaluator: createTgSecDangerEvaluator({ objective: "redteam" }),
+			rules: createTgSecRuleTable([rule("allow-shell", "tool:shell", "allow")]),
+		});
+		const decision = await g.decisionFor(request("shell", { command: "crontab -e" }));
+		expect(decision).toEqual({ effect: "ask", reason: expect.stringContaining("danger set"), forced: true });
+	});
+
+	it("deny outranks a higher-priority allow: priority orders attribution inside one effect, never across effects", async () => {
+		const table = createTgSecRuleTable([
+			rule("hi-allow", "tool:read", "allow", { priority: 9000 }),
+			rule("lo-deny", "tool:read", "deny", { priority: 1 }),
+		]);
+		const decision = await guard("yolo", { rules: table }).decisionFor(NORMAL);
+		expect(decision).toEqual({ effect: "ask", reason: expect.stringContaining("lo-deny"), forced: true });
+	});
+
+	it("a rule ask is a non-forced ask that banks its always reply yet keeps asking: the layer precedes the grant check", async () => {
+		// The chain diagram is the authority: 规则 ask sits ahead of mode dispatch, so a standing
+		// grant cannot clear it. `forced: false` means the human may answer `always` — and the reply
+		// is recorded — but the ask rule re-fires every call by construction.
+		const grants = createInMemoryGrantStore();
+		let asked = 0;
+		const askChannel: TgSecAskChannel = async () => {
+			asked += 1;
+			return "always";
+		};
+		const g = guard("auto", {
+			askChannel,
+			grants,
+			rules: createTgSecRuleTable([rule("review", "tool:read", "ask")]),
+		});
+		await expect(g.beforeTool(toolCall("read", { path: "a.ts" }), fakeApi("auto"), context)).resolves.toBeUndefined();
+		expect(asked).toBe(1);
+		expect(grants.has("tool:read")).toBe(true);
+		await expect(g.beforeTool(toolCall("read", { path: "b.ts" }), fakeApi("auto"), context)).resolves.toBeUndefined();
+		expect(asked).toBe(2);
+	});
+
+	it("strict ignores a matching allow rule: the ask comes from mode dispatch with the strict reason", async () => {
+		const telemetry = new InMemoryTelemetryContext();
+		const g = guard("strict", {
+			rules: createTgSecRuleTable([rule("allow-read", "tool:read", "allow")]),
+			telemetry,
+		});
+		const decision = await g.decisionFor(NORMAL);
+		expect(decision).toEqual({
+			effect: "ask",
+			reason: "strict mode puts every tool call in front of a human",
+			forced: false,
+		});
+		const spans = telemetry.getSpans().filter((span) => span.name === "tg.span.sec.guard");
+		expect(spans[0].attributes).toMatchObject({ layer: "mode", effect: "ask" });
+	});
+
+	it("judge-auto takes a matching allow rule without consulting the judge", async () => {
+		let judged = 0;
+		const judge = async () => {
+			judged += 1;
+			return { decision: "ask" as const, comment: "must not be consulted" };
+		};
+		const telemetry = new InMemoryTelemetryContext();
+		const g = guard("judge-auto", {
+			judge,
+			rules: createTgSecRuleTable([rule("allow-read", "tool:read", "allow")]),
+			telemetry,
+		});
+		const decision = await g.decisionFor(NORMAL);
+		expect(decision).toEqual({ effect: "allow" });
+		expect(judged).toBe(0);
+		const spans = telemetry.getSpans().filter((span) => span.name === "tg.span.sec.guard");
+		expect(spans[0].attributes).toMatchObject({ layer: "rules", effect: "allow" });
+	});
+
+	it("auto attribution: allow-plus-grant and allow-only record rules, grant-only records grants, neither records mode", async () => {
+		const allow = createTgSecRuleTable([rule("allow-read", "tool:read", "allow")]);
+		const granted = () => {
+			const grants = createInMemoryGrantStore();
+			grants.add("tool:read");
+			return grants;
+		};
+		const cases: readonly {
+			label: string;
+			grants: ReturnType<typeof granted>;
+			rules: typeof allow | undefined;
+			layer: string;
+		}[] = [
+			{ label: "allow rule and standing grant", grants: granted(), rules: allow, layer: "rules" },
+			{ label: "standing grant only", grants: granted(), rules: undefined, layer: "grants" },
+			{ label: "allow rule only", grants: createInMemoryGrantStore(), rules: allow, layer: "rules" },
+			{ label: "neither", grants: createInMemoryGrantStore(), rules: undefined, layer: "mode" },
+		];
+		for (const c of cases) {
+			const telemetry = new InMemoryTelemetryContext();
+			const decision = await guard("auto", { grants: c.grants, rules: c.rules, telemetry }).decisionFor(NORMAL);
+			expect(decision, c.label).toEqual({ effect: "allow" });
+			const spans = telemetry.getSpans().filter((span) => span.name === "tg.span.sec.guard");
+			expect(spans[0].attributes.layer, c.label).toBe(c.layer);
+		}
+	});
+
+	it("an empty or disabled table is indistinguishable from no rules", async () => {
+		for (const table of [
+			createTgSecRuleTable([]),
+			createTgSecRuleTable([rule("off", "tool:read", "deny", { enabled: false })]),
+		]) {
+			const decision = await guard("auto", { rules: table }).decisionFor(NORMAL);
+			expect(decision).toEqual({ effect: "allow" });
+		}
+	});
+});
+
+describe("two-axis judge wired into judge-auto (batch 2b)", () => {
+	const transportReturning = (reply: string): TgSecJudgeTransport => ({ complete: async () => reply });
+
+	it("an allow verdict allows on the mode layer", async () => {
+		const telemetry = new InMemoryTelemetryContext();
+		const judge = createTgSecTwoAxisJudge({
+			transport: transportReturning('{"decision":"allow","comment":"reversible, test-side"}'),
+			timeoutMs: 1000,
+		});
+		const decision = await guard("judge-auto", { judge, telemetry }).decisionFor(NORMAL);
+		expect(decision).toEqual({ effect: "allow" });
+		const spans = telemetry.getSpans().filter((span) => span.name === "tg.span.sec.guard");
+		expect(spans[0].attributes).toMatchObject({ layer: "mode", effect: "allow" });
+	});
+
+	it("the judge comment surfaces in the ask reason and never in the span attributes", async () => {
+		const telemetry = new InMemoryTelemetryContext();
+		const judge = createTgSecTwoAxisJudge({
+			transport: transportReturning('{"decision":"ask","comment":"target production asset top-secret-comment"}'),
+			timeoutMs: 1000,
+		});
+		const decision = await guard("judge-auto", { judge, telemetry }).decisionFor(NORMAL);
+		expect(decision).toEqual({
+			effect: "ask",
+			reason: "target production asset top-secret-comment",
+			forced: false,
+		});
+		expect(JSON.stringify(telemetry.getSpans())).not.toContain("top-secret-comment");
+	});
+
+	it("a transport that throws escalates to a human: never a release, never a deny", async () => {
+		const judge = createTgSecTwoAxisJudge({
+			transport: {
+				complete: () => {
+					throw new Error("provider down");
+				},
+			},
+			timeoutMs: 1000,
+		});
+		const decision = await guard("judge-auto", { judge }).decisionFor(NORMAL);
+		expect(decision).toEqual({
+			effect: "ask",
+			reason: expect.stringContaining("the judge transport failed"),
+			forced: false,
+		});
+	});
+
+	it("a transport that hangs is cut off inside the judge's own budget", async () => {
+		const judge = createTgSecTwoAxisJudge({
+			transport: { complete: () => new Promise<string>(() => {}) },
+			timeoutMs: 5,
+		});
+		const decision = await guard("judge-auto", { judge }).decisionFor(NORMAL);
+		expect(decision).toEqual({
+			effect: "ask",
+			reason: expect.stringContaining("did not answer within 5 ms"),
+			forced: false,
+		});
+	});
+
+	it("a rogue deny from the judge is off-protocol and asks: the judge keeps no deny power", async () => {
+		const judge = createTgSecTwoAxisJudge({
+			transport: transportReturning('{"decision":"deny","comment":"rogue"}'),
+			timeoutMs: 1000,
+		});
+		const decision = await guard("judge-auto", { judge }).decisionFor(NORMAL);
+		expect(decision).toEqual({
+			effect: "ask",
+			reason: expect.stringContaining("outside its two permitted values"),
+			forced: false,
+		});
 	});
 });

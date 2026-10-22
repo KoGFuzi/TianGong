@@ -16,9 +16,8 @@ import {
  * `runTgSecAttestation` executes probes in order and the first throw ends the attestation
  * (fail-closed: the host refuses to start work on a failed attestation).
  *
- * Batch 0.5a landed probes 1, 4, 5, and 7; batch 1b added probes 2 and 6 with the scope wiring.
- * The remaining slot is reserved, not stubbed:
- *   - probe 3 (a danger-set sample must force ask past grants): batch 2, with the danger regex set.
+ * Batch 0.5a landed probes 1, 4, 5, and 7; batch 1b added probes 2 and 6 with the scope wiring;
+ * batch 2a added probe 3 with the danger set. No slot is left reserved.
  */
 export type TgSecProbe = {
 	readonly name: string;
@@ -38,6 +37,20 @@ export type TgSecAttestContext = {
 	declaredTools: readonly string[];
 	/** Probes 2 and 7: a scope-outside sample tool call — probe 2 asserts its decision, probe 7 asserts the block. */
 	forcedAskSample: ToolHookCall;
+	/**
+	 * Probe 3: a tool call that is **in scope** and clean for the layers ahead of danger but matches
+	 * the dangerous-instruction set. The probe forces its ask past a standing `always` grant and
+	 * `yolo`, and checks that the ask came from the danger layer.
+	 */
+	dangerSample: ToolHookCall;
+	/**
+	 * Probes 8-11: a call that is **in scope**, carries no weak-evidence self-protection candidate
+	 * and matches no danger rule — every layer ahead of the rules table and mode dispatch stays
+	 * silent on it, so the decision the probes assert can only come from the intercept rules table
+	 * or from the `judge-auto` path. The probes wire their own rule tables and their own broken
+	 * judges around this one sample.
+	 */
+	rulesSample: ToolHookCall;
 	/** Probe 7: the live document reader the probe's own `beforeTool` call reads the mode through. */
 	hookApi: HookApi;
 	/**
@@ -47,7 +60,7 @@ export type TgSecAttestContext = {
 	probeGuard: TgSecProbeGuardPieces;
 };
 
-/** The chain inputs the decision probes (2, 6, 7) need to construct a working guard: resolver, danger evaluator, mode. */
+/** The chain inputs the decision probes (2, 3, 6, 7) need to construct a working guard: resolver, danger evaluator, mode. */
 export type TgSecProbeGuardPieces = {
 	mode: TgSecPermissionMode;
 	scopeResolver: TgSecScopeResolver;
@@ -193,6 +206,42 @@ export function probeForcedAskBlocks(
 	};
 }
 
+/**
+ * Probe 3: a danger-set hit forces its ask past grants and past mode. `createGuard` must build a
+ * `yolo` guard whose grant store already holds the sample's exact resource — the most exempt shape
+ * the chain can be put in — and the probe's own telemetry sink. Three claims, all executed rather
+ * than trusted: the decision is a forced ask, exactly one guard span was recorded, and that span's
+ * `layer` attribute is `danger`. The layer check is what keeps this probe honest about *which*
+ * forced ask it is watching: a sample the scope layer happens to refuse would produce the same
+ * decision for the wrong reason and must not pass.
+ */
+export function probeDangerSetForcesAskPastGrants(
+	sample: ToolHookCall,
+	createGuard: (telemetry: InMemoryTelemetryContext) => TgSecGuard,
+): TgSecProbe {
+	return {
+		name: "danger-set-forced-ask-past-grants",
+		async run(): Promise<void> {
+			const telemetry = new InMemoryTelemetryContext();
+			const guard = createGuard(telemetry);
+			const decision = await guard.decisionFor(toTgSecRequest(sample));
+			if (decision.effect !== "ask" || !decision.forced) {
+				throw new Error(
+					`a danger-set sample must force an ask even under yolo with a standing always grant, got ${decision.effect}`,
+				);
+			}
+			const spans = telemetry.getSpans().filter((span) => span.name === "tg.span.sec.guard");
+			if (spans.length !== 1) {
+				throw new Error(`every decision must record exactly one tg.span.sec.guard span, saw ${spans.length}`);
+			}
+			const layer = spans[0].attributes.layer;
+			if (layer !== "danger") {
+				throw new Error(`the forced ask must come from the danger layer, saw layer ${JSON.stringify(layer)}`);
+			}
+		},
+	};
+}
+
 /** Runs the probes in order; the first failure throws and the attestation ends. */
 export async function runTgSecAttestation(probes: readonly TgSecProbe[]): Promise<void> {
 	for (const probe of probes) {
@@ -203,4 +252,126 @@ export async function runTgSecAttestation(probes: readonly TgSecProbe[]): Promis
 			throw new Error(`attestation probe "${probe.name}" failed: ${message}`, { cause: error });
 		}
 	}
+}
+
+/**
+ * Probe 8: a rules-table `deny` must surface as a **forced** ask — appealable by a human, immune to
+ * exemptions. `createGuard` must build the most exempt shape the chain can be put in for the
+ * sample's resource: `yolo` plus a standing `always` grant plus the matching deny rule. Three
+ * executed claims: the decision is a forced ask, exactly one guard span was recorded, and its
+ * `layer` attribute is `rules` — a forced ask from scope or danger would produce the same decision
+ * for the wrong reason. A deny that resolved to a terminal deny, or that a grant could exempt,
+ * fails the same probe.
+ */
+export function probeRuleDenyForcesAskPastExemptions(
+	sample: ToolHookCall,
+	createGuard: (telemetry: InMemoryTelemetryContext) => TgSecGuard,
+): TgSecProbe {
+	return {
+		name: "rule-deny-forced-ask-past-exemptions",
+		async run(): Promise<void> {
+			const telemetry = new InMemoryTelemetryContext();
+			const guard = createGuard(telemetry);
+			const decision = await guard.decisionFor(toTgSecRequest(sample));
+			if (decision.effect !== "ask" || !decision.forced) {
+				throw new Error(
+					`a rule-deny sample must force an ask (appealable, not exemptible) even under yolo with a standing grant, got ${decision.effect}`,
+				);
+			}
+			const spans = telemetry.getSpans().filter((span) => span.name === "tg.span.sec.guard");
+			if (spans.length !== 1) {
+				throw new Error(`every decision must record exactly one tg.span.sec.guard span, saw ${spans.length}`);
+			}
+			const layer = spans[0].attributes.layer;
+			if (layer !== "rules") {
+				throw new Error(`the forced ask must come from the rules layer, saw layer ${JSON.stringify(layer)}`);
+			}
+		},
+	};
+}
+
+/**
+ * Probe 9: `strict` must ignore a matching rules-table `allow` — the 2026-10-23 decision that the
+ * strictest mode keeps every call in front of a human and no operations rule may quietly override
+ * mode semantics. `createGuard` must build a `strict` guard carrying an allow rule that matches the
+ * sample's resource. The probe asserts the decision is an ask and the span's `layer` is `mode`:
+ * an allow that leaked through would answer `allow` on layer `rules`, and a rule ask would answer on
+ * layer `rules` as well — only the strict dispatch may produce this shape.
+ */
+export function probeStrictIgnoresRuleAllow(
+	sample: ToolHookCall,
+	createGuard: (telemetry: InMemoryTelemetryContext) => TgSecGuard,
+): TgSecProbe {
+	return {
+		name: "strict-ignores-rule-allow",
+		async run(): Promise<void> {
+			const telemetry = new InMemoryTelemetryContext();
+			const guard = createGuard(telemetry);
+			const decision = await guard.decisionFor(toTgSecRequest(sample));
+			if (decision.effect !== "ask") {
+				throw new Error(`strict must ask even when a rules-table allow matches the call, got ${decision.effect}`);
+			}
+			const spans = telemetry.getSpans().filter((span) => span.name === "tg.span.sec.guard");
+			if (spans.length !== 1) {
+				throw new Error(`every decision must record exactly one tg.span.sec.guard span, saw ${spans.length}`);
+			}
+			const layer = spans[0].attributes.layer;
+			if (layer !== "mode") {
+				throw new Error(
+					`the strict ask must come from mode dispatch, not from a rule, saw layer ${JSON.stringify(layer)}`,
+				);
+			}
+		},
+	};
+}
+
+/**
+ * Probe 10: a judge whose transport **throws** must resolve to an ask. `createGuard` must build a
+ * `judge-auto` guard carrying a two-axis judge wired to a transport that always throws. The probe
+ * asserts the decision is an ask (never allow, never a pass-through of the throw) and the span's
+ * `layer` is `mode`: the judge's failure must escalate, not release and not terminate.
+ */
+export function probeJudgeTransportErrorAsks(
+	sample: ToolHookCall,
+	createGuard: (telemetry: InMemoryTelemetryContext) => TgSecGuard,
+): TgSecProbe {
+	return askOnModeLayerProbe("judge-transport-error-asks", sample, createGuard);
+}
+
+/**
+ * Probe 11: a judge whose transport **never answers** must resolve to an ask inside the judge's own
+ * timeout budget. Same shape as probe 10, with a transport that hangs forever: the timeout, like
+ * the failure, escalates.
+ */
+export function probeJudgeTimeoutAsks(
+	sample: ToolHookCall,
+	createGuard: (telemetry: InMemoryTelemetryContext) => TgSecGuard,
+): TgSecProbe {
+	return askOnModeLayerProbe("judge-timeout-asks", sample, createGuard);
+}
+
+function askOnModeLayerProbe(
+	name: string,
+	sample: ToolHookCall,
+	createGuard: (telemetry: InMemoryTelemetryContext) => TgSecGuard,
+): TgSecProbe {
+	return {
+		name,
+		async run(): Promise<void> {
+			const telemetry = new InMemoryTelemetryContext();
+			const guard = createGuard(telemetry);
+			const decision = await guard.decisionFor(toTgSecRequest(sample));
+			if (decision.effect !== "ask") {
+				throw new Error(`a degraded judge must escalate to a human, got ${decision.effect}`);
+			}
+			const spans = telemetry.getSpans().filter((span) => span.name === "tg.span.sec.guard");
+			if (spans.length !== 1) {
+				throw new Error(`every decision must record exactly one tg.span.sec.guard span, saw ${spans.length}`);
+			}
+			const layer = spans[0].attributes.layer;
+			if (layer !== "mode") {
+				throw new Error(`the judge ask must be attributed to the mode layer, saw layer ${JSON.stringify(layer)}`);
+			}
+		},
+	};
 }

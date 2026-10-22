@@ -8,21 +8,34 @@ import {
 } from "@OnePanda-TgSec/tg-telemetry";
 import { createHash } from "node:crypto";
 import {
+	probeDangerSetForcesAskPastGrants,
 	probeForcedAskBlocks,
+	probeJudgeTimeoutAsks,
+	probeJudgeTransportErrorAsks,
 	probeModeDocument,
 	probeRestrictedEnv,
+	probeRuleDenyForcesAskPastExemptions,
 	probeScopeOutsideNotAllows,
+	probeStrictIgnoresRuleAllow,
 	probeToolSetAlignment,
 	probeUnaffiliatedCallEntersChain,
 	runTgSecAttestation,
 	type TgSecAttestContext,
 	type TgSecProbe,
 } from "./attest.ts";
-import { evaluateHardDeny, localInterfaceAddresses, type TgSecHardDenyRuleId } from "./hard-deny.ts";
+import {
+	evaluateHardDeny,
+	evaluateWeakSelfProtection,
+	localInterfaceAddresses,
+	type TgSecHardDenyRuleId,
+} from "./hard-deny.ts";
+import { createTgSecTwoAxisJudge } from "./judge.ts";
 import { isTgSecMode, readTgSecMode, switchTgSecMode, type TgSecSessionPort } from "./mode.ts";
+import { createTgSecRuleTable, type TgSecRuleTable } from "./rules.ts";
 import {
 	type TgSecAskReply,
 	type TgSecDangerEvaluator,
+	type TgSecDangerRuleId,
 	type TgSecDecision,
 	type TgSecJudge,
 	type TgSecPermissionMode,
@@ -31,15 +44,24 @@ import {
 	toTgSecRequest,
 } from "./types.ts";
 
-/** The layer of the chain that produced a decision, recorded on the guard span. */
-export type TgSecMatchedLayer = "hard-deny" | "scope" | "danger" | "grants" | "mode";
+/**
+ * The layer of the chain that produced a decision, recorded on the guard span. `self-protection` is
+ * the batch 1c tier: a weak-evidence candidate that trips a platform self-protection rule, which is
+ * certain enough to require a human and not certain enough to deny outright. `rules` is the batch
+ * 2b intercept rules table: it attributes the rule deny forced ask and the rule ask ahead of
+ * self-protection, and the rule allow taken inside mode dispatch.
+ */
+export type TgSecMatchedLayer = "hard-deny" | "rules" | "self-protection" | "scope" | "danger" | "grants" | "mode";
 
 /** One evaluation outcome: the public decision plus the closed-vocabulary audit facts of its path. */
 export type TgSecEvaluation = {
 	readonly decision: TgSecDecision;
 	readonly layer: TgSecMatchedLayer;
-	/** Built-in hard-deny rule id; present exactly when the layer is `hard-deny`. */
-	readonly ruleId?: TgSecHardDenyRuleId;
+	/**
+	 * Built-in rule id; present when the layer is `hard-deny`, `self-protection`, or `danger` and the
+	 * producing evaluator named its rule (an injected danger evaluator may omit it).
+	 */
+	readonly ruleId?: TgSecHardDenyRuleId | TgSecDangerRuleId;
 };
 
 /** The human reply channel for an ask. Absent means fail-closed: every ask blocks. */
@@ -78,6 +100,12 @@ export type TgSecGuardOptions = {
 	askChannel?: TgSecAskChannel;
 	/** `always` grants. Defaults to a fresh in-memory store owned by this guard. */
 	grants?: TgSecGrantStore;
+	/**
+	 * The operator-side intercept rules table (`./rules.ts`). Absent means an empty table: no rule
+	 * conclusion on any call, the chain behaves as before rules existed. Rule allow never overrides
+	 * a mode or a forced-ask layer; rule deny is a forced ask, not a terminal deny.
+	 */
+	rules?: TgSecRuleTable;
 	/** Writes and reads the `tg.sec.mode` document. Required for `switchMode`. */
 	session?: TgSecSessionPort;
 	/** Audit sink for the guard and mode-switch spans. Defaults to no-op. */
@@ -169,6 +197,7 @@ export function createTgSecGuard(options: TgSecGuardOptions): TgSecGuard {
 
 	const scopeResolver = options.scopeResolver;
 	const dangerEvaluator = options.dangerEvaluator;
+	const ruleTable = options.rules ?? createTgSecRuleTable([]);
 	const grants = options.grants ?? createInMemoryGrantStore();
 	const telemetry = options.telemetry ?? NOOP_TELEMETRY_CONTEXT;
 	const hostAddresses = resolveHostAddresses(options.hostAddresses);
@@ -176,17 +205,54 @@ export function createTgSecGuard(options: TgSecGuardOptions): TgSecGuard {
 	let currentMode = options.mode;
 
 	// The chain body. Every request enters at step 0 and short-circuits only once a layer has
-	// produced its decision; forced asks (scope, danger) return before mode dispatch. Grants are an
-	// internal step of the `auto`/`yolo` branch, not a global pre-layer: `strict` puts every call in
-	// front of a human and `judge-auto` routes every call through the judge, so a stored `always`
-	// grant must never exempt either mode. Only auto/yolo may be short-circuited by a grant.
+	// produced its decision. Batch 2b order: hard deny; intercept rule deny (forced ask) and rule
+	// ask; then the three forced-ask layers — weak-evidence self-protection, scope, danger — which
+	// return before mode dispatch. A rule `deny` is never terminal (the only terminal deny is the
+	// built-in hard deny), and a rule `allow` can only ever take effect inside mode dispatch, below
+	// every forced-ask layer, and never under `strict` — operations rules may not override mode
+	// semantics. Grants remain an internal step of the `auto`/`yolo` branch, not a global
+	// pre-layer: `strict` puts every call in front of a human and `judge-auto` routes every call
+	// through the judge, so a stored `always` grant must never exempt either mode. Only auto/yolo may
+	// be short-circuited by a grant.
 	async function evaluate(request: TgSecRequest, mode: TgSecPermissionMode): Promise<TgSecEvaluation> {
-		const denial = evaluateHardDeny(request, hostAddresses());
+		const addresses = hostAddresses();
+		const denial = evaluateHardDeny(request, addresses);
 		if (denial !== undefined) {
 			return {
 				decision: { effect: "deny", reason: denial.reason, hard: true },
 				layer: "hard-deny",
 				ruleId: denial.ruleId,
+			};
+		}
+		// The intercept rules table, matched on the `tool:<name>` resource only. The winner among
+		// all hits is computed once and consulted twice: here for deny/ask, and at mode dispatch
+		// for allow. Its operator ids are free text, so the attribution names the winning rule in
+		// the reason, never in the span's closed `rule` vocabulary.
+		const rulesHit = ruleTable.match(request.resource);
+		if (rulesHit !== undefined && rulesHit.effect !== "allow") {
+			const forced = rulesHit.effect === "deny";
+			const named = `intercept rule "${rulesHit.id}" (${rulesHit.pattern})`;
+			const note = rulesHit.note === undefined ? "" : ` — ${rulesHit.note}`;
+			return {
+				decision: {
+					effect: "ask",
+					reason: forced
+						? `${named} denies this call by policy${note}: a human may approve this one, but no grant and no mode exempts it`
+						: `${named} asks for a human decision on this call${note}`,
+					forced,
+				},
+				layer: "rules",
+			};
+		}
+		// The demoted half of self-protection: same rules, same extraction, weak evidence only. It is
+		// checked here rather than left to the injected scope resolver so a host cannot lose it by
+		// shipping its own resolver, and it is forced so no grant and no mode can exempt it.
+		const weakProtection = evaluateWeakSelfProtection(request, addresses);
+		if (weakProtection !== undefined) {
+			return {
+				decision: { effect: "ask", reason: weakProtection.reason, forced: true },
+				layer: "self-protection",
+				ruleId: weakProtection.ruleId,
 			};
 		}
 		const scope = scopeResolver(request);
@@ -209,6 +275,7 @@ export function createTgSecGuard(options: TgSecGuardOptions): TgSecGuard {
 					forced: true,
 				},
 				layer: "danger",
+				ruleId: danger.rule,
 			};
 		}
 		switch (mode) {
@@ -222,11 +289,22 @@ export function createTgSecGuard(options: TgSecGuardOptions): TgSecGuard {
 					layer: "mode",
 				};
 			case "judge-auto": {
+				// A rule allow is the operator's explicit whitelist: the judge is not consulted at
+				// all, which saves one LLM call and keeps a standing allow standing.
+				if (rulesHit !== undefined && rulesHit.effect === "allow") {
+					return { decision: { effect: "allow" }, layer: "rules" };
+				}
 				if (options.judge === undefined) throw new TypeError("judge-auto reached evaluation without a judge");
 				return judgeWithTimeout(options.judge, request, judgeTimeoutMs);
 			}
 			case "auto":
 			case "yolo":
+				// Both branches allow; the layer records who gets the credit. An allow rule and a
+				// stored grant hitting the same call attributes to the rules table, because an
+				// operator-written rule is the standing statement of intent.
+				if (rulesHit !== undefined && rulesHit.effect === "allow") {
+					return { decision: { effect: "allow" }, layer: "rules" };
+				}
 				if (grants.has(request.resource)) return { decision: { effect: "allow" }, layer: "grants" };
 				return { decision: { effect: "allow" }, layer: "mode" };
 		}
@@ -299,6 +377,22 @@ export function createTgSecGuard(options: TgSecGuardOptions): TgSecGuard {
 		const probes: TgSecProbe[] = [
 			probeRestrictedEnv(attestContext.forbiddenRead),
 			probeScopeOutsideNotAllows(attestContext.forcedAskSample, () => chainProbeGuard(NOOP_TELEMETRY_CONTEXT)),
+			// Probe 3: a danger-set hit must force its ask past both grants and mode. The guard is built
+			// in `yolo` — the most exempt mode — with the sample's resource pre-granted as an `always`
+			// grant, so only immunity to both at once is what passing can mean. The probe additionally
+			// reads the guard span's `layer` attribute: a forced ask from any other layer (scope, say)
+			// would otherwise let a sample that does not test the danger set pass for the wrong reason.
+			probeDangerSetForcesAskPastGrants(attestContext.dangerSample, (telemetry) => {
+				const grants = createInMemoryGrantStore();
+				grants.add(`tool:${attestContext.dangerSample.name}`);
+				return createTgSecGuard({
+					mode: "yolo",
+					scopeResolver: pieces.scopeResolver,
+					dangerEvaluator: pieces.dangerEvaluator,
+					grants,
+					telemetry,
+				});
+			}),
 			probeToolSetAlignment(attestContext.registeredTools, attestContext.declaredTools),
 			probeModeDocument(() => readTgSecMode(attestContext.modeReader, attestContext.context)),
 			probeUnaffiliatedCallEntersChain(unaffiliatedSample, (telemetry) => chainProbeGuard(telemetry)),
@@ -307,6 +401,72 @@ export function createTgSecGuard(options: TgSecGuardOptions): TgSecGuard {
 				chainProbeGuard(NOOP_TELEMETRY_CONTEXT),
 			),
 		];
+		// Probes 8-11 (batch 2b) pin the two 2026-10-23 decisions with the rules sample: a rules-table
+		// deny that a human can approve but no exemption can clear, a strict mode that ignores a
+		// matching allow, and a degraded judge that escalates instead of releasing. Each builds its
+		// own guard the way probe 3 does, so passing is executed, not claimed.
+		const rulesSample = attestContext.rulesSample;
+		const fixtureRule = (effect: "allow" | "deny") => ({
+			id: `attestation-rule-${effect}`,
+			priority: 1000,
+			pattern: `tool:${rulesSample.name}`,
+			effect,
+			enabled: true,
+			note: "attestation fixture",
+		});
+		const errorJudge = createTgSecTwoAxisJudge({
+			transport: {
+				complete: () => {
+					throw new Error("attestation transport failure");
+				},
+			},
+			timeoutMs: 1000,
+		});
+		const hangingJudge = createTgSecTwoAxisJudge({
+			transport: { complete: () => new Promise<string>(() => {}) },
+			timeoutMs: 5,
+		});
+		probes.push(
+			probeRuleDenyForcesAskPastExemptions(rulesSample, (telemetry) => {
+				const grants = createInMemoryGrantStore();
+				grants.add(`tool:${rulesSample.name}`);
+				return createTgSecGuard({
+					mode: "yolo",
+					scopeResolver: pieces.scopeResolver,
+					dangerEvaluator: pieces.dangerEvaluator,
+					grants,
+					rules: createTgSecRuleTable([fixtureRule("deny")]),
+					telemetry,
+				});
+			}),
+			probeStrictIgnoresRuleAllow(rulesSample, (telemetry) =>
+				createTgSecGuard({
+					mode: "strict",
+					scopeResolver: pieces.scopeResolver,
+					dangerEvaluator: pieces.dangerEvaluator,
+					rules: createTgSecRuleTable([fixtureRule("allow")]),
+					telemetry,
+				}),
+			),
+			probeJudgeTransportErrorAsks(rulesSample, (telemetry) =>
+				createTgSecGuard({
+					mode: "judge-auto",
+					scopeResolver: pieces.scopeResolver,
+					dangerEvaluator: pieces.dangerEvaluator,
+					judge: errorJudge,
+					telemetry,
+				}),
+			),
+			probeJudgeTimeoutAsks(rulesSample, (telemetry) =>
+				createTgSecGuard({
+					mode: "judge-auto",
+					scopeResolver: pieces.scopeResolver,
+					dangerEvaluator: pieces.dangerEvaluator,
+					judge: hangingJudge,
+					telemetry,
+				}),
+			),
+		);
 		await runTgSecAttestation(probes);
 	}
 

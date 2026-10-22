@@ -3,18 +3,31 @@ import type { HookApi, JsonObject, ToolHookCall } from "@OnePanda-TgSec/tg-gibra
 import { InMemoryTelemetryContext } from "@OnePanda-TgSec/tg-telemetry";
 import { describe, expect, it } from "vitest";
 import {
+	createInMemoryGrantStore,
+	createTgSecDangerEvaluator,
 	createTgSecGuard,
+	createTgSecRuleTable,
+	createTgSecScopeRegistry,
+	createTgSecScopeResolver,
+	createTgSecTwoAxisJudge,
+	probeDangerSetForcesAskPastGrants,
 	probeForcedAskBlocks,
+	probeJudgeTimeoutAsks,
+	probeJudgeTransportErrorAsks,
 	probeModeDocument,
 	probeRestrictedEnv,
+	probeRuleDenyForcesAskPastExemptions,
 	probeScopeOutsideNotAllows,
+	probeStrictIgnoresRuleAllow,
 	probeToolSetAlignment,
 	probeUnaffiliatedCallEntersChain,
 	runTgSecAttestation,
 	type TgSecAttestContext,
 	type TgSecDangerEvaluator,
 	type TgSecGuard,
+	type TgSecRuleTable,
 	type TgSecScopeResolver,
+	type TgSecScopeRule,
 	toTgSecRequest,
 } from "../src/index.ts";
 
@@ -162,21 +175,66 @@ describe("probe 2: a scope-outside sample never allows", () => {
 		name: "netfetch",
 		arguments: { url: "http://target.invalid/x" },
 	};
-	const outOfScope: TgSecScopeResolver = () => ({
-		inScope: false,
-		reason: "the target is outside the registered scope",
+	// Batch 1d rewrote this suite around the real registry engine: the three first cases below walk
+	// the same chain the product walks — extraction, evidence tiers, deny-over-allow verdict — instead
+	// of trusting an injected fake resolver. Hosts sit in the TEST-NET documentation ranges and the
+	// probe guards pin `hostAddresses: []`, so any ask here can only come from the scope layer, never
+	// from self-protection.
+	const allowNet: TgSecScopeRule = { kind: "cidr4", pattern: "203.0.113.0/24", effect: "allow", enabled: true };
+	const denyGateway: TgSecScopeRule = { kind: "exact-host", pattern: "203.0.113.7", effect: "deny", enabled: true };
+
+	function netfetch(url: string): ToolHookCall {
+		return { type: "toolCall", id: "probe-2-sample", name: "netfetch", arguments: { url } };
+	}
+
+	function registryGuard(...rules: readonly TgSecScopeRule[]): () => TgSecGuard {
+		return () =>
+			createTgSecGuard({
+				mode: "auto",
+				scopeResolver: createTgSecScopeResolver(createTgSecScopeRegistry(rules)),
+				dangerEvaluator: NO_DANGER,
+				hostAddresses: [],
+			});
+	}
+
+	it("lets a CIDR-inside target through the real engine", async () => {
+		const decision = await registryGuard(allowNet)().decisionFor(toTgSecRequest(netfetch("http://203.0.113.5/")));
+		expect(decision).toEqual({ effect: "allow" });
 	});
 
-	it("passes when the chain forces the ask", async () => {
-		const probe = probeScopeOutsideNotAllows(sample, () =>
-			createTgSecGuard({ mode: "auto", scopeResolver: outOfScope, dangerEvaluator: NO_DANGER }),
-		);
+	it("passes on a CIDR-outside target: the real engine forces the ask", async () => {
+		const probe = probeScopeOutsideNotAllows(netfetch("http://198.51.100.2/"), registryGuard(allowNet));
 		await expect(probe.run()).resolves.toBeUndefined();
+	});
+
+	it("passes when a deny hit inside an allowed CIDR refuses the host: deny over allow, at the probe", async () => {
+		// 定调 2 asserted where it matters — through the whole chain. The host matches the allowed /24
+		// and a /32 deny; the decision must be a forced ask naming the deny entry, and the probe must
+		// accept it as the out-of-scope shape.
+		const outside = netfetch("http://203.0.113.7/");
+		const probe = probeScopeOutsideNotAllows(outside, registryGuard(allowNet, denyGateway));
+		await expect(probe.run()).resolves.toBeUndefined();
+		const decision = await registryGuard(allowNet, denyGateway)().decisionFor(toTgSecRequest(outside));
+		expect(decision.effect).toBe("ask");
+		if (decision.effect === "ask") {
+			expect(decision.forced).toBe(true);
+			expect(decision.reason).toContain('refused by the scope deny entry "203.0.113.7"');
+		}
 	});
 
 	it("fails when the chain allows the scope-outside call", async () => {
 		const probe = probeScopeOutsideNotAllows(sample, () =>
 			createTgSecGuard({ mode: "yolo", scopeResolver: ALL_IN_SCOPE, dangerEvaluator: NO_DANGER }),
+		);
+		await expect(probe.run()).rejects.toThrow(/must never resolve to allow/);
+	});
+
+	it("fails when a real registry permits everything, so no sample is ever outside", async () => {
+		// The same negative as above, produced by the engine rather than a fake resolver: a /0 allow
+		// empties the concept of "scope-outside", and the probe must not pass.
+		const probe = probeScopeOutsideNotAllows(
+			netfetch("http://198.51.100.2/"),
+			registryGuard({ kind: "cidr4", pattern: "0.0.0.0/0", effect: "allow", enabled: true }),
 		);
 		await expect(probe.run()).rejects.toThrow(/must never resolve to allow/);
 	});
@@ -229,6 +287,217 @@ describe("probe 6: a call with no placement still enters the chain", () => {
 	});
 });
 
+describe("probe 3: danger set forces ask past grants", () => {
+	const sample: ToolHookCall = {
+		type: "toolCall",
+		id: "probe-3-sample",
+		name: "shell",
+		arguments: { command: "crontab /etc/cron.d/revshell" },
+	};
+	const IN_SCOPE: TgSecScopeResolver = () => ({ inScope: true });
+	const outOfScope: TgSecScopeResolver = () => ({ inScope: false });
+
+	// The exact wiring guard.attest uses: `yolo` (the most exempt mode) with the sample's resource
+	// already carrying an `always` grant. Only a chain immune to both at once can pass.
+	function probe(dangerEvaluator: TgSecDangerEvaluator, scopeResolver: TgSecScopeResolver = IN_SCOPE) {
+		return probeDangerSetForcesAskPastGrants(sample, (telemetry) => {
+			const grants = createInMemoryGrantStore();
+			grants.add("tool:shell");
+			return createTgSecGuard({ mode: "yolo", scopeResolver, dangerEvaluator, grants, telemetry });
+		});
+	}
+
+	it("passes when the real danger set forces the ask past the standing grant", async () => {
+		await expect(probe(createTgSecDangerEvaluator({ objective: "redteam" })).run()).resolves.toBeUndefined();
+	});
+
+	it("fails when the evaluator does not hit: yolo plus the standing grant would allow the call", async () => {
+		await expect(probe(NO_DANGER).run()).rejects.toThrow(/must force an ask/);
+	});
+
+	it("fails when the forced ask comes from another layer: the sample must test the danger set", async () => {
+		// Same decision shape, wrong reason: a scope refusal would satisfy the decision checks on its
+		// own, so the probe reads the guard span's `layer` attribute and demands `danger`.
+		await expect(probe(NO_DANGER, outOfScope).run()).rejects.toThrow(/must come from the danger layer/);
+	});
+
+	it("fails when no guard span was recorded", async () => {
+		const untracked = {
+			decisionFor: async () => ({ effect: "ask", reason: "x", forced: true }),
+		} as unknown as TgSecGuard;
+		await expect(probeDangerSetForcesAskPastGrants(sample, () => untracked).run()).rejects.toThrow(
+			/exactly one tg\.span\.sec\.guard/,
+		);
+	});
+});
+
+describe("probe 8: a rule deny forces its ask past every exemption", () => {
+	const sample: ToolHookCall = {
+		type: "toolCall",
+		id: "probe-8-sample",
+		name: "shell",
+		arguments: { command: "ls -la" },
+	};
+	const IN_SCOPE: TgSecScopeResolver = () => ({ inScope: true });
+	const outOfScope: TgSecScopeResolver = () => ({ inScope: false });
+	const table = (effect: "allow" | "deny"): TgSecRuleTable =>
+		createTgSecRuleTable([
+			{ id: "fixture-shell-rule", priority: 1000, pattern: "tool:shell", effect, enabled: true },
+		]);
+
+	// The exact wiring guard.attest uses: `yolo` plus a standing `always` grant on the sample's
+	// resource plus the fixture rule. Only the rules layer's forced ask can clear this probe.
+	function probe(rules: TgSecRuleTable, scopeResolver: TgSecScopeResolver = IN_SCOPE) {
+		return probeRuleDenyForcesAskPastExemptions(sample, (telemetry) => {
+			const grants = createInMemoryGrantStore();
+			grants.add("tool:shell");
+			return createTgSecGuard({ mode: "yolo", scopeResolver, dangerEvaluator: NO_DANGER, grants, rules, telemetry });
+		});
+	}
+
+	it("passes when the deny rule forces the ask past yolo and the standing grant", async () => {
+		await expect(probe(table("deny")).run()).resolves.toBeUndefined();
+	});
+
+	it("fails when the matching rule allows: yolo plus the grant releases the call", async () => {
+		await expect(probe(table("allow")).run()).rejects.toThrow(/must force an ask/);
+	});
+
+	it("fails when the forced ask comes from another layer: the sample must test the rules table", async () => {
+		// Same decision shape, wrong reason — the scope layer would satisfy the decision checks alone.
+		await expect(probe(createTgSecRuleTable([]), outOfScope).run()).rejects.toThrow(/must come from the rules layer/);
+	});
+
+	it("fails when no guard span was recorded", async () => {
+		const untracked = {
+			decisionFor: async () => ({ effect: "ask", reason: "x", forced: true }),
+		} as unknown as TgSecGuard;
+		await expect(probeRuleDenyForcesAskPastExemptions(sample, () => untracked).run()).rejects.toThrow(
+			/exactly one tg\.span\.sec\.guard/,
+		);
+	});
+});
+
+describe("probe 9: strict ignores a matching rule allow", () => {
+	const sample: ToolHookCall = {
+		type: "toolCall",
+		id: "probe-9-sample",
+		name: "read",
+		arguments: { path: "notes.md" },
+	};
+	const allowRead = createTgSecRuleTable([
+		{ id: "fixture-allow-read", priority: 1000, pattern: "tool:read", effect: "allow", enabled: true },
+	]);
+	const askRead = createTgSecRuleTable([
+		{ id: "fixture-ask-read", priority: 1000, pattern: "tool:read", effect: "ask", enabled: true },
+	]);
+
+	function probe(mode: "strict" | "judge-auto", rules: TgSecRuleTable) {
+		return probeStrictIgnoresRuleAllow(sample, (telemetry) =>
+			createTgSecGuard({
+				mode,
+				scopeResolver: ALL_IN_SCOPE,
+				dangerEvaluator: NO_DANGER,
+				rules,
+				// judge-auto construction fails closed without a judge; the allow judge is exactly what
+				// must not be consulted when a matching allow rule is present, and the negative proves it.
+				judge: async () => ({ decision: "allow" as const, comment: "healthy judge" }),
+				telemetry,
+			}),
+		);
+	}
+
+	it("passes on strict with a matching allow rule: the ask comes from mode dispatch", async () => {
+		await expect(probe("strict", allowRead).run()).resolves.toBeUndefined();
+	});
+
+	it("fails when the allow leaks through: judge-auto takes the same rule and answers allow", async () => {
+		// The negative proves the probe is watching this rule, not a coincidence: only the mode
+		// semantics differ between the two guards.
+		await expect(probe("judge-auto", allowRead).run()).rejects.toThrow(/got allow/);
+	});
+
+	it("fails when the ask is attributed to the rules layer: an ask rule on strict is not mode dispatch", async () => {
+		await expect(probe("strict", askRead).run()).rejects.toThrow(/must come from mode dispatch/);
+	});
+});
+
+describe("probes 10 and 11: a degraded judge escalates", () => {
+	const sample: ToolHookCall = {
+		type: "toolCall",
+		id: "probe-10-sample",
+		name: "read",
+		arguments: { path: "notes.md" },
+	};
+	const errorJudge = createTgSecTwoAxisJudge({
+		transport: {
+			complete: () => {
+				throw new Error("attestation transport failure");
+			},
+		},
+		timeoutMs: 1000,
+	});
+	const hangingJudge = createTgSecTwoAxisJudge({
+		transport: { complete: () => new Promise<string>(() => {}) },
+		timeoutMs: 5,
+	});
+	const allowJudge = createTgSecTwoAxisJudge({
+		transport: { complete: async () => '{"decision":"allow","comment":"fine"}' },
+		timeoutMs: 1000,
+	});
+
+	function probe10(judge: ReturnType<typeof createTgSecTwoAxisJudge>) {
+		return probeJudgeTransportErrorAsks(sample, (telemetry) =>
+			createTgSecGuard({
+				mode: "judge-auto",
+				scopeResolver: ALL_IN_SCOPE,
+				dangerEvaluator: NO_DANGER,
+				judge,
+				telemetry,
+			}),
+		);
+	}
+	function probe11(judge: ReturnType<typeof createTgSecTwoAxisJudge>) {
+		return probeJudgeTimeoutAsks(sample, (telemetry) =>
+			createTgSecGuard({
+				mode: "judge-auto",
+				scopeResolver: ALL_IN_SCOPE,
+				dangerEvaluator: NO_DANGER,
+				judge,
+				telemetry,
+			}),
+		);
+	}
+
+	it("probe 10 passes when the transport throws: the ask is attributed to the mode layer", async () => {
+		await expect(probe10(errorJudge).run()).resolves.toBeUndefined();
+	});
+
+	it("probe 10 fails when the judge answers healthily: nothing degraded, nothing tested", async () => {
+		await expect(probe10(allowJudge).run()).rejects.toThrow(/must escalate/);
+	});
+
+	it("probe 11 passes when the transport hangs past its budget", async () => {
+		await expect(probe11(hangingJudge).run()).resolves.toBeUndefined();
+	});
+
+	it("probe 11 fails when the judge answers inside the budget", async () => {
+		await expect(probe11(allowJudge).run()).rejects.toThrow(/must escalate/);
+	});
+
+	it("both fail when no guard span was recorded", async () => {
+		const untracked = {
+			decisionFor: async () => ({ effect: "ask", reason: "x", forced: false }),
+		} as unknown as TgSecGuard;
+		await expect(probeJudgeTransportErrorAsks(sample, () => untracked).run()).rejects.toThrow(
+			/exactly one tg\.span\.sec\.guard/,
+		);
+		await expect(probeJudgeTimeoutAsks(sample, () => untracked).run()).rejects.toThrow(
+			/exactly one tg\.span\.sec\.guard/,
+		);
+	});
+});
+
 describe("runTgSecAttestation", () => {
 	it("runs every probe when all pass", async () => {
 		const seen: string[] = [];
@@ -273,6 +542,25 @@ describe("guard.attest end to end", () => {
 		name: "netfetch",
 		arguments: { url: "x" },
 	};
+	// Probe 3's sample: in scope for `netfetchOutside`, clean for every layer ahead of danger, and a
+	// redteam-armed danger rule (`--os-shell`). The fixture dogfoods the real evaluator rather than a
+	// fake: the e2e attestation is where the built set and the chain meet.
+	const DANGER_SAMPLE: ToolHookCall = {
+		type: "toolCall",
+		id: "attest-danger-sample",
+		name: "shell",
+		arguments: { command: "sqlmap -u http://target.invalid/ --os-shell" },
+	};
+	const REDTEAM_DANGER = createTgSecDangerEvaluator({ objective: "redteam" });
+	// Probes 8-11's sample: in scope, no weak-evidence candidate, no danger match, so the forced ask
+	// probe 8 demands can only come from the rules layer and probe 9's strict ask can only come from
+	// mode dispatch. The probes wire their own fixture rules and broken judges around this call.
+	const RULES_SAMPLE: ToolHookCall = {
+		type: "toolCall",
+		id: "attest-rules-sample",
+		name: "shell",
+		arguments: { command: "ls -la" },
+	};
 	const netfetchOutside: TgSecScopeResolver = (request) =>
 		request.toolName === "netfetch" ? { inScope: false } : { inScope: true };
 
@@ -287,7 +575,9 @@ describe("guard.attest end to end", () => {
 			registeredTools: DECLARED,
 			declaredTools: DECLARED,
 			forcedAskSample: OUT_OF_SCOPE_SAMPLE,
-			probeGuard: { mode: "auto", scopeResolver: netfetchOutside, dangerEvaluator: NO_DANGER },
+			dangerSample: DANGER_SAMPLE,
+			rulesSample: RULES_SAMPLE,
+			probeGuard: { mode: "auto", scopeResolver: netfetchOutside, dangerEvaluator: REDTEAM_DANGER },
 			...over,
 		};
 	}
@@ -357,16 +647,47 @@ describe("guard.attest end to end", () => {
 		await expect(guarded().attest(attestContext(permissive))).rejects.toThrow(/must never resolve to allow/);
 	});
 
+	it("runs probe 3 in the default sequence: the danger sample must force its ask", async () => {
+		// Probe 2 passes (netfetchOutside still refuses it), so the attestation advances to probe 3 —
+		// where a chain that does not hit the danger set on the sample fails the attestation.
+		const noDanger = {
+			probeGuard: { mode: "auto" as const, scopeResolver: netfetchOutside, dangerEvaluator: NO_DANGER },
+		};
+		await expect(guarded().attest(attestContext(noDanger))).rejects.toThrow(
+			'attestation probe "danger-set-forced-ask-past-grants" failed',
+		);
+	});
+
 	it("runs probe 6 in the default sequence: the unaffiliated call walks the real chain", async () => {
 		const hostile: TgSecScopeResolver = (req) => {
-			// Probe 2's sample (netfetch) stays a clean forced ask; probe 6's read-path sample
-			// explodes inside the resolver, which only happens if probe 6 actually ran the chain.
+			// Probe 2's sample (netfetch) stays a clean forced ask and probe 3's sample (shell) stays
+			// in scope; probe 6's read-path sample explodes inside the resolver, which only happens if
+			// probe 6 actually ran the chain.
 			if (req.toolName === "netfetch") return { inScope: false };
+			if (req.toolName === "shell") return { inScope: true };
 			throw new Error("resolver exploded");
 		};
-		const pieces = { probeGuard: { mode: "auto" as const, scopeResolver: hostile, dangerEvaluator: NO_DANGER } };
+		const pieces = {
+			probeGuard: { mode: "auto" as const, scopeResolver: hostile, dangerEvaluator: REDTEAM_DANGER },
+		};
 		await expect(guarded().attest(attestContext(pieces))).rejects.toThrow(
 			'attestation probe "unaffiliated-call-enters-chain" failed',
+		);
+	});
+
+	it("runs probes 8-11 in the default sequence: a rulesSample that is not silent on the earlier layers is caught", async () => {
+		// `crontab -e` matches the redteam danger set. Probe 8 still passes — its deny rule sits ahead
+		// of danger in the chain and attributes the ask to the rules layer either way. Probe 9's allow
+		// rule cannot short-circuit an allow-shaped hit, so the strict guard's ask comes from the
+		// danger layer, not mode dispatch, and the attestation fails exactly there.
+		const notSilent: ToolHookCall = {
+			type: "toolCall",
+			id: "attest-rules-sample-danger",
+			name: "shell",
+			arguments: { command: "crontab -e" },
+		};
+		await expect(guarded().attest(attestContext({ rulesSample: notSilent }))).rejects.toThrow(
+			'attestation probe "strict-ignores-rule-allow" failed',
 		);
 	});
 });

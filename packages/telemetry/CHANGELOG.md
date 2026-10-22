@@ -8,6 +8,21 @@
   adopted from the [pi agent](https://github.com/earendil-works/pi) project; only the naming layer
   changed. No module was added, removed, or restructured, and the public API is unchanged.
 - The `description` field no longer references the upstream project; it describes TianGong.
+- `tg.span.sec.guard`'s `layer` values gained `self-protection`: a weak-evidence loopback or
+  local-interface hit is an ask raised on its own layer, not a hard-deny result, so the value is
+  required to keep the attribute recording the layer that actually produced the decision. Synced
+  with `TgSecMatchedLayer` in `@OnePanda-TgSec/tg-sec-guard`, which is the only consumer. The
+  `rule` description now says the attribute is present when the layer is `hard-deny` **or**
+  `self-protection`.
+- The `tg.span.sec.guard` `rule` description widened again with batch 2a: the attribute is present
+  for the `hard-deny` and `self-protection` layers, and when the `danger` evaluator names its rule
+  on a danger-layer hit (`TgSecDangerRuleId` in `@OnePanda-TgSec/tg-sec-guard`).
+- `tg.span.sec.guard`'s `layer` values gained `rules` (batch 2b), placed after `hard-deny` to
+  mirror the chain: the intercept rules table's deny (forced ask) and ask run ahead of
+  self-protection, and a rules-table allow taken inside mode dispatch attributes to this layer as
+  well. Operator rule ids are free text and stay out of the `rule` vocabulary; the attribution
+  names the winning rule in the ask reason, which never enters the span. Synced with
+  `TgSecMatchedLayer` in `@OnePanda-TgSec/tg-sec-guard`, the only producer of these values.
 
 ### Added
 
@@ -24,6 +39,12 @@
   mode switch carrying `from`, `to`, and `actor`. No span carries command text or argument values.
 - `self-destruction.rm-home` in the `tg.span.sec.guard` `rule` values: the new hard-deny rule for
   `rm -rf ~` / `rm -rf $HOME`, kept in sync with `TgSecHardDenyRuleId` in `@OnePanda-TgSec/tg-sec-guard`.
+- The 32 `danger.*` ids in the `tg.span.sec.guard` `rule` values, covering the batch 2a
+  dangerous-instruction set in `@OnePanda-TgSec/tg-sec-guard` (`danger.sql.*`, `danger.tool.*`,
+  `danger.web.*`, `danger.redis.*`, `danger.mongo.*`, `danger.persist.*`, `danger.rm.system-path`,
+  `danger.business.*`, `danger.wordlist.huge`, `danger.bruteforce.*`). Kept in lockstep with
+  `TgSecDangerRuleId`, the only producer of these values; the attribute stays a closed
+  low-cardinality enumeration — no command text ever enters the span.
 
 ### Removed
 

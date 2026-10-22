@@ -103,6 +103,20 @@
         "vitest": "4.1.11",
       },
     },
+    "packages/sec-guard": {
+      "name": "@OnePanda-TgSec/tg-sec-guard",
+      "version": "2.0.1",
+      "dependencies": {
+        "@OnePanda-TgSec/chord": "^2.0.1",
+        "@OnePanda-TgSec/tg-ai": "^2.0.1",
+        "@OnePanda-TgSec/tg-gibraltar": "^2.0.1",
+        "@OnePanda-TgSec/tg-telemetry": "^2.0.1",
+      },
+      "devDependencies": {
+        "shx": "0.4.0",
+        "vitest": "4.1.11",
+      },
+    },
     "packages/telemetry": {
       "name": "@OnePanda-TgSec/tg-telemetry",
       "version": "2.0.1",
@@ -132,6 +146,8 @@
     "@OnePanda-TgSec/tg-env": ["@OnePanda-TgSec/tg-env@workspace:packages/env"],
 
     "@OnePanda-TgSec/tg-gibraltar": ["@OnePanda-TgSec/tg-gibraltar@workspace:packages/gibraltar"],
+
+    "@OnePanda-TgSec/tg-sec-guard": ["@OnePanda-TgSec/tg-sec-guard@workspace:packages/sec-guard"],
 
     "@OnePanda-TgSec/tg-telemetry": ["@OnePanda-TgSec/tg-telemetry@workspace:packages/telemetry"],
 

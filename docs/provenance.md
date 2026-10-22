@@ -17,6 +17,7 @@ check:house-standard` asserts against that record, so the two cannot drift apart
 | `packages/ai` | `@OnePanda-TgSec/tg-ai` | pi agent, adopted and rebranded | House |
 | `packages/gibraltar` | `@OnePanda-TgSec/tg-gibraltar` | pi agent, adopted and rebranded | House |
 | `packages/env` | `@OnePanda-TgSec/tg-env` | pi agent, adopted and rebranded | House |
+| `packages/sec-guard` | `@OnePanda-TgSec/tg-sec-guard` | **TianGong-authored**, from `docs/sec-guard-design.md` | House, added 2026-10-22 |
 | `packages/agent` | `@OnePanda-TgSec/tg-agent-core` | pi agent, adopted and rebranded | **Removed 2026-10-22** (snapshot in `scripts/legacy/agent-core`) |
 | `packages/sec-agent` | `@OnePanda-TgSec/tg-sec-agent` | pi agent, adopted and rebranded | **Removed 2026-10-22** (snapshot in `scripts/legacy/sec-agent`) |
 | `packages/codemode` | `@earendil-works/pi-codemode` | **pi agent 1.3.0, migrated verbatim** | **Vendored, frozen** |
@@ -339,8 +340,10 @@ both directories were removed from this workspace on 2026-10-22.
 ## Upstream packages deliberately not carried over
 
 The pi agent repository also publishes `pi-protocol`, `pi-client`, `pi-server`, and `pi-evals`. None
-of them are part of TianGong. The eight live `packages/` directories in the summary table are the
-whole workspace; the two removed packages stay in the table as history.
+of them are part of TianGong. The nine live `packages/` directories in the summary table are the
+whole workspace; the two removed packages stay in the table as history. Eight of the nine were
+adopted from pi and rebranded; `packages/sec-guard` is the one package authored here, from
+`docs/sec-guard-design.md`, with no upstream counterpart.
 
 `packages/ai/test/codex-websocket-cached-probe.ts` references the upstream coding-agent's
 `packages/coding-agent/src/core/model-runtime.ts`, which lived at

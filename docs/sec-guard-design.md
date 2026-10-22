@@ -46,6 +46,9 @@ env 抽象留在 gibraltar，tg-sec-guard 只做编排、策略、证明、留�
    等级**均不可豁免**。
 4. **硬 deny 凌驾四级之上**：平台自保护（loopback/本机网卡/网关/docker 网桥）与本机自毁
    （`rm -rf /`、`mkfs`、`dd of=/dev`、fork bomb、shutdown）在任何模式直接拒绝，不进人工通道。
+   批0.5a 实测边界：`node:os` 无可移植的默认网关查询 API，故本批硬 deny 覆盖 loopback
+   （hostname + v4/v6）、本机网卡地址（`networkInterfaces()` 枚举）、docker 网桥；
+   **默认网关判定顺延到批1**，由 scope 注册表承载（`hard-deny.ts:32-52`）。
 5. **优先序**：硬 deny 高于 scope 外强制 ask（与危险集强制 ask 同级），两者都高于模式分派
    （strict/judge/auto/yolo），后者高于默认 allow。forced ask 都不接受 grants/模式豁免。
 6. **judge 只是 `judge-auto` 的模式组件**，不是全局层；其余模式的判定路径全程确定性，零 LLM
@@ -69,17 +72,20 @@ env 抽象留在 gibraltar，tg-sec-guard 只做编排、策略、证明、留�
 
 ## 包定位与边界
 
-新包 `@OnePanda-TgSec/tg-sec-guard`。依赖方向（须同步更新 AGENTS.md 边界图与
-`packages/chord/test/boundary.test.ts`）：
+新包 `@OnePanda-TgSec/tg-sec-guard`。依赖方向（AGENTS.md 边界图同步；**边不由
+`boundary.test.ts` 机械保证**——该测试只证 chord 是叶子，见文末房规清单）：
 
 ```text
-gibraltar ──▶ sec-guard ◀── sec-agent（后续 sec-server 同边）
+gibraltar ──▶ sec-guard ◀── sec-agent（批3 建包后才真实存在；后续 sec-server 同边）
 telemetry ──▶ sec-guard
+ai ─────────▶ sec-guard
+chord ──────▶ sec-guard
 ```
 
-- sec-guard 依赖 gibraltar（钩子/文档/工具类型）与 telemetry（审计 span）。
-- gibraltar **不反向依赖** sec-guard；sec-guard 以 extension 形态被宿主 registry.install。
-- vendored 两包（codemode/mcp）维持零边。
+批0.5a 实测依赖：gibraltar（钩子/文档/工具类型）、telemetry（审计 span）、
+**chord**（`src` 里 `import type { Context }`，不声明就是谎报依赖图）、
+**tg-ai**（本批**已声明未使用**，批2 judge 落地才引用）。gibraltar **不反向依赖** sec-guard；
+sec-guard 以 extension 形态被宿主 registry.install。vendored 两包（codemode/mcp）维持零边。
 
 ## 核心概念与 API 目标形状
 
@@ -91,8 +97,13 @@ telemetry ──▶ sec-guard
 export type TgSecPermissionMode = "strict" | "judge-auto" | "auto" | "yolo";
 ```
 
-- 会话级持久文档 `tg.sec.mode`（用 gibraltar `defineDoc`，documents.ts:39），rewindable；
-  热切换 = 写文档 + 落审计 span `tg.span.sec.mode_switch`（含 from/to/操作者）。
+- 会话级持久文档 `tg.sec.mode`（用 gibraltar `defineDoc` 的 **session 作用域**重载，
+  documents.ts:39）。批0.5a 勘误：原文的 "rewindable" 是 conversation 文档概念，session 作用域
+  文档不涉 rewind，措辞作废。
+- 热切换 = 写文档 + 落审计 span **`tg.span.sec.mode`**（含 from/to/操作者）。批0.5a 勘误：原
+  命名 `mode_switch` 违反 telemetry 自身的命名不变量 `packages/telemetry/test/spans.test.ts:4`
+  （`/^tg\.span\.[a-z][a-z0-9.]*$/`，不接受下划线），且现有词表一律是 `tg.span.<layer>.<event>`
+  两段式（`provider.acquire`、`agent.turn`）——按代码现实收敛为 `tg.span.sec.mode`。
 - campaign 默认值来自 scope 注册（操作者侧 `.tiangong/` 配置，不做仓库可控文件）。
 
 ### 决策与求值
@@ -116,20 +127,29 @@ export type TgSecGuard = {
 0. **入口硬约束**：每个 tool call 必进本链——包括 resume/崩溃恢复态、无 placement、无关联
    assistant 消息的调用（接线复盘 P1-5 的教训：桥接层当时"未命中即 return undefined"，让恢复态
    调用绕过权限与 block 钩子）。gibraltar 原生 `beforeTool` 每 call 必问，本包不得在任何分支
-   提前 return 跳过。
+   提前 return 跳过。**已核实（批0.5a）**：`harness/tool.ts` 的 beforeTool 循环把钩子抛错转成
+   `block`（catch → `block = errorMessage(error)`，非 abort 信号路径），因此模式文档读到非法值
+   时抛错即 fail-closed，不构成旁路——本包的 attestation 探针 5 依赖这一事实。
 1. **硬 deny** → `deny, hard: true`（无 ask 通道，模型看到的就是 block 错误）。硬 deny 先于
    scope 判定：scope 内目标也不允许触发平台自保护/本机自毁。
 2. **scope 判定**（bash/网络类工具，见下节解析器）：目标主机不在 scope 注册表 →
    `ask, forced: true`（scope 是唯一许可来源，与危险集同级，不受 grants/模式豁免）；在表内 →
    继续。
 3. **危险集命中** → `ask, forced: true`（不接受 always 豁免；grants 查询跳过此项）。
-4. **模式分派**：`strict` → ask；`judge-auto` → judge；`auto`/`yolo` → 查 grants 缓存（always）
-   后 allow。
+4. **模式分派**：`strict` → ask；`judge-auto` → judge；**grants 查询只发生在 `auto`/`yolo` 分支
+   内部**（命中 → allow）→ allow。批0.5a 曾把 grants 放成模式分派前的全局前置，导致 strict 下
+   一次 `always` 就把 L1 降成 L3——已定为缺陷并修正：**strict 与 judge-auto 永久无视 grants**
+   （依据是四级定义本身，不是实现便利）。
 5. judge（仅 judge-auto）：输入 = 工具名 + 参数摘要 + 当前 scope 上下文；输出严格 JSON
    `{decision: "allow"|"ask", comment}`；解析失败/超时/判不下 → **ask**（judge 无 deny 权，
    deny 只能来自硬 deny 与规则表）。两轴提示（可逆性×作用对象）借鉴 ARTEX
    intercept/prompt.go 的思路重写，不复制其 prompt 文本。
 6. 每次判定（含放行）落 `tg.span.sec.guard`：mode、命中层、decision、reason、参数摘要哈希。
+   批0.5a 实现收敛（已核实为正确取舍，取代原文）：span 属性一律低基数封闭枚举——
+   `mode` / `layer`(`hard-deny|scope|danger|grants|mode`) / `effect` / `forced` /
+   `rule`（硬 deny 规则名枚举），参数只记 `argsDigest`（单向摘要、`sensitive: true`）。
+   **`decision.reason` 是自由文本，不进 span**——否则命令原文会泄进遥测。审计所需的人读文本
+   走 durable 记录与 ask 通道，不走 span。
 
 ### 危险集（参数级，命令文本解析）
 

@@ -1,0 +1,55 @@
+{
+	"name": "@OnePanda-TgSec/tg-sec-guard",
+	"version": "2.0.1",
+	"description": "TianGong security guard: four-level permission mode machine, hard deny, grants, and attestation",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"source": "./src/index.ts",
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js",
+			"default": "./dist/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"sideEffects": false,
+	"files": [
+		"dist",
+		"README.md",
+		"CHANGELOG.md"
+	],
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"build": "tsc -p tsconfig.build.json",
+		"test": "vitest --run",
+		"prepublishOnly": "bun run clean && bun run build"
+	},
+	"keywords": [
+		"security",
+		"permissions",
+		"attestation",
+		"agents"
+	],
+	"author": "KoGFuzi",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/KoGFuzi/TianGong.git",
+		"directory": "packages/sec-guard"
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"dependencies": {
+		"@OnePanda-TgSec/chord": "^2.0.1",
+		"@OnePanda-TgSec/tg-ai": "^2.0.1",
+		"@OnePanda-TgSec/tg-gibraltar": "^2.0.1",
+		"@OnePanda-TgSec/tg-telemetry": "^2.0.1"
+	},
+	"devDependencies": {
+		"shx": "0.4.0",
+		"vitest": "4.1.11"
+	}
+}

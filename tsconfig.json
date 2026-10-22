@@ -27,6 +27,7 @@
 				"./packages/gibraltar/src/*/index.ts",
 				"./packages/gibraltar/src/*"
 			],
+			"@OnePanda-TgSec/tg-sec-guard": ["./packages/sec-guard/src/index.ts"],
 			"@OnePanda-TgSec/tg-tui": ["./packages/tui/src/index.ts"],
 			"@OnePanda-TgSec/tg-tui/*": ["./packages/tui/src/*"],
 			"@earendil-works/pi-codemode": ["./packages/codemode/src/index.ts"],

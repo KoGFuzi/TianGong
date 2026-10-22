@@ -18,6 +18,10 @@
   `tg.span.provider.acquire`, `tg.span.provider.request`, `tg.span.agent.turn`, and
   `tg.span.agent.tool`, declared as typed schema data. Every attribute is a count or a closed
   enumeration; no span carries prompt text, tool arguments, or paths.
+- `tg.span.sec.guard` and `tg.span.sec.mode` in `TG_SPAN_SCHEMA`, the audit vocabulary for
+  `@OnePanda-TgSec/tg-sec-guard`: one span per guard decision (allow included) carrying mode,
+  matching layer, effect, forced flag, and a truncated argument digest, and one span per permission
+  mode switch carrying `from`, `to`, and `actor`. No span carries command text or argument values.
 
 ### Removed
 

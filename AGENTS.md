@@ -13,7 +13,7 @@ suites already are.
 ```bash
 bun install          # workspace install, hoisted node_modules, exact versions
 bun run check        # house standard + formatting + types + relative imports
-bun run build        # builds all 10 packages in dependency order
+bun run build        # builds all 9 packages in dependency order
 bun run test         # runs every package suite in dependency order
 bun run clean        # removes dist/ and generated model data
 ```
@@ -30,7 +30,7 @@ Never hand-run `tsc`, `biome`, or `vitest` from a package root when a root scrip
 | Concern | Value |
 | --- | --- |
 | Scope | `@OnePanda-TgSec` |
-| Packages | `@OnePanda-TgSec/tg-ai`, `tg-env`, `tg-gibraltar`, `tg-telemetry`, `tg-tui`, and `chord` |
+| Packages | `@OnePanda-TgSec/tg-ai`, `tg-env`, `tg-gibraltar`, `tg-sec-guard`, `tg-telemetry`, `tg-tui`, and `chord` |
 | Root repo name | `tiangong` |
 | Upstream repo | `https://github.com/KoGFuzi/TianGong` |
 | Author field | `KoGFuzi` |
@@ -248,12 +248,18 @@ Dependency edges, verified by `packages/chord/test/boundary.test.ts` and by the 
 telemetry ──▶ ai ──▶ gibraltar ──▶ env
 chord ───────────────────┴──────────┘
 
+chord ──┐
+ai ─────┼──▶ sec-guard       (the guard depends on these four; no package depends on the guard)
+gibraltar ─┤
+telemetry ─┘
+
 tui                      (leaf; no remaining package depends on it)
 codemode   mcp           (vendored, no edges in or out)
 ```
 
 Arrows point from a package toward the packages that depend on it.
-`tg-gibraltar` depends on `chord` and `tg-ai`, and `tg-env` depends on `chord` and `tg-gibraltar`.
+`tg-gibraltar` depends on `chord` and `tg-ai`, `tg-env` depends on `chord` and `tg-gibraltar`, and
+`tg-sec-guard` depends on `chord`, `tg-ai`, `tg-gibraltar`, and `tg-telemetry`.
 `chord`, `tui`, `telemetry`, `codemode`, and `mcp` are leaves: they import
 nothing from this workspace. That is what keeps `chord` publishable on its own.
 
@@ -291,7 +297,7 @@ Several sessions may share this working directory.
 - Commit only files changed in the current session. Run `git status` and verify before committing.
 - Never run `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, or
   `git commit --no-verify`.
-- Commit message format: `{feat,fix,docs,refactor,chore}[(ai,tui,gibraltar,chord,telemetry,mcp,codemode)]: <message>`.
+- Commit message format: `{feat,fix,docs,refactor,chore}[(ai,tui,gibraltar,chord,telemetry,mcp,codemode,sec-guard)]: <message>`.
 - Never commit unless asked.
 
 ## Changelog

@@ -130,5 +130,91 @@ export const TG_SPAN_SCHEMA = defineTelemetrySchema({
 			},
 			status: { default: "ok", errorWhen: "The tool call fails, is denied, or throws." },
 		},
+		"tg.span.sec.guard": {
+			description:
+				"One tg-sec-guard decision. Every tool call records exactly one, allow included. Attributes carry the mode, a truncated digest of the arguments, and the decision; never the command text or any argument value.",
+			parents: { kind: "root_or_external" },
+			startAttributes: {
+				mode: {
+					type: "string",
+					values: ["strict", "judge-auto", "auto", "yolo"],
+					required: true,
+					cardinality: "low",
+					description: "The permission mode in effect for the call.",
+				},
+				argsDigest: {
+					type: "string",
+					required: true,
+					cardinality: "low",
+					sensitive: true,
+					description:
+						"Truncated one-way digest of the call arguments, for correlating identical calls. Bounded; never reversible to argument text.",
+				},
+			},
+			endAttributes: {
+				layer: {
+					type: "string",
+					values: ["hard-deny", "scope", "danger", "grants", "mode"],
+					cardinality: "low",
+					description: "The evaluation layer that produced the decision.",
+				},
+				effect: {
+					type: "string",
+					values: ["allow", "deny", "ask"],
+					cardinality: "low",
+					description: "The decision effect.",
+				},
+				forced: {
+					type: "boolean",
+					cardinality: "low",
+					description: "Whether an ask was forced and therefore immune to grants and mode exemptions.",
+				},
+				rule: {
+					type: "string",
+					values: [
+						"self-protection.loopback-hostname",
+						"self-protection.loopback-v4",
+						"self-protection.loopback-v6",
+						"self-protection.local-interface",
+						"self-destruction.rm-root",
+						"self-destruction.mkfs",
+						"self-destruction.dd-device",
+						"self-destruction.fork-bomb",
+						"self-destruction.power",
+					],
+					cardinality: "low",
+					description: "The built-in hard-deny rule that matched. Present only when layer is hard-deny.",
+				},
+			},
+			status: { default: "ok", errorWhen: "The guard evaluation throws." },
+		},
+		"tg.span.sec.mode": {
+			description: "One hot switch of the session permission mode, recorded when the switch is committed.",
+			parents: { kind: "root_or_external" },
+			startAttributes: {
+				from: {
+					type: "string",
+					values: ["strict", "judge-auto", "auto", "yolo"],
+					required: true,
+					cardinality: "low",
+					description: "The mode being replaced.",
+				},
+				to: {
+					type: "string",
+					values: ["strict", "judge-auto", "auto", "yolo"],
+					required: true,
+					cardinality: "low",
+					description: "The mode being adopted.",
+				},
+				actor: {
+					type: "string",
+					required: true,
+					cardinality: "low",
+					description: "Who performed the switch, as an opaque operator identifier. Never free text.",
+				},
+			},
+			endAttributes: {},
+			status: { default: "ok", errorWhen: "The switch commit throws." },
+		},
 	},
 });

@@ -106,7 +106,7 @@ const startSpan = createTypedSpanStarter([schema]);
 
 ## Span 词表（第一批）
 
-包内导出一份开箱即用的词表 `TG_SPAN_SCHEMA`，`tg-ai` 与 `tg-agent-core` 的全部埋点都记录在它
+包内导出一份开箱即用的词表 `TG_SPAN_SCHEMA`，`tg-ai` 的全部埋点都记录在它
 上面。词表之外的 span 名在类型层面即被拒绝：
 
 | Span | 层 | 父 | 关键属性（全部低基数） |

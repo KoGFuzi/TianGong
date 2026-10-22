@@ -7,5 +7,6 @@
 		"allowImportingTsExtensions": true,
 		"types": ["node", "bun"]
 	},
-	"include": ["scripts/**/*.ts"]
+	"include": ["scripts/**/*.ts"],
+	"exclude": ["scripts/legacy/**/*"]
 }

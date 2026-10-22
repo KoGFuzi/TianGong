@@ -30,7 +30,7 @@ Never hand-run `tsc`, `biome`, or `vitest` from a package root when a root scrip
 | Concern | Value |
 | --- | --- |
 | Scope | `@OnePanda-TgSec` |
-| Packages | `@OnePanda-TgSec/tg-ai`, `tg-agent-core`, `tg-sec-agent`, `tg-env`, `tg-gibraltar`, `tg-telemetry`, `tg-tui`, and `chord` |
+| Packages | `@OnePanda-TgSec/tg-ai`, `tg-env`, `tg-gibraltar`, `tg-telemetry`, `tg-tui`, and `chord` |
 | Root repo name | `tiangong` |
 | Upstream repo | `https://github.com/KoGFuzi/TianGong` |
 | Author field | `KoGFuzi` |
@@ -245,21 +245,17 @@ Dependency edges, verified by `packages/chord/test/boundary.test.ts` and by the 
 `tsconfig.json` path map:
 
 ```text
-telemetry ──▶ ai ──┬──▶ agent ──▶ sec-agent
-   └───────────────┘                 ▲
-                   └──▶ gibraltar ──▶ env ▲
-chord ─────────────┴───────────────────────┘
-tui ──────────────────────────────────────▶ sec-agent
+telemetry ──▶ ai ──▶ gibraltar ──▶ env
+chord ───────────────────┴──────────┘
 
-codemode   mcp                     (vendored, no edges in or out)
+tui                      (leaf; no remaining package depends on it)
+codemode   mcp           (vendored, no edges in or out)
 ```
 
-Arrows point from a package toward the packages that depend on it. `tg-agent-core` depends on
-both `tg-ai` and `tg-telemetry` (it records turn/tool spans against the shared vocabulary);
+Arrows point from a package toward the packages that depend on it.
 `tg-gibraltar` depends on `chord` and `tg-ai`, and `tg-env` depends on `chord` and `tg-gibraltar`.
-`tg-sec-agent` depends on `tg-ai`, `tg-agent-core`, and `tg-tui`, plus the two vendored packages.
-`chord`, `tui`, `telemetry`, `codemode`, and `mcp` are leaves: they import nothing from this
-workspace. That is what keeps `chord` publishable on its own.
+`chord`, `tui`, `telemetry`, `codemode`, and `mcp` are leaves: they import
+nothing from this workspace. That is what keeps `chord` publishable on its own.
 
 Do not call `bun test`. Bun reserves that name for its own runner, which would silently bypass
 every per-package Vitest and `node:test` configuration. Use `bun run test`.
@@ -274,8 +270,6 @@ every per-package Vitest and `node:test` configuration. Use `bun run test`.
   `bun run vitest --run test/specific.test.ts`, or for `packages/tui` (`node:test`),
   `bun run test -- test/specific.test.ts`.
 - If you add or change a test, run it and iterate until it passes.
-- `packages/sec-agent`'s find and grep suites need `fd` and `rg` on `PATH`; they exercise the real
-  tools rather than skipping when those are absent.
 - `packages/gibraltar/test/**` must use the faux provider. No real provider APIs or paid tokens.
 - Regression tests for a specific issue carry a comment with the issue number.
 - Ad-hoc scripts go in a temp file, get run, then get deleted. Do not inline multi-line scripts
@@ -297,7 +291,7 @@ Several sessions may share this working directory.
 - Commit only files changed in the current session. Run `git status` and verify before committing.
 - Never run `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, or
   `git commit --no-verify`.
-- Commit message format: `{feat,fix,docs,refactor,chore}[(ai,tui,agent,gibraltar,chord,telemetry,mcp,codemode)]: <message>`.
+- Commit message format: `{feat,fix,docs,refactor,chore}[(ai,tui,gibraltar,chord,telemetry,mcp,codemode)]: <message>`.
 - Never commit unless asked.
 
 ## Changelog

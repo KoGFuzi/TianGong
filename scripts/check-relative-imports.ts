@@ -7,10 +7,11 @@
  * gives one error message instead of a wall of module-resolution noise from `tsc`.
  */
 import { readdir, readFile } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { listPackages, repoRoot } from "./lib/packages.ts";
 
 const root = repoRoot();
+const LEGACY_ARCHIVE = resolve(root, "scripts", "legacy");
 const packages = await listPackages(root);
 const IGNORED_DIRECTORIES = new Set(["node_modules", "dist", ".artifacts", "native"]);
 const ALLOWED_EXTENSIONS = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs|json|node)$/;
@@ -29,6 +30,8 @@ const violations: string[] = [];
 
 async function scan(directory: string): Promise<void> {
 	for await (const file of walk(directory)) {
+		// Retired source kept for reference: never compiled and never imported, so its specifiers are not ours to police.
+		if (file.startsWith(`${LEGACY_ARCHIVE}${sep}`)) continue;
 		const source = await readFile(file, "utf8");
 		for (const match of source.matchAll(SPECIFIER)) {
 			const specifier = match[1]!;

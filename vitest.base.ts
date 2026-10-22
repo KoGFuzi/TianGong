@@ -29,7 +29,6 @@ export const workspaceSourcePaths = {
 	gibraltarIndex: fileURLToPath(new URL("./packages/gibraltar/src/index.ts", import.meta.url)),
 	gibraltarTesting: fileURLToPath(new URL("./packages/gibraltar/src/testing/index.ts", import.meta.url)),
 	gibraltarRoot: fileURLToPath(new URL("./packages/gibraltar/src", import.meta.url)),
-	agentIndex: fileURLToPath(new URL("./packages/agent/src/index.ts", import.meta.url)),
 	envIndex: fileURLToPath(new URL("./packages/env/src/index.ts", import.meta.url)),
 	tuiIndex: fileURLToPath(new URL("./packages/tui/src/index.ts", import.meta.url)),
 	tuiRoot: fileURLToPath(new URL("./packages/tui/src", import.meta.url)),
@@ -77,7 +76,6 @@ export default defineConfig({
 				find: /^@OnePanda-TgSec\/tg-gibraltar\/(.+)$/,
 				replacement: `${workspaceSourcePaths.gibraltarRoot}/$1.ts`,
 			},
-			{ find: /^@OnePanda-TgSec\/tg-agent-core$/, replacement: workspaceSourcePaths.agentIndex },
 			{ find: /^@OnePanda-TgSec\/tg-env$/, replacement: workspaceSourcePaths.envIndex },
 			{ find: /^@OnePanda-TgSec\/tg-tui$/, replacement: workspaceSourcePaths.tuiIndex },
 			{

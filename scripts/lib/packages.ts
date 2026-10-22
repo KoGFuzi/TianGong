@@ -11,12 +11,10 @@ export const HOUSE_SCOPE = "@OnePanda-TgSec";
 
 /** House packages whose name carries the `tg-` prefix. `chord` is the one house package without it. */
 export const HOUSE_NAMES = [
-	"@OnePanda-TgSec/tg-agent-core",
 	"@OnePanda-TgSec/tg-ai",
 	"@OnePanda-TgSec/chord",
 	"@OnePanda-TgSec/tg-env",
 	"@OnePanda-TgSec/tg-gibraltar",
-	"@OnePanda-TgSec/tg-sec-agent",
 	"@OnePanda-TgSec/tg-telemetry",
 	"@OnePanda-TgSec/tg-tui",
 ] as const;

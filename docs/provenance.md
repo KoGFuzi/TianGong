@@ -17,8 +17,8 @@ check:house-standard` asserts against that record, so the two cannot drift apart
 | `packages/ai` | `@OnePanda-TgSec/tg-ai` | pi agent, adopted and rebranded | House |
 | `packages/gibraltar` | `@OnePanda-TgSec/tg-gibraltar` | pi agent, adopted and rebranded | House |
 | `packages/env` | `@OnePanda-TgSec/tg-env` | pi agent, adopted and rebranded | House |
-| `packages/agent` | `@OnePanda-TgSec/tg-agent-core` | pi agent, adopted and rebranded | House |
-| `packages/sec-agent` | `@OnePanda-TgSec/tg-sec-agent` | pi agent, adopted and rebranded | House |
+| `packages/agent` | `@OnePanda-TgSec/tg-agent-core` | pi agent, adopted and rebranded | **Removed 2026-10-22** (snapshot in `scripts/legacy/agent-core`) |
+| `packages/sec-agent` | `@OnePanda-TgSec/tg-sec-agent` | pi agent, adopted and rebranded | **Removed 2026-10-22** (snapshot in `scripts/legacy/sec-agent`) |
 | `packages/codemode` | `@earendil-works/pi-codemode` | **pi agent 1.3.0, migrated verbatim** | **Vendored, frozen** |
 | `packages/mcp` | `@earendil-works/pi-mcp` | **pi agent 1.3.0, migrated verbatim** | **Vendored, frozen** |
 
@@ -142,7 +142,8 @@ Notes:
 - `packages/mcp/README.md` and `packages/mcp/CHANGELOG.md` are upstream documents and still
   reference upstream package names such as `@earendil-works/pi-ai`. That is intentional: they
   describe the package as published. Where you need the TianGong integration view, read
-  [`packages/agent/examples/mcp-codemode`](../packages/agent/examples/mcp-codemode) and this file.
+  [`scripts/legacy/agent-core/examples/mcp-codemode`](../scripts/legacy/agent-core/examples/mcp-codemode)
+  (the workspace example, kept as a snapshot after `packages/agent` was removed) and this file.
 - `packages/mcp/src/**` must not gain an import of `@OnePanda-TgSec/*`. One file,
   `src/protocol/content.ts`, carries a doc comment naming `@earendil-works/pi-ai`; it was left as
   upstream wrote it.
@@ -171,7 +172,9 @@ in the calling house package, not in the vendored directory.
 
 ## House packages: adopted and rebranded
 
-These eight started as pi agent packages and were brought under the TianGong house standard. Their
+Eight packages started as pi agent packages and were brought under the TianGong house standard;
+six remain in the workspace (`tg-agent-core` and `tg-sec-agent` were removed 2026-10-22, their
+snapshots in [`scripts/legacy/`](../scripts/legacy/README.md)). Their
 source, layout, and public API shape are upstream's; the **naming layer** is ours.
 
 What "rebranded" means concretely, for every one of them:
@@ -198,8 +201,8 @@ no public API changed. Module layout is the one thing carried over untouched.
 | `@earendil-works/pi-durable` | `@OnePanda-TgSec/tg-gibraltar` |
 | `@earendil-works/pi-tui` | `@OnePanda-TgSec/tg-tui` |
 | `@earendil-works/pi-telemetry` | `@OnePanda-TgSec/tg-telemetry` |
-| `@earendil-works/pi-agent-core` | `@OnePanda-TgSec/tg-agent-core` |
-| `@earendil-works/pi-coding-agent` | `@OnePanda-TgSec/tg-sec-agent` |
+| `@earendil-works/pi-agent-core` | `@OnePanda-TgSec/tg-agent-core` *(removed 2026-10-22)* |
+| `@earendil-works/pi-coding-agent` | `@OnePanda-TgSec/tg-sec-agent` *(removed 2026-10-22)* |
 | `@earendil-works/pi-client` | *not carried over* |
 | `@earendil-works/pi-protocol` | *not carried over* |
 | `@earendil-works/pi-server` | *not carried over* |
@@ -214,9 +217,10 @@ Two upstream names are worth calling out because they are not mechanical substit
   mechanism. The directory is `packages/gibraltar`; `repository.directory` was corrected to match.
 - `chord` kept its bare name. Only house packages we own end to end carry the `tg-` prefix, and
   `chord` was adopted whole.
-- `pi-coding-agent` became **`tg-sec-agent`**, matching its `packages/sec-agent` directory. Its
-  `pi` binary is published as `tg`, and its imports resolve to the three sibling house packages
-  (`tg-ai`, `tg-agent-core`, `tg-tui`) plus the two vendored ones.
+- `pi-coding-agent` became **`tg-sec-agent`**, matching its then-directory `packages/sec-agent`. Its
+  `pi` binary was published as `tg`, and its imports resolved to the sibling house packages
+  (`tg-ai`, `tg-agent-core`, `tg-gibraltar`, `tg-tui`), `chord`, and the two vendored ones.
+  Both `tg-sec-agent` and `tg-agent-core` were removed from the workspace on 2026-10-22.
 
 ### Identifier rename
 
@@ -267,17 +271,18 @@ os.tmpdir()/TianGong         scratch
 takes a `$TIANGONG_*_DIR` absolute override on top of `$XDG_*_HOME`, which is what a test or an
 embedded process needs to relocate everything at once.
 
-`packages/sec-agent` uses the same resolver. Its settings, models, themes, prompts, and tools live
-under the config root; `auth.json`, session files, and the debug log live under the data root.
-Project-local resources live in `<project>/.tiangong/`. `TG_CODING_AGENT_DIR` is the package's
-test-and-embedding override and relocates both roots into one directory.
+The removed `packages/sec-agent` used the same resolver. Its settings, models, themes, prompts, and
+tools lived under the config root; `auth.json`, session files, and the debug log lived under the
+data root. Project-local resources lived in `<project>/.tiangong/`. `TG_CODING_AGENT_DIR` was the
+package's test-and-embedding override and relocated both roots into one directory.
 
 ### Upstream services
 
 `pi-coding-agent` called hosted services that have no TianGong counterpart: a release feed, a remote
 model catalog, MCP Client ID Metadata Documents, a managed installer, a share viewer, and install
-telemetry. Localization keeps the code paths but makes them opt-in with `TG_*` variables and removes
-install telemetry. With nothing configured, no request leaves the machine:
+telemetry. Localization kept the code paths but made them opt-in with `TG_*` variables and removed
+install telemetry; the package itself was removed 2026-10-22. With nothing configured, no request
+left the machine:
 
 | Variable | Feature |
 | --- | --- |
@@ -327,16 +332,18 @@ Documentation is exempt as a category, because prose must be able to record what
 
 Upstream's `packages/durable` directory holds `@OnePanda-TgSec/tg-gibraltar` here. The directory
 name was kept as-is because the module framework was carried over unchanged; only the package
-name changed. `packages/agent` likewise holds `@OnePanda-TgSec/tg-agent-core`, and upstream's
-`packages/coding-agent` holds `@OnePanda-TgSec/tg-sec-agent` in `packages/sec-agent`.
+name changed. Upstream's `packages/agent` likewise held `@OnePanda-TgSec/tg-agent-core`, and
+upstream's `packages/coding-agent` held `@OnePanda-TgSec/tg-sec-agent` in `packages/sec-agent`;
+both directories were removed from this workspace on 2026-10-22.
 
 ## Upstream packages deliberately not carried over
 
 The pi agent repository also publishes `pi-protocol`, `pi-client`, `pi-server`, and `pi-evals`. None
-of them are part of TianGong. The ten directories listed in the summary table are the whole
-workspace.
+of them are part of TianGong. The eight live `packages/` directories in the summary table are the
+whole workspace; the two removed packages stay in the table as history.
 
 `packages/ai/test/codex-websocket-cached-probe.ts` references the upstream coding-agent's
-`packages/coding-agent/src/core/model-runtime.ts`, which now lives at
-`packages/sec-agent/src/core/model-runtime.ts`. It is a manual probe script, not part of any suite,
-and is retained only as a record of upstream behaviour.
+`packages/coding-agent/src/core/model-runtime.ts`, which lived at
+`packages/sec-agent/src/core/model-runtime.ts` and is preserved in
+`scripts/legacy/sec-agent/src/core/model-runtime.ts`. It is a manual probe script, not part of any
+suite, and is retained only as a record of upstream behaviour.

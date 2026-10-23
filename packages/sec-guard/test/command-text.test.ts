@@ -49,9 +49,31 @@ describe("tokenize", () => {
 	});
 
 	it("marks the inner command of a $() substitution at a command position", () => {
-		// The closing `)` is not a separator: batch 1a does not track substitution nesting.
+		// The closing `)` is not a separator: it ends the word and starts no new command.
 		const tokens = tokenize("echo $( whoami )");
 		expect(tokens.find((token) => token.text === "whoami")?.commandPosition).toBe(true);
+	});
+
+	it("ends a word at the closing parenthesis so the target before it is matchable", () => {
+		// `$(rm -rf /)` used to yield the target `/)`, which no rm rule matches; the word now ends at
+		// the closing parenthesis, exactly as a shell would split it.
+		expect(tokenize("echo $(rm -rf /)").map((token) => token.text)).toEqual(["echo", "rm", "-rf", "/"]);
+		expect(
+			tokenize("echo $(whoami) && ls")
+				.filter((token) => token.commandPosition)
+				.map((token) => token.text),
+		).toEqual(["echo", "whoami", "ls"]);
+	});
+
+	it("opens a bare subshell and a mid-word substitution at a command position", () => {
+		// `(rm -rf /)` and `echo$(rm -rf /)` both run `rm`; neither used to reach a command head.
+		expect(tokenize("(rm -rf /)").map((token) => token.text)).toEqual(["rm", "-rf", "/"]);
+		expect(tokenize("(rm -rf /)")[0]?.commandPosition).toBe(true);
+		expect(
+			tokenize("echo$(rm -rf /)")
+				.filter((token) => token.commandPosition)
+				.map((token) => token.text),
+		).toEqual(["echo", "rm"]);
 	});
 });
 
@@ -99,6 +121,21 @@ describe("extractCommandSurface", () => {
 		const depth3 = extractCommandSurface(shell(String.raw`sh -c "sh -c 'sh -c \"rm -rf /\"'"`));
 		expect(depth3.streams.length).toBe(3);
 		expect(heads(shell(String.raw`sh -c "sh -c 'sh -c \"rm -rf /\"'"`))).not.toContain("rm");
+	});
+
+	it("extracts the subcommand when -c is fused into or preceded by other shell flags", () => {
+		// `bash -lc '...'` is the login-shell shape every agent transcript is full of; demanding the
+		// literal next token `-c` left the body unparsed and every nested rule blind to it.
+		expect(heads(shell("bash -lc 'rm -rf /'"))).toContain("rm");
+		expect(heads(shell("sh -ic 'rm -rf /'"))).toContain("rm");
+		expect(heads(shell("bash -l -c 'rm -rf /'"))).toContain("rm");
+		expect(heads(shell("bash --norc -c 'rm -rf /'"))).toContain("rm");
+	});
+
+	it("does not read a script-file argument as a subcommand body", () => {
+		// No `c` in the flag run means the argument is a file for the shell to read, not text to run.
+		expect(extractCommandSurface(shell("bash script.sh")).streams.length).toBe(1);
+		expect(extractCommandSurface(shell("bash -x script.sh")).streams.length).toBe(1);
 	});
 
 	it("treats interpreter -c/-e/-r values as script bodies, not subcommands", () => {
@@ -235,6 +272,10 @@ describe("extractConnectionTargets: data flags never contribute", () => {
 describe("extractConnectionTargets: recursion, wrappers, interpreter bodies", () => {
 	it("extracts targets inside an sh -c subcommand", () => {
 		expect(targets(shell('sh -c "curl http://localhost:8080/"'))).toEqual(["localhost/strong"]);
+	});
+
+	it("extracts targets through a combined-flag shell body", () => {
+		expect(targets(shell("bash -lc 'curl http://127.0.0.1/'"))).toEqual(["127.0.0.1/strong"]);
 	});
 
 	it("takes a loopback URL inside a subcommand on strong evidence", () => {

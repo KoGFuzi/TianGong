@@ -225,6 +225,21 @@ describe("family C: critical-path removal is a danger-set ask, not a hard deny",
 		// No force-recursive pair: a plain file removal under /bin is not the wipe shape.
 		dangerMiss(shell("rm -f /bin/ls"));
 	});
+
+	it("sees a critical-path removal inside combined-flag shells and substitutions", () => {
+		// The same shapes the hard-deny suite pins: the parser now reaches bodies behind `-lc`/`-ic`
+		// and targets followed by a closing parenthesis.
+		dangerHit(shell("bash -lc 'rm -rf /etc'"), "danger.rm.system-path");
+		dangerHit(shell("echo $(rm -rf /etc)"), "danger.rm.system-path");
+	});
+
+	it("does not promote prose or a script-file argument to a command", () => {
+		// The parenthesis fix must not turn a numbered list in a report into a command position, and a
+		// shell reading a script file still has no body to parse.
+		dangerMiss(req("write", { content: "steps:\n1) rm -rf /etc" }));
+		dangerMiss(shell("printf '1) rm -rf /etc'"));
+		dangerMiss(shell("bash script.sh"));
+	});
 });
 
 describe("family D: objective-conditional rules", () => {

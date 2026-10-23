@@ -104,6 +104,13 @@ chord ──────▶ sec-guard
 **tg-ai**（本批**已声明未使用**，批2 judge 落地才引用）。gibraltar **不反向依赖** sec-guard；
 sec-guard 以 extension 形态被宿主 registry.install。vendored 两包（codemode/mcp）维持零边。
 
+批2b 勘误（2026-10-23）：judge 落地后 `tg-ai` **仍未被 import**——两轴 judge 的 transport 由宿主
+注入（`judge.ts` 只吃 `TgSec*` 类型），批2b 没有直连 provider 的地方，上文"批2 judge 落地才引用"
+的预测没有兑现。该边现为**已声明未使用**。按"依赖图不得谎报"本应删边，但本节的依赖图与
+AGENTS.md 边界图都把 `ai ──▶ sec-guard` 画成真实边，且产品层接线 judge 时几乎必然复用 tg-ai 的
+provider 抽象；**保留声明，删边属可逆决定**——若批4 产品层落地后仍无人引用，再连同两张图一起删，
+不要让它长期停在"声明了但没人用"的状态。
+
 ## 核心概念与 API 目标形状
 
 以下为**目标形状**，实施前逐一与 gibraltar 真实类型核对。
@@ -153,15 +160,22 @@ export type TgSecGuard = {
    时抛错即 fail-closed，不构成旁路——本包的 attestation 探针 5 依赖这一事实。
 1. **硬 deny** → `deny, hard: true`（无 ask 通道，模型看到的就是 block 错误）。硬 deny 先于
    scope 判定：scope 内目标也不允许触发平台自保护/本机自毁。
-2. **scope 判定**（bash/网络类工具，见下节解析器）：目标主机不在 scope 注册表 →
+2. **拦截规则表**（批2b 补入本节，原编号 2-6 依次后移）：`deny` 命中 → `ask, forced: true`
+   （可申诉、不可豁免，非终态）；`ask` 命中 → `ask, forced: false`；`allow` 命中不在本步生效，
+   只在第 6 步模式分派内部被读取。规则表紧跟硬 deny、先于下面三条强制 ask 层——四者都不可被
+   grants/模式豁免时，先后只决定 span 的 `layer` 归因（同一次调用只报一个命中层），这也是
+   `layer: "rules"` 归因稳定的前提。
+3. **weak 自保护**（批1c 补入本节）：弱证据的回环/本机网卡候选 → `ask, forced: true`；强证据在
+   步骤 1 已硬 deny。这一层在链内部（`guard.ts`）执行，宿主自带 resolver 也不能把它丢掉。
+4. **scope 判定**（bash/网络类工具，见下节解析器）：目标主机不在 scope 注册表 →
    `ask, forced: true`（scope 是唯一许可来源，与危险集同级，不受 grants/模式豁免）；在表内 →
    继续。
-3. **危险集命中** → `ask, forced: true`（不接受 always 豁免；grants 查询跳过此项）。
-4. **模式分派**：`strict` → ask；`judge-auto` → judge；**grants 查询只发生在 `auto`/`yolo` 分支
+5. **危险集命中** → `ask, forced: true`（不接受 always 豁免；grants 查询跳过此项）。
+6. **模式分派**：`strict` → ask；`judge-auto` → judge；**grants 查询只发生在 `auto`/`yolo` 分支
    内部**（命中 → allow）→ allow。批0.5a 曾把 grants 放成模式分派前的全局前置，导致 strict 下
    一次 `always` 就把 L1 降成 L3——已定为缺陷并修正：**strict 与 judge-auto 永久无视 grants**
    （依据是四级定义本身，不是实现便利）。
-5. judge（仅 judge-auto）：**输入 = 工具名 + 连接目标视图 + 有界文本扫描视图**（批2b 勘误：原文
+7. judge（仅 judge-auto）：**输入 = 工具名 + 连接目标视图 + 有界文本扫描视图**（批2b 勘误：原文
    "参数摘要 + 当前 scope 上下文"不准——judge 拿的是 `scanTextSurface` 截断后的文本与
    `extractConnectionTargets` 的目标清单，**不拿 scope 注册结论**，因为那是许可判定而非事实输入；
    否则等于把裁判和门禁合成一张脸）。输出严格 JSON `{decision:"allow"|"ask", comment}`；
@@ -171,7 +185,7 @@ export type TgSecGuard = {
    与 2026-10-23 定调矛盾，规则表 deny 已改为转强制 ask）。judge 的 `comment` 进 ask 的 reason
    （人读文本），**不进 span 属性**。两轴提示（可逆性×作用对象）借鉴 ARTEX intercept/prompt.go 的
    思路重写，不复制其 prompt 文本；本批不接真实 provider，transport 由宿主注入、测试用 stub。
-6. 每次判定（含放行）落 `tg.span.sec.guard`：mode、命中层、decision、reason、参数摘要哈希。
+8. 每次判定（含放行）落 `tg.span.sec.guard`：mode、命中层、decision、reason、参数摘要哈希。
    批0.5a 实现收敛（已核实为正确取舍，取代原文）：span 属性一律低基数封闭枚举——
    `mode` / `layer`(`hard-deny|self-protection|scope|danger|grants|rules|mode`，`self-protection`
    是批1c 为 weak 证据降级新增的一层，`rules` 是批2b 规则表新增的一层) / `effect` / `forced` /
@@ -216,8 +230,8 @@ bash 类工具调用过 scope 判定前的主机抽取，行为规格：
   --data-urlencode --form-string -F --form -H --header -b --cookie --cookie-jar -A
   --user-agent -e --referer --json --url-query --mail-from --mail-rcpt --aws-sigv4
   --oauth2-bearer -x --proxy --socks5 --socks5-hostname -o -D`。批1b 勘误：`-L`/`-R` 在 curl
-  是**布尔** flag（无值），实现按布尔处理、不吞下一个 token（`command-text.ts:68-74`），原文把
-  它们与值型 flag 并列是错的。
+  是**布尔** flag（无值），实现按布尔处理、不吞下一个 token（`command-text.ts` 的
+  `DATA_BOOLEAN_FLAGS`，行号随重构漂移，按符号查），原文把它们与值型 flag 并列是错的。
 - **值是连接目标**的 flag：`-u --url --host`（ffuf/sqlmap 的 -u；curl 的 -u user:pass 无主机，
   天然不误报）。批1b 已实测固定：短 flag 粘连值（`-dfoo`、`-uhttp://…`）**不解析**，只认精确
   token 与 `--flag=value` 两式——已知局限。
@@ -227,6 +241,15 @@ bash 类工具调用过 scope 判定前的主机抽取，行为规格：
   `sh bash zsh dash ksh`。解释器（python/ruby/node/perl/php）的 `-c/-e/-r` 是脚本体，实现为
   **整体跳过**（单个 quoted token，内嵌 URL 不再单独扫）——原文"只扫其中回环 URL"半句未实现，
   按代码现实作废。
+  **2026-10-23 勘误（硬 deny 绕过）**：原文只写 `sh -c` 这一精确形状，批1b 的实现也只认紧随
+  shell 的**字面 token `-c`**，于是 `bash -lc 'rm -rf /'`、`sh -ic`、`bash -l -c`、
+  `bash --norc -c` 的体全被漏抽，硬 deny 与危险集同时对它们失明。现按 shell 的真实 flag 语法扫
+  完整 flag run：短 flag 簇里含 `c`（`-c`/`-lc`/`-ic`）即视为带体，`--flag value` 整对跳过，
+  run 之后第一个非 flag token 是体；`bash script.sh` 这类脚本文件参数仍不抽（没有 `c` 就没有体）。
+  同批修正词法：token 在 `)` 处收词（`$(rm -rf /)` 的目标是 `/`，不再粘成 `/)`），裸子 shell 的
+  `(` 与词中 `$(` 同 `$(` 一样开命令位——此前 `(rm -rf /)` 与 `echo$(rm -rf /)` 同样可绕过
+  硬 deny。**仍未抽** `ssh host '<cmd>'` 的远端命令体：硬 deny 的 charter 是本机自毁，删远端根
+  目录不是本层该判的，留作已知局限。
 - URL 只取 authority（SSRF/重定向 payload 不误伤，含 userinfo 与端口剥离、IPv6 方括号）；裸
   IP/域名须整 token 匹配，域名须真实 TLD 且非文件扩展名；无点单标签裸 token 不算候选。
 - 抽取结果与 scope 注册表比对：**未注册主机 → forced ask（`layer: "scope"`，先于模式分派短路），
@@ -267,7 +290,8 @@ bash 类工具调用过 scope 判定前的主机抽取，行为规格：
   匹配读取会直接红）。测试还自带"检查器真会红"的元用例，避免变成不会失败的装饰。TS 无法在类型
   层禁止 re-export，故用运行时源级断言补上。
 - 已知局限（批1b 起沿袭）：短 flag 粘连值（`-dfoo`、`-uhttp://…`）不解析；解释器 `-c/-e/-r`
-  脚本体整体跳过，不扫内嵌回环 URL。
+  脚本体整体跳过，不扫内嵌回环 URL；`ssh host '<cmd>'` 的远端命令体不抽（理由见递归条
+  2026-10-23 勘误）。
 
 ### 拦截规则表
 
@@ -318,8 +342,6 @@ bash 类工具调用过 scope 判定前的主机抽取，行为规格：
 10. `judge-transport-error-asks`：judge transport 抛错 → ask，且 span `layer` 归 `mode`（降级要
     升级到人，既不放行也不终态）（批2b）。
 11. `judge-timeout-asks`：transport 永不返回 → 在 judge 自身超时预算内收敛为 ask（批2b）。
-
-任一失败 → `attest` throw，宿主拒绝开工。探针即回归测试，先进 `test/` 先红后绿。
 
 任一失败 → `attest` throw，宿主拒绝开工。探针即回归测试，先进 `test/` 先红后绿。
 

@@ -501,6 +501,20 @@ export function tokenize(text: string): TgSecToken[] {
 			atCommandPosition = true;
 			continue;
 		}
+		// A bare subshell `(...)` runs its contents like a command too, and `(` cannot appear
+		// unquoted inside a shell word.
+		if (char === "(") {
+			i += 1;
+			atCommandPosition = true;
+			continue;
+		}
+		// `)` closes a substitution or a subshell: it ends the word before it, so `$(rm -rf /)` yields
+		// the target `/` rather than `/)` and the rm rules can match it. It is not a separator: no
+		// command starts after it.
+		if (char === ")") {
+			i += 1;
+			continue;
+		}
 		let value = "";
 		while (i < text.length) {
 			const current = text[i];
@@ -524,7 +538,11 @@ export function tokenize(text: string): TgSecToken[] {
 				i += 2;
 				continue;
 			}
+			// `$(` can start mid-word (`echo$(rm -rf /)`); ending the word here lets the outer loop
+			// open the substitution and mark its first token as a command position.
+			if (current === "$" && text[i + 1] === "(") break;
 			if (/\s/.test(current) || SEPARATORS.has(current)) break;
+			if (current === ")") break;
 			value += current;
 			i += 1;
 		}
@@ -568,11 +586,40 @@ function pushStreams(text: string, depth: number, streams: TgSecToken[][]): void
 	const tokens = withWrappersSkipped(tokenize(text));
 	streams.push(tokens);
 	if (depth >= TG_SEC_SUBCOMMAND_DEPTH_LIMIT) return;
-	for (let i = 0; i + 2 < tokens.length; i++) {
+	for (let i = 0; i + 1 < tokens.length; i++) {
 		if (!tokens[i].commandPosition || !SUBCOMMAND_SHELLS.has(tokens[i].text)) continue;
-		if (tokens[i + 1].text !== "-c") continue;
-		pushStreams(tokens[i + 2].text, depth + 1, streams);
+		const body = subcommandShellBody(tokens, i);
+		if (body === undefined) continue;
+		pushStreams(body, depth + 1, streams);
 	}
+}
+
+/**
+ * The body of a subcommand-shell invocation whose shell token sits at `shellIndex`, or `undefined`
+ * when the shell was not asked to run one. Shells accept `-c` fused into a short-flag cluster
+ * (`bash -lc '...'`, `sh -ic '...'`) and behind other flags (`bash -l -c '...'`), so the flag run is
+ * walked instead of demanding the literal next token `-c`: any short-cluster flag carrying `c`
+ * arms the body, `--flag value` pairs step over their value, and the first non-flag token after the
+ * run is the body. A bare `bash script.sh` never arms it.
+ */
+function subcommandShellBody(tokens: readonly TgSecToken[], shellIndex: number): string | undefined {
+	let sawCommandFlag = false;
+	let i = shellIndex + 1;
+	while (i < tokens.length) {
+		const text = tokens[i].text;
+		if (!text.startsWith("-")) break;
+		if (text.startsWith("--")) {
+			// No long flag of the supported shells means `-c`, so a `--flag value` pair is skipped
+			// whole and its value is never mistaken for the body.
+			if (!text.includes("=") && tokens[i + 1] !== undefined && !tokens[i + 1].text.startsWith("-")) i += 2;
+			else i += 1;
+			continue;
+		}
+		if (/^-[a-z]*c[a-z]*$/.test(text)) sawCommandFlag = true;
+		i += 1;
+	}
+	if (!sawCommandFlag) return undefined;
+	return tokens[i]?.text;
 }
 
 /** One leaf string of an arguments tree and the role of the parameter name it sits under. */

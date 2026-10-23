@@ -319,9 +319,6 @@ All notable changes to this package will be documented in this file.
 - Self-destruction rules no longer fire on bare words anywhere in the arguments:
   `grep shutdown /var/log/messages`, a URL ending in `/shutdown`, and `cat mkfs.ext4.8.gz` are
   no longer hard-denied, while `shutdown -h now`, `sudo reboot`, and `proxychains4 mkfs.ext4` still are.
-
-### Fixed
-
 - Grants were wrongly consulted as a global pre-layer in `evaluate()`, so a resource recorded as
   `always` let later calls through in `strict` and bypassed the judge in `judge-auto` — a standing
   exemption against the mode that is defined to review every call. The grants lookup now lives
@@ -335,3 +332,20 @@ All notable changes to this package will be documented in this file.
   `body`, or `path` mentions `localhost` or `127.0.0.1` produces no candidate at all: it neither
   denies nor asks. Both were reported as the batch 1c false positives, were written as failing
   tests first, and are covered in `test/hard-deny.test.ts` and `test/command-text.test.ts`.
+- Subcommand extraction no longer demands the literal next token `-c`: `bash -lc 'rm -rf /'`,
+  `sh -ic 'rm -rf /'`, `bash -l -c 'rm -rf /'`, and `bash --norc -c 'rm -rf /'` used to run a
+  body that neither hard deny nor the danger set ever saw. The parser now walks the shell's flag
+  run, arms the body on any short-flag cluster carrying `c`, steps over `--flag value` pairs whole,
+  and takes the first non-flag token after the run; `bash script.sh` still extracts nothing. The
+  same blindness inside `bash -lc` also hid targets from the scope resolver and the danger set's
+  critical-path removal rule.
+- Word splitting ends a token at `)`, so `echo $(rm -rf /)` now yields the target `/` instead of
+  `/)` and reaches `self-destruction.rm-root`; a bare subshell `(rm -rf /)` and a mid-word
+  substitution `echo$(rm -rf /)` now open a command position like `$(`. Both shapes bypassed hard
+  deny before. Prose is unaffected: a numbered list (`steps:\n1) rm -rf /etc`) and a quoted
+  `printf '1) rm -rf /etc'` still produce no command position, asserted in `test/danger.test.ts`.
+- `README.md` no longer claims `yolo` “allows everything the hard deny does not refuse” and no
+  longer lists grants as a global layer ahead of mode dispatch: both contradicted the design's
+  evaluation order and the chain, where forced asks precede dispatch and grants live inside the
+  `auto`/`yolo` branch. The stale batch-0.5a attestation paragraph (four probes, three reserved)
+  now lists the eleven probes that actually run.

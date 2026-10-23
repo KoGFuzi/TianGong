@@ -60,6 +60,28 @@ describe("evaluateHardDeny", () => {
 		expect(denyHit(shell("poweroff")).ruleId).toBe("self-destruction.power");
 	});
 
+	it("refuses self-destruction inside a shell invoked with combined flags", () => {
+		// `bash -lc 'rm -rf /'` is the ordinary login-shell invocation; requiring the literal next
+		// token `-c` let the whole body bypass the unappealable layer.
+		expect(denyHit(shell("bash -lc 'rm -rf /'")).ruleId).toBe("self-destruction.rm-root");
+		expect(denyHit(shell("sh -ic 'rm -rf /'")).ruleId).toBe("self-destruction.rm-root");
+		expect(denyHit(shell("bash -l -c 'rm -rf /'")).ruleId).toBe("self-destruction.rm-root");
+		expect(denyHit(shell("bash -lc 'rm -rf ~'")).ruleId).toBe("self-destruction.rm-home");
+	});
+
+	it("refuses self-destruction inside a substitution or a bare subshell", () => {
+		// The closing `)` used to stay glued to the target (`/)`), and a subshell never opened a
+		// command position, so both shapes ran unblocked.
+		expect(denyHit(shell("echo $(rm -rf /)")).ruleId).toBe("self-destruction.rm-root");
+		expect(denyHit(shell("echo$(rm -rf /)")).ruleId).toBe("self-destruction.rm-root");
+		expect(denyHit(shell("(rm -rf /)")).ruleId).toBe("self-destruction.rm-root");
+	});
+
+	it("does not read a script-file argument as a subcommand body", () => {
+		expect(evaluateHardDeny(shell("bash script.sh"), [])).toBeUndefined();
+		expect(evaluateHardDeny(shell("bash -x deploy.sh"), [])).toBeUndefined();
+	});
+
 	it("lets ordinary calls through", () => {
 		expect(evaluateHardDeny(shell("ls -la /tmp"), [])).toBeUndefined();
 		expect(evaluateHardDeny(shell("rm -rf build"), [])).toBeUndefined();

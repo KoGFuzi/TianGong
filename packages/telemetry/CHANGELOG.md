@@ -45,6 +45,12 @@
   `danger.business.*`, `danger.wordlist.huge`, `danger.bruteforce.*`). Kept in lockstep with
   `TgSecDangerRuleId`, the only producer of these values; the attribute stays a closed
   low-cardinality enumeration — no command text ever enters the span.
+- `tg.span.sec.fork` and `tg.span.sec.evidence` in `TG_SPAN_SCHEMA`, the batch-4 audit vocabulary for
+  `@OnePanda-TgSec/tg-sec-agent`: one span per delegated fork carrying `lane`, `outcome` and `depth`
+  (never the intent text), and one span per evidence-store operation carrying `op`, a truncated
+  one-way `subjectDigest`, `outcome`, `changed` and `count` (never a subject string, a content hash,
+  or a snapshot id). Both are declared as typed schema data, consistent with the existing rule that no
+  span carries prompt text, tool arguments, or paths.
 
 ### Removed
 

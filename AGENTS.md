@@ -13,7 +13,7 @@ suites already are.
 ```bash
 bun install          # workspace install, hoisted node_modules, exact versions
 bun run check        # house standard + formatting + types + relative imports
-bun run build        # builds all 9 packages in dependency order
+bun run build        # builds all 10 packages in dependency order
 bun run test         # runs every package suite in dependency order
 bun run clean        # removes dist/ and generated model data
 ```
@@ -30,7 +30,7 @@ Never hand-run `tsc`, `biome`, or `vitest` from a package root when a root scrip
 | Concern | Value |
 | --- | --- |
 | Scope | `@OnePanda-TgSec` |
-| Packages | `@OnePanda-TgSec/tg-ai`, `tg-env`, `tg-gibraltar`, `tg-sec-guard`, `tg-telemetry`, `tg-tui`, and `chord` |
+| Packages | `@OnePanda-TgSec/tg-ai`, `tg-env`, `tg-gibraltar`, `tg-sec-guard`, `tg-sec-agent`, `tg-telemetry`, `tg-tui`, and `chord` |
 | Root repo name | `tiangong` |
 | Upstream repo | `https://github.com/KoGFuzi/TianGong` |
 | Author field | `KoGFuzi` |
@@ -227,7 +227,7 @@ There are two, on purpose:
 
 | Config | Covers | Types |
 | --- | --- | --- |
-| `tsconfig.json` | `packages/*/src`, `packages/*/test`, `packages/agent/examples`, `vitest.base.ts` | `node` |
+| `tsconfig.json` | `packages/*/src`, `packages/*/test`, `vitest.base.ts` | `node` |
 | `tsconfig.scripts.json` | `scripts/**` | `node`, `bun` |
 
 Bun's global `fetch` type conflicts with Node's `fetch` type, and the conflict breaks every `fetch`
@@ -241,27 +241,37 @@ upstream that would need real work to tighten, and it is not on the commit path.
 
 ## Boundaries
 
-Dependency edges, verified by `packages/chord/test/boundary.test.ts` and by the root
-`tsconfig.json` path map:
+Dependency edges, verified by `packages/chord/test/boundary.test.ts`, by
+`packages/sec-agent/test/boundary.test.ts` and by the root `tsconfig.json` path map:
 
 ```text
 telemetry ──▶ ai ──▶ gibraltar ──▶ env
 chord ───────────────────┴──────────┘
 
 chord ──┐
-ai ─────┼──▶ sec-guard       (the guard depends on these four; no package depends on the guard)
+ai ─────┼──▶ sec-guard       (the guard depends on these four)
 gibraltar ─┤
 telemetry ─┘
 
+chord ──┐
+ai ─────┤
+gibraltar ─┼──▶ sec-agent   (the campaign runtime sits on the harness, the guard and telemetry)
+sec-guard ─┤
+telemetry ─┘
+
 tui                      (leaf; no remaining package depends on it)
-codemode   mcp           (vendored, no edges in or out)
+codemode   mcp           (vendored; house packages import them by their upstream names)
 ```
 
 Arrows point from a package toward the packages that depend on it.
-`tg-gibraltar` depends on `chord` and `tg-ai`, `tg-env` depends on `chord` and `tg-gibraltar`, and
-`tg-sec-guard` depends on `chord`, `tg-ai`, `tg-gibraltar`, and `tg-telemetry`.
-`chord`, `tui`, `telemetry`, `codemode`, and `mcp` are leaves: they import
-nothing from this workspace. That is what keeps `chord` publishable on its own.
+`tg-gibraltar` depends on `chord` and `tg-ai`, `tg-env` depends on `chord` and `tg-gibraltar`,
+`tg-sec-guard` depends on `chord`, `tg-ai`, `tg-gibraltar`, and `tg-telemetry`, and `tg-sec-agent`
+depends on `chord`, `tg-ai`, `tg-gibraltar`, `tg-sec-guard`, and `tg-telemetry` (plus the vendored
+`@earendil-works/pi-codemode` for the sandbox gibraltar's `./codemode` extension runs on). Sec-agent
+does **not** depend on `tg-env`: the env resolver is typed by gibraltar (`env/node`, `EnvTarget`), so
+a host-built remote env costs the campaign runtime no edge on the env package.
+`chord`, `tui`, `telemetry`, `sec-agent`, `codemode`, and `mcp` are leaves: nothing in this workspace
+depends on them. That is what keeps `chord` publishable on its own.
 
 Do not call `bun test`. Bun reserves that name for its own runner, which would silently bypass
 every per-package Vitest and `node:test` configuration. Use `bun run test`.
@@ -297,7 +307,7 @@ Several sessions may share this working directory.
 - Commit only files changed in the current session. Run `git status` and verify before committing.
 - Never run `git reset --hard`, `git checkout .`, `git clean -fd`, `git stash`, or
   `git commit --no-verify`.
-- Commit message format: `{feat,fix,docs,refactor,chore}[(ai,tui,gibraltar,chord,telemetry,mcp,codemode,sec-guard)]: <message>`.
+- Commit message format: `{feat,fix,docs,refactor,chore}[(ai,tui,gibraltar,chord,telemetry,mcp,codemode,sec-guard,sec-agent)]: <message>`.
 - Never commit unless asked.
 
 ## Changelog

@@ -73,6 +73,31 @@ export default defineConfig({
 			},
 			{ find: /^@OnePanda-TgSec\/tg-gibraltar$/, replacement: workspaceSourcePaths.gibraltarIndex },
 			{ find: /^@OnePanda-TgSec\/tg-gibraltar\/testing$/, replacement: workspaceSourcePaths.gibraltarTesting },
+			// Directory-form exports resolve to their `index.ts`; they must precede the generic `$1.ts` rule.
+			{
+				find: /^@OnePanda-TgSec\/tg-gibraltar\/codemode$/,
+				replacement: `${workspaceSourcePaths.gibraltarRoot}/codemode/index.ts`,
+			},
+			{
+				find: /^@OnePanda-TgSec\/tg-gibraltar\/env$/,
+				replacement: `${workspaceSourcePaths.gibraltarRoot}/env/index.ts`,
+			},
+			{
+				find: /^@OnePanda-TgSec\/tg-gibraltar\/images$/,
+				replacement: `${workspaceSourcePaths.gibraltarRoot}/images/index.ts`,
+			},
+			{
+				find: /^@OnePanda-TgSec\/tg-gibraltar\/storage\/sqlite$/,
+				replacement: `${workspaceSourcePaths.gibraltarRoot}/storage/sqlite/index.ts`,
+			},
+			{
+				find: /^@OnePanda-TgSec\/tg-gibraltar\/tool-search$/,
+				replacement: `${workspaceSourcePaths.gibraltarRoot}/tool-search/index.ts`,
+			},
+			{
+				find: /^@OnePanda-TgSec\/tg-gibraltar\/tools$/,
+				replacement: `${workspaceSourcePaths.gibraltarRoot}/tools/index.ts`,
+			},
 			{
 				find: /^@OnePanda-TgSec\/tg-gibraltar\/(.+)$/,
 				replacement: `${workspaceSourcePaths.gibraltarRoot}/$1.ts`,

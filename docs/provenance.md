@@ -19,7 +19,7 @@ check:house-standard` asserts against that record, so the two cannot drift apart
 | `packages/env` | `@OnePanda-TgSec/tg-env` | pi agent, adopted and rebranded | House |
 | `packages/sec-guard` | `@OnePanda-TgSec/tg-sec-guard` | **TianGong-authored**, from `docs/sec-guard-design.md` | House, added 2026-10-22 |
 | `packages/agent` | `@OnePanda-TgSec/tg-agent-core` | pi agent, adopted and rebranded | **Removed 2026-10-22** (snapshot in `scripts/legacy/agent-core`) |
-| `packages/sec-agent` | `@OnePanda-TgSec/tg-sec-agent` | pi agent, adopted and rebranded | **Removed 2026-10-22** (snapshot in `scripts/legacy/sec-agent`) |
+| `packages/sec-agent` | `@OnePanda-TgSec/tg-sec-agent` | **TianGong-authored**, from `docs/sec-agent-design.md`; rebuilds the adopted-and-removed `tg-sec-agent` (snapshot in `scripts/legacy/sec-agent`) | House, added 2026-10-23 (batch 3) |
 | `packages/codemode` | `@earendil-works/pi-codemode` | **pi agent 1.3.0, migrated verbatim** | **Vendored, frozen** |
 | `packages/mcp` | `@earendil-works/pi-mcp` | **pi agent 1.3.0, migrated verbatim** | **Vendored, frozen** |
 
@@ -203,7 +203,7 @@ no public API changed. Module layout is the one thing carried over untouched.
 | `@earendil-works/pi-tui` | `@OnePanda-TgSec/tg-tui` |
 | `@earendil-works/pi-telemetry` | `@OnePanda-TgSec/tg-telemetry` |
 | `@earendil-works/pi-agent-core` | `@OnePanda-TgSec/tg-agent-core` *(removed 2026-10-22)* |
-| `@earendil-works/pi-coding-agent` | `@OnePanda-TgSec/tg-sec-agent` *(removed 2026-10-22)* |
+| `@earendil-works/pi-coding-agent` | `@OnePanda-TgSec/tg-sec-agent` *(adopted package removed 2026-10-22; name reused by the authored package 2026-10-23)* |
 | `@earendil-works/pi-client` | *not carried over* |
 | `@earendil-works/pi-protocol` | *not carried over* |
 | `@earendil-works/pi-server` | *not carried over* |
@@ -221,7 +221,9 @@ Two upstream names are worth calling out because they are not mechanical substit
 - `pi-coding-agent` became **`tg-sec-agent`**, matching its then-directory `packages/sec-agent`. Its
   `pi` binary was published as `tg`, and its imports resolved to the sibling house packages
   (`tg-ai`, `tg-agent-core`, `tg-gibraltar`, `tg-tui`), `chord`, and the two vendored ones.
-  Both `tg-sec-agent` and `tg-agent-core` were removed from the workspace on 2026-10-22.
+  Both `tg-sec-agent` and `tg-agent-core` were removed from the workspace on 2026-10-22. On
+  2026-10-23 `tg-sec-agent` came back — but as a TianGong-authored, gibraltar-native package from
+  `docs/sec-agent-design.md`, reusing the name and directory, not the removed package's code.
 
 ### Identifier rename
 
@@ -340,10 +342,15 @@ both directories were removed from this workspace on 2026-10-22.
 ## Upstream packages deliberately not carried over
 
 The pi agent repository also publishes `pi-protocol`, `pi-client`, `pi-server`, and `pi-evals`. None
-of them are part of TianGong. The nine live `packages/` directories in the summary table are the
-whole workspace; the two removed packages stay in the table as history. Eight of the nine were
-adopted from pi and rebranded; `packages/sec-guard` is the one package authored here, from
-`docs/sec-guard-design.md`, with no upstream counterpart.
+of them are part of TianGong. The ten live `packages/` directories in the summary table are the
+whole workspace; the one removed package (`packages/agent`, `tg-agent-core`) stays in the table as
+history. Six of the ten were adopted from pi and rebranded (`chord`, `tg-tui`, `tg-telemetry`,
+`tg-ai`, `tg-gibraltar`, `tg-env`), two are vendored verbatim (`@earendil-works/pi-codemode`,
+`@earendil-works/pi-mcp`), and two are authored here with no upstream counterpart: `packages/sec-guard`
+from `docs/sec-guard-design.md`, and `packages/sec-agent` from `docs/sec-agent-design.md`. The new
+`tg-sec-agent` reuses the directory and package name of the adopted-and-removed `pi-coding-agent`,
+but it is a gibraltar-native rewrite, not that package's module layout; the old source survives only
+as the read-only snapshot in `scripts/legacy/sec-agent`.
 
 `packages/ai/test/codex-websocket-cached-probe.ts` references the upstream coding-agent's
 `packages/coding-agent/src/core/model-runtime.ts`, which lived at

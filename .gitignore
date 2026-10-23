@@ -48,3 +48,6 @@ collect.sh
 .tiangong/
 .opencode/
 .qoder/
+
+# Legacy reference source — read-only snapshots, never uploaded
+scripts/legacy/

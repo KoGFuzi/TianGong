@@ -1,0 +1,24 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"outDir": "./dist",
+		"paths": {
+			"@earendil-works/pi-codemode": ["../codemode/dist/index.d.ts"],
+			"@OnePanda-TgSec/chord": ["../chord/dist/index.d.ts"],
+			"@OnePanda-TgSec/tg-ai": ["../ai/dist/index.d.ts"],
+			"@OnePanda-TgSec/tg-gibraltar": ["../gibraltar/dist/index.d.ts"],
+			"@OnePanda-TgSec/tg-gibraltar/env": ["../gibraltar/dist/env/index.d.ts"],
+			"@OnePanda-TgSec/tg-gibraltar/env/node": ["../gibraltar/dist/env/node.d.ts"],
+			"@OnePanda-TgSec/tg-gibraltar/codemode": ["../gibraltar/dist/codemode/index.d.ts"],
+			"@OnePanda-TgSec/tg-gibraltar/tool-search": ["../gibraltar/dist/tool-search/index.d.ts"],
+			"@OnePanda-TgSec/tg-gibraltar/tools": ["../gibraltar/dist/tools/index.d.ts"],
+			"@OnePanda-TgSec/tg-gibraltar/storage/sqlite": ["../gibraltar/dist/storage/sqlite/index.d.ts"],
+			"@OnePanda-TgSec/tg-gibraltar/storage/sqlite/node": ["../gibraltar/dist/storage/sqlite/node.d.ts"],
+			"@OnePanda-TgSec/tg-sec-guard": ["../sec-guard/dist/index.d.ts"],
+			"@OnePanda-TgSec/tg-telemetry": ["../telemetry/dist/index.d.ts"]
+		},
+		"rootDir": "./src"
+	},
+	"include": ["src/**/*.ts"],
+	"exclude": ["node_modules", "dist", "**/*.d.ts", "src/**/*.d.ts"]
+}

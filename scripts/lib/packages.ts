@@ -15,6 +15,7 @@ export const HOUSE_NAMES = [
 	"@OnePanda-TgSec/chord",
 	"@OnePanda-TgSec/tg-env",
 	"@OnePanda-TgSec/tg-gibraltar",
+	"@OnePanda-TgSec/tg-sec-agent",
 	"@OnePanda-TgSec/tg-sec-guard",
 	"@OnePanda-TgSec/tg-telemetry",
 	"@OnePanda-TgSec/tg-tui",

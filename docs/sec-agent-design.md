@@ -5,6 +5,119 @@
 
 配套文档：`docs/sec-guard-design.md`（权限模块，本包的守卫来自该包）。
 
+## 批3 落地勘误（2026-10-23，全部对照真实签名核实）
+
+本文档定稿时若干 API 名称与行号是推断，落地时以代码为准。以下条目取代正文对应表述：
+
+1. **入口是 `Harness.open`，不是 `openHarness`。** gibraltar 从未导出 `openHarness`；生产入口是
+   `Harness.open(storage, options, context)`（`packages/gibraltar/src/harness/harness.ts:446`）。正文
+   与批3表格中的 "openHarness" 均指此。
+2. **fork 的真实位置。** 子会话分裂是 `Tx.forkConversation(parentId, at, { ownership })`
+   （`packages/gibraltar/src/session/transaction.ts:291`，harness 内部在 harness.ts:351 调用）；正文
+   "harness.ts:379 附近" 指的是 `conversationCreated` 创建钩子，不是 fork API。批3 Task 工具在
+   `api.commit((tx) => tx.forkConversation(...))` 内落子会话并写 `tg.sec.action-tree` 种子文档。
+3. **doc-kind 前缀不是硬校验。** documents 层只禁 input entry kind（`submissions.ts:152-159`），不强
+   制 `tg.` 前缀。`tg.sec.mode`（sec-guard 已持久化）与 `tg.sec.action-tree` 文档族沿用 `tg.` 命名是
+   house 规则，而非运行时校验；`defineDocFamily` 在 `packages/gibraltar/src/documents.ts:60`。
+4. **attestation 落在首个真实 `beforeTool`，不在 bootstrap。** probe 7 需要一个真 `HookApi`
+   （`taskId`/`memo`/`snapshotAsOf` 无诚实的启动期取值），所以 `guard.attest(...)` 由 core extension
+   的首个 `beforeTool` 调用触发（gibraltar 在该处交出真 `HookApi`），失败即 block 该帧工具调用，标志位
+   仅在成功后翻转。`openSecAgent` 本身不 attest——这是对原 bootstrap 设计的最小修正。
+5. **一项目一库文件。** 同一 SQLite 文件内二次 `Harness.open` 会重建 reserved root 会话（ID 1），全局
+   record-ID 认领使第二个 project 抛 `already belongs to conversation`（bootstrap.test.ts 钉死）。故默认
+   必须一项目一文件。
+6. **faux 工具回合必须显式 `stopReason: "toolUse"`。** 否则 faux 不会把 toolCall 交给执行面；测试里的
+   工具回合都按 `fauxAssistantMessage([...], { stopReason: "toolUse" })` 构造。
+7. **sec-agent 不依赖 `tg-env`。** env 解析器由 gibraltar 定型（`env/node` 的 `NodeExecutionEnv`、
+   `EnvTarget`），接受宿主注入的远程 env 不给 sec-agent 增加对 env 包的边。批3 的真实依赖边集 =
+   {chord, tg-ai, tg-gibraltar, tg-sec-guard, tg-telemetry}，见 `packages/sec-agent/test/boundary.test.ts`。
+
+## 批4 落地勘误/决策（2026-10-24，全部对照真实签名与实跑核实）
+
+正文「证据与审计」节定稿时以 ARTEX（Go + PostgreSQL）为行为参照；落地为 TS + gibraltar SQLite 时
+以下条目取代或补齐该节表述：
+
+1. **串行写：PG 咨询锁 + `SELECT FOR UPDATE` → SQLite 等价，零新依赖。** ARTEX 用
+   `pg_advisory_xact_lock` + `FOR UPDATE`（finding_traffic.go:27-40,175）串行化同一主体的证据写。
+   本轮改用 gibraltar 原生 `NodeSqliteDatabase.transaction()`（`BEGIN IMMEDIATE` 提前取写锁 +
+   `openNodeSqliteDatabase` 的 `busy_timeout`（默认 5000ms）处理 `SQLITE_BUSY` + 进程内
+   `SerialOperationQueue.runAsync` 天然串行），不引 proper-lockfile 等新依赖。乐观锁
+   `evidence_version` 逐主体存于 `tg_sec_evidence_versions` 表；`bind` 的 `expectedVersion` 为
+   `null` 时不校验（无条件追加），否则不符即抛 `TgSecEvidenceConflictError`。
+2. **`ON CONFLICT DO NOTHING` + RowsAffected → SELECT-存在性-再-INSERT。** `run()` 在 gibraltar 侧不
+   回传 RowsAffected，故 "changed"（是否真的新增了一条 binding）由「先 `SELECT 1` 探在否、不在才
+   `INSERT`」判定；既有 binding 的 role/note 一律不被覆盖（与 ARTEX 一致）。反标记
+   `unreferenced_at = NULL` 无条件发生。
+3. **存储布局：证据与会话彻底分库。** 每项目一个独立证据索引 SQLite 文件
+   `projects/<safe>/evidence/evidence.sqlite`，内容寻址 blob 落 `blobs/<hash[0:2]>/<hash>.bin`、
+   写入暂存在 `.staging/`——三者在 `evidence/` 子树内、**均在 `session.sqlite` 之外**（config.ts:9-31）。
+   会话 transcript 与取证证据因此有各自的生命周期、备份与 GC。目录 `0700`、blob `0600`。
+4. **主体键泛化为 `subjectId: string`。** ARTEX 的 findings 主体、report 版本（`report_evidence_version`）
+   属批5/6；本轮 store 自管版本表，调用方各自传字符串 id，不预置 findings 语义。
+5. **证据层零 JSON（用户硬指令，限批4 证据子系统）。** ARTEX 用 canonical JSON 只为拿确定性字节做
+   snapshot-ID preimage（finding_traffic.go:130-137）。本轮**不用 `JSON.stringify`**，改用**定序 + 长度
+   前缀字节编码**（hashing.ts `encodeEvidenceSnapshotPreimage`）：域分隔 tag `tg.sec.evidence/v1\0` +
+   固定字段序 + 每个变长字符串带 `uint32be` 字节长前缀 + 定宽大端数值（status `u32be`、req_len/resp_len
+   `u64be`、captured_at `i64be`）+ 两个 32 原始 hash 字节；`ID`/`createdAt` 由构造排除。长度前缀使拼接
+   无歧义（字段内容无法伪造字段边界），字段序入 ID（重排即变）。元数据在 SQLite 是列存、raw body 落
+   文件 blob——皆非 JSON。回归见 evidence-hashing.test.ts（含「边界伪造 → ID 不同」用例）。
+6. **两个哈希域不混。** blob key = `sha256(body 原始字节)`（header 从不计入）；snapshot id =
+   `sha256(定序长度前缀 preimage)`。请求体/响应体是两个独立 blob。ID 在插入时校验、读回时再校验；
+   hash 必须 64 位**合法小写 hex**（大写拒绝、不折叠）。
+7. **fsync 为房内新增能力。** writeBody 序列（staging→边算 SHA-256→长度门→可选哈希门→fsync→close→按
+   **算得的** hash 定位→存在则先 verify 再 `chtimes` 刷宽限；否则 mkdirAll+rename+父目录 fsync）有意
+   超出房规既有模式（src 此前无 fsync 先例，仅 temp+rename / `wx` 认领）。不可变 blob 唯一被允许的原地
+   改动就是那次 `chtimes` 宽限刷新。CHANGELOG 记录。
+8. **GC 三段 + 宽限读文件 mtime。** `collect(now)`：先 `UPDATE ... SET unreferenced_at` 标记无 binding
+   的快照，再删 `unreferenced_at < now - 24h` 者，最后遍历 `blobs/` 与 `.staging/`，凡不在存活 hash 并集
+   （req∪resp）且 `now - mtime >= 24h` 者删除（EVIDENCE_GRACE_MS = 24h）。宽限计时以文件 mtime 为准。
+9. **审计 span 全覆盖的本轮边界。** `TG_SPAN_SCHEMA`（telemetry/spans.ts）本轮新增两个 span：
+   `tg.span.sec.evidence`（每 op 一条，属性只放 `op`/`subjectDigest`（截断单向摘要，绝不放原始
+   subject/hash）/`outcome`/`changed`/`count`）与 `tg.span.sec.fork`（委派一条，`lane`/`outcome`/`depth`，
+   **不带 intent 文本**）。fork span 经 `TelemetryContext` 从宿主穿到 Task 工具（task-tool.ts）；`depth`
+   本轮恒为 1（批3 前台单跳，`ToolExecutionApi` 不暴露会话深度，不编造）。guard 判定/模式切换 span 批3
+   已在。**scope 注册变更 span 延后批5**：当前 `createTgSecScopeRegistry` 是 build-once 只读、树上无注册
+   变更调用点，本轮不为无消费者的场景造接缝。**redis 本轮不预置**（「必要的时候再选」）——SQLite +
+   文件系统 blob 足够当下消费者。**span 覆盖 = 发射点存在且被 `InMemoryTelemetryContext` 观测**；生产
+   exporter 属未来批次（tg-telemetry 目前只有 NOOP + InMemory）。
+
+## 批5-A 落地勘误/决策（2026-10-24，全部对照真实签名与实跑核实）
+
+批5 拆成可独立验证的切片，本切片（5-A）落纯 sec 工具面，不动房规治理文件。以下取代正文相关表述：
+
+1. **本轮 = 纯 sec 工具面，MCP 桥推迟。** 落 `src/tools/` 三工具（`http_request` /
+   `evidence_capture` / `traffic_query`），打包为一个宿主可安装的 `sec-tools` 扩展
+   （`createSecToolsExtension`），与 `sec-core` 并列 install。MCP 桥需新增
+   `sec-agent → @earendil-works/pi-mcp` 依赖边，直接违反 `test/boundary.test.ts` 禁列与
+   AGENTS「mcp 是无人依赖的 vendored 叶子」；桥 + 其边界/AGENTS 修订单列下一轮，本轮不造无消费者的边。
+2. **三工具恒 `deferred`。** `deferred:true` 使其不进 modelTools、须经 `tool_search` 点名才 offered；
+   但 nested `executeTool` 恒可达（`callers:["model","tools"]`）。**`sec-core` 的 `beforeTool` 在
+   `ToolTask` 层对每个注册工具都跑**，故新工具入册即被 guard 覆盖，零额外接线。
+3. **`http_request` 的 scope 判定白送。** guard 的 `extractConnectionTargets` 遍历整个 `arguments` 树，
+   `url` 属 declared-target → strong → host → `registry.outcome(host)`；scope 层在 mode dispatch 之前、
+   **不 gate toolName**。故 `{url:"https://host/x"}` 的 host 被 scope 拦，**sec-guard 无需改**；
+   `test/sec-http-scope.test.ts` 端到端证明（in-scope 放行、out forced ask、`tg.span.sec.guard` layer=scope）。
+   传 `{"target":...}` 才需扩表，本轮就用 `url`。
+4. **网络经注入的 `RequestExecutor` 接缝。** `src` 属 `node` 型程序，注入接口避开 Bun/Node 全局 `fetch`
+   类型冲突（AGENTS「Type programs」）且保证测试零 egress。生产 `nodeRequestExecutor` 用
+   `node:http`/`node:https`，**故意不跟随 redirect**：越界 3xx 必须留在调用方判断，不能成静默 hops。
+5. **findings 主体 = evidence `subjectId`（字符串 findingId）。** 这是批4「泛化 subjectId」的第一个真实消费者。
+   findings/report 表与版本属批6；本轮只确立「subject = findingId」契约。证据体只回 snapshotId + 字节数进
+   transcript，body 原文不进（取证导向）。
+6. **赛道 sections + 工具过滤。** `sections.ts` 加 per-lane `tools` 段（工具面 + 取证纪律，三赛道变体），
+   `secLaneSections` 现返回 `{preamble, lane, tools, rubric}`；`secLaneToolFilter(lane)` 是 lane→surface
+   契约。本轮三赛道都 surface 全三工具——门是 `deferred` 标志而非清单——宿主按 `configure` 的
+   `modelTools.remove`/`tools` 收窄（设计文档「赛道条件化① 走 resolveAgent 的 tools 过滤」）。
+   `test/sec-lane-filter.test.ts` 证：默认 deferred 不入 offered、nested callable 含之；`configure` add 后
+   移入 offered 并退出 deferred。
+7. **`secDeclaredTools` 扩列 → probe 4 同步。** attestation probe 4 是 registered==declared 的严格集合相等
+   （缺名或多名都 fail-closed），故三工具入册即入 declared；`guard-wiring.test.ts` 与 `tg-sec` 冒烟 CLI 均
+   install `sec-tools` 保持两集对齐。
+8. **telemetry 本轮零改动、无新 span。** 工具经批4 store 自动发 `tg.span.sec.evidence`（`getSnapshot` 走
+   既有 `read` op）；guard/mode/fork/evidence span 已在。**scope 注册变更 span 继续推迟**（注册表只读、
+   树上无注册写调用点，与批4 同一「不造无消费者接缝」原则）；真有注册面批次时按 `tg.span.sec.mode`
+   先例（非决策型审计 span）在 `TG_SPAN_SCHEMA` 加 `tg.span.sec.scope`。
+
 ## 背景与目标
 
 sec-agent = 面向政务红蓝/公安对抗赛的安全攻防 agent，**彻底落在 gibraltar 上**：循环、持久化、

@@ -250,5 +250,80 @@ export const TG_SPAN_SCHEMA = defineTelemetrySchema({
 			endAttributes: {},
 			status: { default: "ok", errorWhen: "The switch commit throws." },
 		},
+		"tg.span.sec.fork": {
+			description:
+				"One foreground `task` delegation to a child conversation forked from the caller. Attributes carry the lane and the outcome only — never the delegation intent or any child text.",
+			parents: { kind: "root_or_external" },
+			startAttributes: {
+				lane: {
+					type: "string",
+					values: ["redteam", "ctf", "src"],
+					required: true,
+					cardinality: "low",
+					description: "The lane whose static policy the child runs under.",
+				},
+			},
+			endAttributes: {
+				outcome: {
+					type: "string",
+					values: ["done", "failed", "aborted"],
+					cardinality: "low",
+					description: "How the child's delegation settled.",
+				},
+				depth: {
+					type: "number",
+					cardinality: "low",
+					description:
+						"Child depth below the root conversation. Batch-4's foreground `task` is a single hop, so this is always 1.",
+				},
+			},
+			status: { default: "ok", errorWhen: "The delegation fails, aborts, or throws." },
+		},
+		"tg.span.sec.evidence": {
+			description:
+				"One evidence-store operation. Attributes carry the operation, an optional truncated one-way digest of the subject, and the outcome with counts; never a content hash, a snapshot id, or subject text.",
+			parents: { kind: "root_or_external" },
+			startAttributes: {
+				op: {
+					type: "string",
+					values: ["record", "bind", "list", "edit", "collect", "read"],
+					required: true,
+					cardinality: "low",
+					description: "The evidence-store method this span covers.",
+				},
+				subjectDigest: {
+					type: "string",
+					required: false,
+					cardinality: "low",
+					sensitive: true,
+					description:
+						"Truncated one-way digest of the subject key, for correlating operations on one evidence set. Bounded; never reversible to the subject.",
+				},
+			},
+			endAttributes: {
+				outcome: {
+					type: "string",
+					values: ["ok", "conflict", "not-found", "error"],
+					cardinality: "low",
+					description:
+						"How the operation ended: success, an optimistic-lock conflict, a missing reference, or an error.",
+				},
+				changed: {
+					type: "boolean",
+					cardinality: "low",
+					description: "Whether the operation wrote durable state (a new binding, a bump, a reap).",
+				},
+				count: {
+					type: "number",
+					cardinality: "low",
+					description:
+						"The count most natural to the operation: bindings after, a snapshot, or files reclaimed by GC.",
+				},
+			},
+			status: {
+				default: "ok",
+				errorWhen: "The operation errors, hits a conflict, references missing evidence, or throws.",
+			},
+		},
 	},
 });

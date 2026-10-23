@@ -103,6 +103,26 @@
         "vitest": "4.1.11",
       },
     },
+    "packages/sec-agent": {
+      "name": "@OnePanda-TgSec/tg-sec-agent",
+      "version": "2.0.1",
+      "bin": {
+        "tg-sec": "./dist/cli/main.js",
+      },
+      "dependencies": {
+        "@OnePanda-TgSec/chord": "^2.0.1",
+        "@OnePanda-TgSec/tg-ai": "^2.0.1",
+        "@OnePanda-TgSec/tg-gibraltar": "^2.0.1",
+        "@OnePanda-TgSec/tg-sec-guard": "^2.0.1",
+        "@OnePanda-TgSec/tg-telemetry": "^2.0.1",
+        "@earendil-works/pi-codemode": "^1.3.0",
+        "typebox": "1.3.27",
+      },
+      "devDependencies": {
+        "shx": "0.4.0",
+        "vitest": "4.1.11",
+      },
+    },
     "packages/sec-guard": {
       "name": "@OnePanda-TgSec/tg-sec-guard",
       "version": "2.0.1",
@@ -146,6 +166,8 @@
     "@OnePanda-TgSec/tg-env": ["@OnePanda-TgSec/tg-env@workspace:packages/env"],
 
     "@OnePanda-TgSec/tg-gibraltar": ["@OnePanda-TgSec/tg-gibraltar@workspace:packages/gibraltar"],
+
+    "@OnePanda-TgSec/tg-sec-agent": ["@OnePanda-TgSec/tg-sec-agent@workspace:packages/sec-agent"],
 
     "@OnePanda-TgSec/tg-sec-guard": ["@OnePanda-TgSec/tg-sec-guard@workspace:packages/sec-guard"],
 

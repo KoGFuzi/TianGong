@@ -132,7 +132,7 @@ export type BuildSecGuardOptions = {
 	/** The operator intercept rules; absent means an empty table. */
 	rules?: readonly TgSecRule[];
 	/** Used for a `judge-auto` session; the other modes never call it. */
-	judgeModel?: { models: Models; model: ModelRef };
+	judgeModel?: { models: Models; model: ModelRef; resolveModel?: () => ModelRef };
 	/** Overrides `judgeModel` — tests and stubbed runs hand in their own transport. */
 	judgeTransport?: TgSecJudgeTransport;
 	askChannel?: TgSecAskChannel;

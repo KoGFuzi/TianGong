@@ -15,12 +15,15 @@ import type { TgSecJudgeTransport } from "@OnePanda-TgSec/tg-sec-guard";
 export function createModelJudgeTransport(options: {
 	models: Models;
 	model: ModelRef;
+	/** Read on every judgement, so a shell that switches models mid-session judges with the new one. */
+	resolveModel?: () => ModelRef;
 	/** Optional per-request token cap for the judge reply; the protocol answer is one short JSON object. */
 	maxTokens?: number;
 }): TgSecJudgeTransport {
-	const { models, model: ref } = options;
+	const { models } = options;
 	return {
 		async complete(input) {
+			const ref = options.resolveModel?.() ?? options.model;
 			const model = models.getModel(ref.provider, ref.modelId);
 			if (model === undefined) {
 				throw new Error(`the judge model ${ref.provider}/${ref.modelId} is not registered with this Models`);

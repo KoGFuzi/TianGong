@@ -98,6 +98,23 @@ describe("Input component", () => {
 			assert.ok(line);
 			assert.ok(visibleWidth(line) <= width);
 		});
+
+		it("masks a secret value while submitting the real text", () => {
+			const input = new Input({ prompt: "", secret: true });
+			input.setValue("sk-test-123");
+			let submitted: string | undefined;
+			input.onSubmit = (value) => {
+				submitted = value;
+			};
+			input.handleInput("\r");
+
+			const [line] = input.render(20);
+			assert.ok(line !== undefined);
+			const plain = stripTerminalSequences(line);
+			assert.ok(!plain.includes("sk-test-123"));
+			assert.strictEqual(plain.trimEnd(), "*".repeat("sk-test-123".length));
+			assert.strictEqual(submitted, "sk-test-123");
+		});
 	});
 
 	describe("Kill ring", () => {

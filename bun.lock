@@ -16,9 +16,6 @@
     "packages/ai": {
       "name": "@OnePanda-TgSec/tg-ai",
       "version": "2.0.1",
-      "bin": {
-        "tg-ai": "dist/cli.js",
-      },
       "dependencies": {
         "@OnePanda-TgSec/tg-telemetry": "^2.0.1",
         "@anthropic-ai/sdk": "0.129.0",
@@ -108,6 +105,7 @@
       "version": "2.0.1",
       "bin": {
         "tg-sec": "./dist/cli/main.js",
+        "tgsec": "./dist/tui/main.js",
       },
       "dependencies": {
         "@OnePanda-TgSec/chord": "^2.0.1",
@@ -115,6 +113,7 @@
         "@OnePanda-TgSec/tg-gibraltar": "^2.0.1",
         "@OnePanda-TgSec/tg-sec-guard": "^2.0.1",
         "@OnePanda-TgSec/tg-telemetry": "^2.0.1",
+        "@OnePanda-TgSec/tg-tui": "^2.0.1",
         "@earendil-works/pi-codemode": "^1.4.0",
         "typebox": "1.3.27",
       },

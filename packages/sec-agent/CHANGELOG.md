@@ -15,6 +15,13 @@
   support closes tracked evidence stores before sweeping temp directories (Windows refuses to
   unlink a SQLite file while its handle is open), retries the sweep, and skips POSIX mode
   assertions on `win32`.
+- `tgsec` no longer requires an authenticated provider at startup. When neither `--model`,
+  `TG_SEC_MODEL`, nor an authenticated provider yields a model, the shell opens with `no model`,
+  refuses to send a message (printing the `/connect` hint), and reconciles the stored root
+  conversation's model on restart so a stale choice cannot run silently. `/model` with no argument
+  now opens the model picker instead of printing a list.
+- The `judge-auto` judge reads its model ref at judgement time, so a model switched inside the
+  shell also becomes the judge model.
 
 ### Added
 
@@ -93,6 +100,30 @@
 - The MCP bridge is **deferred**: no `@earendil-works/pi-mcp` dependency edge is added, because that edge would violate
   `test/boundary.test.ts` and the AGENTS vendored-leaf rule; the bridge and its boundary change-order land together in a
   later batch.
+- `tgsec` and `src/tui/`: the interactive shell over the same campaign runtime. An alt-screen transcript consumes the
+  `watchSecEvents` stream (snapshot rebuild, streamed assistant text, tool cards with bounded output previews), a status
+  bar tracks project/lane/mode/model/tokens, and the editor drives slash commands (`/help`, `/model`, `/mode`, `/scope`,
+  `/clear`, `/compact`, `/usage`, `/quit`). Guard asks are queued and shown above the editor; `y`/`n`/`a` settle the
+  oldest, ctrl+c denies the queue, and shutdown denies everything still pending, so a disappearing operator never
+  leaves a call allowed. `--faux` runs a local echo provider whose `run <command>` messages call the real `bash` tool
+  through the guard, so the shell and the ask path work without credentials or egress. Model resolution is `--model`,
+  then `TG_SEC_MODEL`, then the remembered `<data>/tui-model.json`, then the first authenticated model; `/model`
+  validates and persists the choice. The scope file is `--scope` or the per-project
+  `<data>/projects/<project>/scope.json`; a missing file leaves the registry empty and every connection target is a
+  forced ask. This adds the `tg-tui` house edge (`tg-sec-agent` renders through it; tui does not depend on sec-agent),
+  and `test/boundary.test.ts` now asserts six house dependencies.
+- Tests for the shell's two safety-relevant seams: `test/tui-model.test.ts` covers spec parsing, preference
+  round-trip/corruption, and the resolution order (including fail-fast on an explicit unavailable spec);
+  `test/tui-ask.test.ts` covers FIFO settlement, deny-all, and close denying both pending and future asks.
+- `tgsec /connect`: an in-shell provider login for every provider whose OAuth or API-key method supports
+  interactive login. It renders auth URLs, device codes and prompts in a dialog, masks secret input,
+  answers the provider's select prompts through the fuzzy picker, cancels with Esc/ctrl+c, refreshes the
+  provider catalog after a successful login, and auto-selects the provider's first chat model when the
+  shell still has none. The stable device id lives at `<data>/device-id`.
+- `tgsec /models` (and `/model` with no argument): a fuzzy-searchable model picker with the current
+  model marked; `/models <query>` prefills the search.
+- The `Input` component in `tg-tui` gained `secret: true`, rendering one `*` per character while
+  `getValue()` still returns the real text; the login dialog uses it for API keys and codes.
 
 ### Changed
 

@@ -255,22 +255,23 @@ telemetry ─┘
 
 chord ──┐
 ai ─────┤
-gibraltar ─┼──▶ sec-agent   (the campaign runtime sits on the harness, the guard and telemetry)
+gibraltar ─┼──▶ sec-agent   (the campaign runtime sits on the harness, the guard, telemetry and tui)
 sec-guard ─┤
-telemetry ─┘
+telemetry ─┤
+tui ───────┘
 
-tui                      (leaf; no remaining package depends on it)
 codemode   mcp           (vendored; house packages import them by their upstream names)
 ```
 
 Arrows point from a package toward the packages that depend on it.
 `tg-gibraltar` depends on `chord` and `tg-ai`, `tg-env` depends on `chord` and `tg-gibraltar`,
 `tg-sec-guard` depends on `chord`, `tg-ai`, `tg-gibraltar`, and `tg-telemetry`, and `tg-sec-agent`
-depends on `chord`, `tg-ai`, `tg-gibraltar`, `tg-sec-guard`, and `tg-telemetry` (plus the vendored
-`@earendil-works/pi-codemode` for the sandbox gibraltar's `./codemode` extension runs on). Sec-agent
+depends on `chord`, `tg-ai`, `tg-gibraltar`, `tg-sec-guard`, `tg-telemetry`, and `tg-tui` (plus the
+vendored `@earendil-works/pi-codemode` for the sandbox gibraltar's `./codemode` extension runs on).
+`tg-tui` is what the `tgsec` bin renders through; it does not depend on sec-agent in return. Sec-agent
 does **not** depend on `tg-env`: the env resolver is typed by gibraltar (`env/node`, `EnvTarget`), so
 a host-built remote env costs the campaign runtime no edge on the env package.
-`chord`, `tui`, `telemetry`, `sec-agent`, `codemode`, and `mcp` are leaves: nothing in this workspace
+`chord`, `telemetry`, `sec-agent`, `codemode`, and `mcp` are leaves: nothing in this workspace
 depends on them. That is what keeps `chord` publishable on its own.
 
 Do not call `bun test`. Bun reserves that name for its own runner, which would silently bypass

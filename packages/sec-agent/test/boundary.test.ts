@@ -6,12 +6,13 @@ import { describe, expect, test } from "vitest";
 /**
  * Batch 3 is the first place a *new* dependency edge can be recorded as a false claim, so the edge
  * set is asserted from the two files that actually decide it — the manifest and the import graph —
- * not from a comment. The set sec-agent depends on is the five house packages a campaign runtime
+ * not from a comment. The set sec-agent depends on is the six house packages a campaign runtime
  * needs plus the two sanctioned non-house entries: gibraltar's vendored codemode, reached through
  * gibraltar's own `./codemode` subpath, and `@earendil-works/pi-codemode` itself (AGENTS.md: house
  * packages import vendored packages by their upstream name). `tg-env` is deliberately absent: the
  * env resolver is typed by gibraltar (`env/node`, `EnvTarget`), so accepting a host-built remote env
- * costs sec-agent no edge on the env package.
+ * costs sec-agent no edge on the env package. `tg-tui` is the interactive shell the `tgsec` bin
+ * renders; it is a leaf dependency, never the reverse.
  */
 
 const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -25,6 +26,7 @@ const ALLOWED_WORKSPACE = [
 	"@OnePanda-TgSec/tg-gibraltar",
 	"@OnePanda-TgSec/tg-sec-guard",
 	"@OnePanda-TgSec/tg-telemetry",
+	"@OnePanda-TgSec/tg-tui",
 ];
 
 /** Collapse a scope specifier to its package root so a subpath import counts once. */
@@ -49,7 +51,7 @@ async function specifiers(): Promise<readonly { readonly file: string; readonly 
 }
 
 describe("sec-agent package boundary", () => {
-	test("declares exactly the five house dependencies and nothing else under the scope", async () => {
+	test("declares exactly the six house dependencies and nothing else under the scope", async () => {
 		const manifest = JSON.parse(await readFile(resolve(packageDirectory, "package.json"), "utf8")) as {
 			dependencies?: Record<string, string>;
 		};
@@ -71,9 +73,8 @@ describe("sec-agent package boundary", () => {
 		expect([...roots].sort()).toEqual([...ALLOWED_WORKSPACE].sort());
 	});
 
-	test("keeps tui, mcp and the env package out of the graph", async () => {
+	test("keeps mcp and the env package out of the graph", async () => {
 		const forbidden = [
-			"@OnePanda-TgSec/tg-tui",
 			"@OnePanda-TgSec/tg-env",
 			"@OnePanda-TgSec/tg-mcp",
 			"@OnePanda-TgSec/tg-codemode",

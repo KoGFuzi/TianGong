@@ -35,13 +35,13 @@ data 目录下的两个关键文件：
 
 ```text
 ~/.local/share/TianGong/
-├── auth.json        tg-sec login 写入的 provider 凭据
+├── auth.json        tg-sec login 或 tgsec /connect 写入的 provider 凭据
 ├── session.sqlite   默认会话数据库
 ├── sessions/        tg-sec-agent 的会话文件
 └── tg-debug.log     tg-sec-agent 的调试日志（启用时）
 ```
 
-**凭据为什么在 data 而不在 config**：`auth.json` 是程序运行时生成的状态，不是用户手写的配置。`opencode` 把自己的 `auth.json` 放在 data 根，TianGong 与其一致。排查权限问题时请检查 data 目录，而不是 config。凭据由 `tg-sec login [provider]` 写入；`tg-sec list` 列出支持 OAuth 的 provider。
+**凭据为什么在 data 而不在 config**：`auth.json` 是程序运行时生成的状态，不是用户手写的配置。`opencode` 把自己的 `auth.json` 放在 data 根，TianGong 与其一致。排查权限问题时请检查 data 目录，而不是 config。凭据由 `tg-sec login [provider]` 写入；`tg-sec list` 列出支持 OAuth 的 provider。交互式外壳 `tgsec` 复用同一份 `auth.json`，不另建登录体系：启动时**不要求**任何 provider 已配置，没有可用模型时状态栏显示 `no model` 并拒绝发送消息；`/connect` 在壳内运行 OAuth 或 API key 登录流程（密钥输入以 `*` 遮蔽），登录成功后刷新模型目录并在尚无模型时自动选中该 provider 的第一个聊天模型；`/models`（或空参数的 `/model`）打开模糊搜索选择器，`/models <query>` 预填搜索词。`tgsec login [provider]` 转调 `tg-sec login`，`tgsec models` 列出当前已认证、可直接启动的模型；壳内选择会写入 `tui-model.json` 供下次启动使用。
 
 ### 2.1 路径解析规则
 

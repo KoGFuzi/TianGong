@@ -7,7 +7,7 @@ import { openSecAgent, type SecAgent, type SecAgentLane } from "../src/index.ts"
 import { secLaneToolFilter } from "../src/sections.ts";
 import { createSecToolsExtension } from "../src/tools/extension.ts";
 import type { HttpRequest, HttpResponse, RequestExecutor } from "../src/tools/transport.ts";
-import { cleanupTempDirs, context, fauxModel, fauxSetup, tempDir } from "./support.ts";
+import { cleanupTempDirs, context, fauxModel, fauxSetup, tempDir, trackStore } from "./support.ts";
 
 afterEach(cleanupTempDirs);
 
@@ -36,6 +36,7 @@ function markerTool(): ToolRegistration {
 async function openLaneAgent(lane: SecAgentLane): Promise<SecAgent> {
 	const dir = await tempDir("tg-sec-lane-");
 	const store = await openTgSecEvidenceStore({ dir: await tempDir("tg-sec-lane-ev-") });
+	trackStore(store);
 	const { models } = fauxSetup();
 	const agent = await openSecAgent({
 		context,

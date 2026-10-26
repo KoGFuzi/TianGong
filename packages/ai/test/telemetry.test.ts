@@ -1,457 +1,428 @@
-import {
-	InMemoryTelemetryContext,
-	NOOP_TELEMETRY_CONTEXT,
-	type RecordedTelemetrySpan,
-} from "@OnePanda-TgSec/tg-telemetry";
-import { describe, expect, it } from "vitest";
-import { createModels, createProvider } from "../src/models.ts";
-import type {
-	Api,
-	AssistantMessage,
-	AssistantMessageEvent,
-	ClassifierApi,
-	ClassifierContext,
-	ClassifierModel,
-	Context,
-	ImageApi,
-	ImageModel,
-	ImagesContext,
-	Model,
-	StreamOptions,
-	Usage,
-} from "../src/types.ts";
+import { InMemoryTelemetryContext, type RecordedTelemetrySpan, type TelemetrySpan } from "@OnePanda-TgSec/tg-telemetry";
+import { describe, expect, it, vi } from "vitest";
+import { lazyStream } from "../src/api/lazy.ts";
+import { AI_TELEMETRY_SCHEMA, createModels, createProvider } from "../src/models.ts";
+import { observeModelRequest } from "../src/telemetry.ts";
+import type { AssistantMessage, AssistantMessageEvent, DeferredHandle, Model } from "../src/types.ts";
 import { AssistantMessageEventStream } from "../src/utils/event-stream.ts";
-import { retryProviderRequest } from "../src/utils/provider-retry.ts";
-import { normalizeContext } from "../src/utils/transcript.ts";
 
-const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
-const context: Context = { messages: [{ role: "user", content: "hello", timestamp: 0 }] };
-const transcript = normalizeContext(context);
-const imagesContext: ImagesContext = { input: [{ type: "text", text: "circle" }] };
-const classifierContext: ClassifierContext = {
-	state: { text: "yes" },
-	questions: {
-		approved: {
-			type: "bool",
-			instructions: "Does this express approval?",
-			criteria: { true: "Approval", false: "No approval" },
-		},
-	},
-};
-
-const chatModel: Model<"telemetry-chat"> = {
-	id: "chat-model",
-	name: "Chat Model",
-	api: "telemetry-chat",
-	provider: "telemetry-provider",
+const model: Model<"telemetry-test"> = {
+	id: "model",
+	name: "Model",
+	api: "telemetry-test",
+	provider: "test",
 	baseUrl: "https://example.test",
-	reasoning: false,
+	reasoning: true,
 	input: ["text"],
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
 	contextWindow: 1000,
 	maxTokens: 100,
 };
+const handle: DeferredHandle = { provider: model.provider, modelId: model.id, api: model.api, id: "deferred-secret" };
 
-const imageModel: ImageModel<ImageApi> = {
-	type: "image",
-	id: "image-model",
-	name: "Image Model",
-	api: "telemetry-images",
-	provider: "telemetry-images-provider",
-	baseUrl: "https://example.test",
-	input: ["text"],
-	output: ["image"],
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-};
-
-const classifierModel: ClassifierModel<ClassifierApi> = {
-	type: "classifier",
-	id: "classifier-model",
-	name: "Classifier Model",
-	api: "telemetry-classifier",
-	provider: "telemetry-classifier-provider",
-	baseUrl: "https://example.test",
-	input: ["text"],
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-	contextWindow: 1000,
-};
-
-const usage: Usage = {
-	input: 7,
-	output: 3,
-	cacheRead: 1,
-	cacheWrite: 2,
-	totalTokens: 12,
-	cost: { input: 0.1, output: 0.2, cacheRead: 0.01, cacheWrite: 0.02, total: 0.33 },
-};
-
-/** A provider whose single chat model answers with a caller-supplied stream. */
-function chatProvider(
-	id: string,
-	open: (model: Model<Api>, options: StreamOptions | undefined) => AssistantMessageEventStream,
-) {
-	const model: Model<"telemetry-chat"> = { ...chatModel, provider: id };
-	const provider = createProvider({
-		id,
-		auth: { apiKey: { name: "Test key", resolve: async () => ({ auth: {} }) } },
-		models: [model],
-		api: {
-			stream: (requestModel, _context, options) => open(requestModel, options),
-			streamSimple: (requestModel, _context, options) => open(requestModel, options),
-		},
-	});
-	return { model, provider };
-}
-
-function completedMessage(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
+function message(stopReason: AssistantMessage["stopReason"] = "stop"): AssistantMessage {
 	return {
 		role: "assistant",
-		content: [],
-		api: "telemetry-chat",
-		provider: "telemetry-provider",
-		model: "chat-model",
-		usage,
-		stopReason: "stop",
-		timestamp: 0,
-		...overrides,
+		api: model.api,
+		provider: model.provider,
+		model: model.id,
+		content: [
+			{ type: "text", text: "text-secret" },
+			{ type: "thinking", thinking: "thinking-secret" },
+			{ type: "toolCall", id: "call-secret", name: "lookup", arguments: { value: "argument-secret" } },
+		],
+		usage: {
+			input: 11,
+			output: 22,
+			cacheRead: 33,
+			cacheWrite: 44,
+			totalTokens: 110,
+			cost: { input: 0.1, output: 0.2, cacheRead: 0.3, cacheWrite: 0.4, total: 1 },
+		},
+		responseId: "response",
+		stopReason,
+		timestamp: Date.now(),
 	};
 }
 
-/** Push a terminal done event on the next microtask, like a real adapter delivering its first bytes. */
-function completedStream(model: Model<Api>, overrides: Partial<AssistantMessage> = {}): AssistantMessageEventStream {
-	const stream = new AssistantMessageEventStream();
-	const message = completedMessage({ api: model.api, provider: model.provider, model: model.id, ...overrides });
-	queueMicrotask(() => stream.push({ type: "done", reason: "stop", message }));
-	return stream;
-}
-
-async function collect(stream: AssistantMessageEventStream): Promise<AssistantMessageEvent[]> {
-	const events: AssistantMessageEvent[] = [];
-	for await (const event of stream) events.push(event);
-	return events;
-}
-
-/** Observe the terminal event of a stream that may never terminate. */
-async function terminal(stream: AssistantMessageEventStream): Promise<{ stopReason: string; message?: string }> {
-	const observed = (async () => {
-		for await (const event of stream) {
-			if (event.type === "error") return { message: event.error?.errorMessage, stopReason: "error" };
-			if (event.type === "done") return { stopReason: event.reason };
-		}
-		return { stopReason: "ended" };
-	})();
-	const stillOpen = new Promise<{ stopReason: string }>((resolve) =>
-		setTimeout(() => resolve({ stopReason: "open" }), 50),
-	);
-	return Promise.race([observed, stillOpen]);
-}
-
-function retryableFailure(): Error {
-	const error = new Error("upstream unavailable") as Error & { status: number; headers: Headers };
-	error.status = 500;
-	error.headers = new Headers();
-	return error;
-}
-
-function requestsIn(spans: readonly RecordedTelemetrySpan[]): readonly RecordedTelemetrySpan[] {
-	return spans.filter((span) => span.name === "tg.span.provider.request");
-}
-
-function acquiresIn(spans: readonly RecordedTelemetrySpan[]): readonly RecordedTelemetrySpan[] {
-	return spans.filter((span) => span.name === "tg.span.provider.acquire");
-}
-
-describe("provider request spans", () => {
-	it("records one request span for a direct provider call", async () => {
-		const telemetry = new InMemoryTelemetryContext();
-		const { model, provider } = chatProvider("telemetry-provider", (requestModel) => completedStream(requestModel));
-
-		await provider.stream(model, transcript, { telemetryContext: telemetry }).result();
-		await tick();
-
-		const spans = telemetry.getSpans();
-		expect(spans).toHaveLength(1);
-		const span = spans[0]!;
-		expect(span.name).toBe("tg.span.provider.request");
-		expect(span.parentId).toBeNull();
-		expect(span.attributes).toMatchObject({
-			provider: "telemetry-provider",
-			api: "telemetry-chat",
-			model: "chat-model",
-			stopReason: "stop",
-			retried: false,
-			"tokens.input": 7,
-			"tokens.output": 3,
-			"tokens.cacheRead": 1,
-			"tokens.cacheWrite": 2,
-			"cost.total": 0.33,
-		});
-		expect(span.attributes.errorName).toBeUndefined();
-		expect(span.status).toEqual({ status: "ok" });
-		expect(span.settled).toBe(true);
-	});
-
-	it("nests the request span under the acquire span through Models without changing events", async () => {
-		const telemetry = new InMemoryTelemetryContext();
-		const { model, provider } = chatProvider("telemetry-provider", (requestModel) => completedStream(requestModel));
-		const models = createModels();
-		models.setProvider(provider);
-
-		const observed = await collect(models.stream(model, context, { telemetryContext: telemetry }));
-		const baseline = await collect(models.stream(model, context));
-		await tick();
-
-		expect(observed).toEqual(baseline);
-		const spans = telemetry.getSpans();
-		expect(spans).toHaveLength(2);
-		const acquire = acquiresIn(spans)[0];
-		const request = requestsIn(spans)[0];
-		expect(acquire?.attributes.provider).toBe("telemetry-provider");
-		expect(acquire?.parentId).toBeNull();
-		expect(request?.parentId).toBe(acquire?.id);
-		expect(request?.attributes.retried).toBe(false);
-		expect(request?.status).toEqual({ status: "ok" });
-	});
-
-	it("reports a retried call, a direct call, and exhausted retries distinctly", async () => {
-		const run = async (succeedOnCall: number, maxRetries: number, telemetry: InMemoryTelemetryContext) => {
-			let calls = 0;
-			const { model, provider } = chatProvider("telemetry-retry", (requestModel, options) => {
-				const stream = new AssistantMessageEventStream();
-				void (async () => {
-					try {
-						await retryProviderRequest(
-							async () => {
-								calls += 1;
-								if (calls < succeedOnCall) throw retryableFailure();
-								return "ok";
-							},
-							{ maxRetries, onRetry: options?.onRetry, signal: options?.signal },
-						);
-						stream.push({ type: "done", reason: "stop", message: completedMessage({ model: requestModel.id }) });
-					} catch (error) {
-						stream.push({
-							type: "error",
-							reason: "error",
-							error: completedMessage({
-								model: requestModel.id,
-								stopReason: "error",
-								errorMessage: error instanceof Error ? error.message : String(error),
-							}),
-						});
-					}
-				})();
-				return stream;
-			});
-
-			await provider.stream(model, transcript, { telemetryContext: telemetry }).result();
-			await tick();
-			return { calls, span: requestsIn(telemetry.getSpans())[0]! };
-		};
-
-		const retried = await run(2, 1, new InMemoryTelemetryContext());
-		expect(retried.calls).toBe(2);
-		expect(retried.span.attributes.retried).toBe(true);
-		expect(retried.span.attributes.stopReason).toBe("stop");
-		expect(retried.span.status).toEqual({ status: "ok" });
-
-		const direct = await run(1, 1, new InMemoryTelemetryContext());
-		expect(direct.calls).toBe(1);
-		expect(direct.span.attributes.retried).toBe(false);
-		expect(direct.span.status).toEqual({ status: "ok" });
-
-		const exhausted = await run(Number.POSITIVE_INFINITY, 1, new InMemoryTelemetryContext());
-		expect(exhausted.calls).toBe(2);
-		expect(exhausted.span.attributes.retried).toBe(true);
-		expect(exhausted.span.attributes.stopReason).toBe("error");
-		expect(exhausted.span.status.status).toBe("error");
-	});
-
-	it("records a refused admission without a request span", async () => {
-		const telemetry = new InMemoryTelemetryContext();
-		const model: Model<"telemetry-chat"> = { ...chatModel, provider: "telemetry-gate" };
-		const open: AssistantMessageEventStream[] = [];
-		let admitted = 0;
-		const provider = createProvider({
-			id: "telemetry-gate",
-			auth: { apiKey: { name: "Test key", resolve: async () => ({ auth: {} }) } },
-			models: [model],
-			api: {
-				stream: () => new AssistantMessageEventStream(),
-				streamSimple: () => {
-					admitted += 1;
-					const stream = new AssistantMessageEventStream();
-					open.push(stream);
-					return stream;
+function events(result: AssistantMessage): AssistantMessageEvent[] {
+	const toolCall = result.content[2];
+	if (toolCall.type !== "toolCall") throw new Error("Missing tool call");
+	return [
+		{ type: "start", partial: result },
+		{ type: "text_delta", contentIndex: 0, delta: "text-secret", partial: result },
+		{ type: "text_end", contentIndex: 0, content: "text-secret", partial: result },
+		{ type: "thinking_end", contentIndex: 1, content: "thinking-secret", partial: result },
+		{ type: "toolcall_delta", contentIndex: 2, delta: '{"value":', partial: result },
+		{ type: "toolcall_delta", contentIndex: 2, delta: '"argument-secret"}', partial: result },
+		{ type: "toolcall_end", contentIndex: 2, toolCall, partial: result },
+		result.stopReason === "error" || result.stopReason === "aborted"
+			? { type: "error", reason: result.stopReason, error: result }
+			: {
+					type: "done",
+					reason: result.stopReason === "pending" ? "deferred" : result.stopReason,
+					message: result,
 				},
+	];
+}
+
+function setup(result: AssistantMessage = message()) {
+	const models = createModels();
+	const streamEvents = events(result);
+	const respond = () => {
+		const stream = new AssistantMessageEventStream();
+		for (const event of streamEvents) stream.push(event);
+		stream.end(result);
+		return stream;
+	};
+	models.setProvider(
+		createProvider({
+			id: model.provider,
+			models: [model],
+			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
+			api: { stream: respond, streamSimple: respond, fetchDeferred: respond },
+		}),
+	);
+	return { models, streamEvents };
+}
+
+async function settled(telemetry: InMemoryTelemetryContext): Promise<void> {
+	await vi.waitFor(() => expect(telemetry.getSpans().every((span) => span.settled)).toBe(true));
+}
+
+/** The AI spans; the house provider gate also records acquire and request spans on the same call. */
+function aiSpans(telemetry: InMemoryTelemetryContext): readonly RecordedTelemetrySpan[] {
+	return telemetry.getSpans().filter((span) => span.name === "tg.span.ai.request" || span.name === "tg.span.ai.poll");
+}
+
+describe("AI telemetry", () => {
+	it.each(["stream", "streamSimple", "streamDeferred"] as const)(
+		"observes %s without changing delivered events or results",
+		async (method) => {
+			const telemetry = new InMemoryTelemetryContext();
+			const result = message();
+			const { models, streamEvents } = setup(result);
+			await telemetry.startSpan({ name: "caller" }, async (parent) => {
+				const stream =
+					method === "streamDeferred"
+						? models.streamDeferred(model, handle, { telemetry: parent })
+						: models[method](model, { messages: [] }, { telemetry: parent, reasoning: "high" });
+				const received: AssistantMessageEvent[] = [];
+				for await (const event of stream) received.push(event);
+				expect(received).toEqual(streamEvents);
+				for (const [index, event] of received.entries()) expect(event).toBe(streamEvents[index]);
+				expect(await stream.result()).toBe(result);
+			});
+			await settled(telemetry);
+			const [parent] = telemetry.getSpans();
+			const [span] = aiSpans(telemetry);
+			expect(span?.name).toBe(method === "streamDeferred" ? "tg.span.ai.poll" : "tg.span.ai.request");
+			expect(span?.parentId).toBe(parent?.id);
+			expect(span.attributes).toEqual({
+				provider: "test",
+				api: "telemetry-test",
+				model: "model",
+				...(method === "streamDeferred" ? {} : { reasoning: "high" }),
+				stop: "stop",
+				"usage.input": 11,
+				"usage.output": 22,
+				"usage.cache_read": 33,
+				"usage.cache_write": 44,
+				"cost.total": 1,
+				"response.id": "response",
+			});
+			expect(span.events).toEqual([
+				{ name: "tg.ai.first_chunk", attributes: {} },
+				{ name: "tg.ai.block", attributes: { type: "text", index: 0, chars: 11 } },
+				{ name: "tg.ai.block", attributes: { type: "thinking", index: 1, chars: 15 } },
+				{ name: "tg.ai.block", attributes: { type: "tool_call", index: 2, chars: 27, tool: "lookup" } },
+			]);
+			expect(JSON.stringify(span)).not.toMatch(
+				/text-secret|thinking-secret|argument-secret|call-secret|deferred-secret/,
+			);
+			const measurements = telemetry.getMetrics();
+			expect(measurements).toHaveLength(7);
+			expect(measurements.filter((measurement) => measurement.kind === "counter").map(({ value }) => value)).toEqual(
+				[11, 22, 33, 44, 1],
+			);
+			for (const measurement of measurements) {
+				expect(Object.keys(measurement.attributes).sort()).toEqual(
+					measurement.name === "tg.ai.tokens"
+						? ["kind", "model", "provider"]
+						: measurement.name === "tg.ai.request.duration"
+							? ["model", "provider", "stop"]
+							: ["model", "provider"],
+				);
+				if (measurement.kind === "histogram") expect(measurement.context).toEqual(span.context);
+			}
+		},
+	);
+
+	it.each(["error", "aborted"] as const)("reports %s status without error attributes or events", async (reason) => {
+		const telemetry = new InMemoryTelemetryContext();
+		const result = { ...message(reason), errorMessage: "error-secret" };
+		const { models } = setup(result);
+		expect(
+			await telemetry.startSpan({ name: "caller" }, (span) =>
+				models.completeSimple(model, { messages: [] }, { telemetry: span }),
+			),
+		).toBe(result);
+		await settled(telemetry);
+		const [span] = aiSpans(telemetry);
+		expect(span?.status).toEqual(
+			reason === "error"
+				? { status: "error", error: { name: "provider_error", message: "error-secret" } }
+				: { status: "ok" },
+		);
+		expect(span.attributes.stop).toBe(reason);
+		expect(JSON.stringify(span.attributes)).not.toContain("error-secret");
+		expect(JSON.stringify(span.events)).not.toContain("error-secret");
+		if (reason === "aborted") expect(JSON.stringify(span)).not.toContain("error-secret");
+	});
+
+	it.each([false, true])("bounds poll error messages, including missing messages (missing=%s)", async (missing) => {
+		const telemetry = new InMemoryTelemetryContext();
+		const result = message("error");
+		if (!missing) result.errorMessage = `${"x".repeat(500)}discarded-tail`;
+		const { models } = setup(result);
+		expect(
+			await telemetry.startSpan({ name: "caller" }, (span) =>
+				models.fetchDeferred(model, handle, { telemetry: span }),
+			),
+		).toBe(result);
+		await settled(telemetry);
+		const [span] = aiSpans(telemetry);
+		expect(span?.status).toEqual({
+			status: "error",
+			error: { name: "provider_error", message: missing ? "" : "x".repeat(500) },
+		});
+		expect(JSON.stringify(span)).not.toContain("discarded-tail");
+		expect(JSON.stringify(span.attributes)).not.toContain("xxx");
+		expect(JSON.stringify(span.events)).not.toContain("xxx");
+	});
+
+	it("includes setup failures and omits non-scalar native reasoning", async () => {
+		const telemetry = new InMemoryTelemetryContext();
+		const models = createModels();
+		const result = await telemetry.startSpan({ name: "caller" }, (span) =>
+			models.complete(
+				model,
+				{ messages: [] },
+				{
+					telemetry: span,
+					reasoning: { effort: "native-secret" },
+				},
+			),
+		);
+		expect(result.stopReason).toBe("error");
+		await settled(telemetry);
+		const [span] = aiSpans(telemetry);
+		expect(span?.attributes).not.toHaveProperty("reasoning");
+		expect(span?.events).toEqual([{ name: "tg.ai.first_chunk", attributes: {} }]);
+		expect(span?.status).toEqual({
+			status: "error",
+			error: { name: "provider_error", message: "Unknown provider: test" },
+		});
+		expect(JSON.stringify(span.attributes)).not.toContain("Unknown provider");
+		expect(JSON.stringify(span)).not.toContain("native-secret");
+	});
+
+	it("counts interleaved tool deltas independently without reading arguments", async () => {
+		const telemetry = new InMemoryTelemetryContext();
+		const result = message();
+		await telemetry.startSpan({ name: "caller" }, (span) => {
+			const observer = observeModelRequest(model, { telemetry: span }, false);
+			const toolCall = {
+				type: "toolCall" as const,
+				id: "call",
+				name: "lookup",
+				get arguments(): Record<string, string> {
+					throw new Error("Telemetry must not inspect or serialize arguments");
+				},
+			};
+			for (const [index, delta] of [
+				[2, "ab"],
+				[3, "123"],
+				[2, "c"],
+			] as const) {
+				observer.onEvent?.({ type: "toolcall_delta", contentIndex: index, delta, partial: result });
+			}
+			observer.onEvent?.({ type: "toolcall_end", contentIndex: 3, toolCall, partial: result });
+			observer.onEvent?.({ type: "toolcall_end", contentIndex: 2, toolCall, partial: result });
+			observer.onEvent?.({ type: "toolcall_end", contentIndex: 4, toolCall, partial: result });
+			observer.onResult?.(result);
+		});
+		await settled(telemetry);
+		expect(aiSpans(telemetry)[0]!.events.slice(1)).toEqual([
+			{ name: "tg.ai.block", attributes: { type: "tool_call", index: 3, chars: 3, tool: "lookup" } },
+			{ name: "tg.ai.block", attributes: { type: "tool_call", index: 2, chars: 3, tool: "lookup" } },
+			{ name: "tg.ai.block", attributes: { type: "tool_call", index: 4, chars: 0, tool: "lookup" } },
+		]);
+	});
+
+	it("supports a tracing-only span without metric capabilities", async () => {
+		const adapter = new InMemoryTelemetryContext();
+		const { models } = setup();
+		await adapter.startSpan({ name: "caller" }, (span) => {
+			const telemetry: TelemetrySpan = { ...span, metrics: undefined };
+			return models.completeSimple(model, { messages: [] }, { telemetry });
+		});
+		await settled(adapter);
+		expect(aiSpans(adapter)).toHaveLength(1);
+		expect(adapter.getMetrics()).toEqual([]);
+	});
+
+	it("defaults to no-op telemetry", async () => {
+		const { models } = setup();
+		expect((await models.completeSimple(model, { messages: [] })).stopReason).toBe("stop");
+		expect(AI_TELEMETRY_SCHEMA.spans["tg.span.ai.request"].startAttributes.provider.required).toBe(true);
+	});
+
+	it("records low-cardinality metrics with monotonic durations", async () => {
+		const telemetry = new InMemoryTelemetryContext();
+		const result = message();
+		let clock = 100;
+		const monotonic = vi.spyOn(performance, "now").mockImplementation(() => clock);
+		try {
+			await telemetry.startSpan({ name: "caller" }, (span) => {
+				const observer = observeModelRequest(model, { telemetry: span }, false);
+				clock = 125;
+				observer.onEvent?.({ type: "start", partial: result });
+				clock = 175;
+				observer.onResult?.(result);
+			});
+			await settled(telemetry);
+		} finally {
+			monotonic.mockRestore();
+		}
+		const metrics = telemetry.getMetrics();
+		expect(metrics.map(({ name, value, attributes, unit }) => ({ name, value, attributes, unit }))).toEqual([
+			{
+				name: "tg.ai.first_chunk.duration",
+				value: 25,
+				attributes: { provider: "test", model: "model" },
+				unit: "ms",
+			},
+			{
+				name: "tg.ai.request.duration",
+				value: 75,
+				attributes: { provider: "test", model: "model", stop: "stop" },
+				unit: "ms",
+			},
+			...[
+				["input", 11],
+				["output", 22],
+				["cache_read", 33],
+				["cache_write", 44],
+			].map(([kind, value]) => ({
+				name: "tg.ai.tokens",
+				value,
+				attributes: { provider: "test", model: "model", kind },
+				unit: "token",
+			})),
+			{ name: "tg.ai.cost", value: 1, attributes: { provider: "test", model: "model" }, unit: "USD" },
+		]);
+		expect(metrics.slice(0, 2).every((measurement) => measurement.context !== null)).toBe(true);
+	});
+
+	it.each(["pending", "deferred", "stop", "error"] as const)(
+		"records usage for a %s poll only when final",
+		async (reason) => {
+			const telemetry = new InMemoryTelemetryContext();
+			const { models } = setup(message(reason));
+			await telemetry.startSpan({ name: "caller" }, (span) =>
+				models.fetchDeferred(model, handle, { telemetry: span }),
+			);
+			await settled(telemetry);
+			const counters = telemetry.getMetrics().filter((metric) => metric.kind === "counter");
+			expect(counters).toHaveLength(reason === "pending" || reason === "deferred" ? 0 : 5);
+		},
+	);
+
+	it("creates instruments once per metrics object across root and child requests", async () => {
+		const telemetry = new InMemoryTelemetryContext();
+		const histogram = vi.spyOn(telemetry, "histogram");
+		const counter = vi.spyOn(telemetry, "counter");
+		const { models } = setup();
+		await telemetry.startSpan({ name: "caller" }, (span) =>
+			models.completeSimple(model, { messages: [] }, { telemetry: span }),
+		);
+		await telemetry.startSpan({ name: "caller" }, (span) => models.fetchDeferred(model, handle, { telemetry: span }));
+		await telemetry.startSpan({ name: "caller" }, (span) =>
+			models.complete(model, { messages: [] }, { telemetry: span }),
+		);
+		await settled(telemetry);
+		expect(histogram.mock.calls.map(([name]) => name)).toEqual([
+			"tg.ai.request.duration",
+			"tg.ai.first_chunk.duration",
+		]);
+		expect(counter.mock.calls.map(([name]) => name)).toEqual(["tg.ai.tokens", "tg.ai.cost"]);
+		expect(telemetry.getMetrics()).toHaveLength(21);
+	});
+});
+
+describe("lazyStream observation", () => {
+	it("uses one source iterator and observes after push, once per terminal result", async () => {
+		const result = message();
+		const order: string[] = [];
+		let iterators = 0;
+		const source = {
+			async *[Symbol.asyncIterator]() {
+				iterators++;
+				yield { type: "done", reason: "stop", message: result } as const;
+			},
+			result: async () => result,
+		};
+		const stream = lazyStream(model, async () => source, {
+			onEvent: () => {
+				order.push("event");
+				void stream.result().then(() => order.push("resolved"));
+			},
+			onResult: (received) => {
+				expect(received).toBe(result);
+				order.push("result");
 			},
 		});
-		const models = createModels({ providerConcurrency: 1 });
-		models.setProvider(provider);
-
-		models.streamSimple(model, context, { telemetryContext: telemetry });
-		for (let attempt = 0; attempt < 200 && admitted < 1; attempt++) await tick();
-		expect(admitted).toBe(1);
-
-		const refused = await terminal(models.streamSimple(model, context, { telemetryContext: telemetry }));
-		expect(refused.stopReason).toBe("error");
-		expect(refused.message).toMatch(/concurrency limit \(1 in flight\)/);
-		expect(admitted).toBe(1);
-		await tick();
-
-		const spans = telemetry.getSpans();
-		const acquires = acquiresIn(spans);
-		expect(acquires).toHaveLength(2);
-		expect(requestsIn(spans)).toHaveLength(1);
-		expect(acquires[1]?.status).toEqual({
-			status: "error",
-			error: { name: "ConcurrencyLimitError", message: expect.any(String) },
-		});
-		expect(acquires[1]?.settled).toBe(true);
-
-		open[0]?.push({ type: "done", reason: "stop", message: completedMessage({ provider: "telemetry-gate" }) });
+		expect(await stream.result()).toBe(result);
+		await vi.waitFor(() => expect(order).toEqual(["event", "resolved", "result"]));
+		expect(iterators).toBe(1);
 	});
 
-	it("leaves the request path untouched without an active telemetry context", async () => {
-		const telemetry = new InMemoryTelemetryContext();
-		const { model, provider } = chatProvider("telemetry-provider", (requestModel) => completedStream(requestModel));
-
-		const baseline = await collect(provider.stream(model, transcript));
-		const noop = await collect(provider.stream(model, transcript, { telemetryContext: NOOP_TELEMETRY_CONTEXT }));
-		const traced = await collect(provider.stream(model, transcript, { telemetryContext: telemetry }));
-		await tick();
-
-		expect(noop).toEqual(baseline);
-		expect(traced).toEqual(baseline);
-		expect(telemetry.getSpans()).toHaveLength(1);
+	it("reports a terminal result from an iterable without a result method", async () => {
+		const result = message();
+		const observed: Array<AssistantMessage | undefined> = [];
+		const source = {
+			async *[Symbol.asyncIterator]() {
+				yield { type: "done", reason: "stop", message: result } as const;
+			},
+		};
+		const stream = lazyStream(model, async () => source, { onResult: (value) => observed.push(value) });
+		expect(await stream.result()).toBe(result);
+		await vi.waitFor(() => expect(observed).toEqual([result]));
 	});
 
-	it("marks the request span failed for stream errors and synchronous setup throws", async () => {
-		const streamTelemetry = new InMemoryTelemetryContext();
-		const streamFailure = chatProvider("telemetry-error", (requestModel) => {
-			const stream = new AssistantMessageEventStream();
-			queueMicrotask(() =>
-				stream.push({
-					type: "error",
-					reason: "error",
-					error: completedMessage({
-						api: requestModel.api,
-						provider: requestModel.provider,
-						model: requestModel.id,
-						stopReason: "error",
-						errorMessage: "rate limited",
-						diagnostics: [
-							{
-								type: "provider",
-								timestamp: 0,
-								error: { name: "ProviderRateLimitError", message: "rate limited" },
-							},
-						],
-					}),
-				}),
-			);
-			return stream;
-		});
-		await streamFailure.provider
-			.stream(streamFailure.model, transcript, { telemetryContext: streamTelemetry })
-			.result();
-		await tick();
-
-		const streamSpan = requestsIn(streamTelemetry.getSpans())[0]!;
-		expect(streamSpan.attributes.stopReason).toBe("error");
-		expect(streamSpan.attributes.errorName).toBe("ProviderRateLimitError");
-		expect(streamSpan.status).toEqual({
-			status: "error",
-			error: { name: "ProviderRateLimitError", message: "rate limited" },
-		});
-
-		class SetupError extends Error {
-			readonly name = "SetupError";
-		}
-		const throwTelemetry = new InMemoryTelemetryContext();
-		const throwing = chatProvider("telemetry-throw", () => {
-			throw new SetupError("no credential");
-		});
-		expect(() => throwing.provider.stream(throwing.model, transcript, { telemetryContext: throwTelemetry })).toThrow(
-			SetupError,
-		);
-		await tick();
-
-		const throwSpan = requestsIn(throwTelemetry.getSpans())[0]!;
-		expect(throwSpan.attributes.stopReason).toBeUndefined();
-		expect(throwSpan.status).toEqual({ status: "error", error: { name: "SetupError", message: "no credential" } });
-		expect(throwSpan.settled).toBe(true);
+	it("observes a result-only source once", async () => {
+		const result = message();
+		const observed: Array<AssistantMessage | undefined> = [];
+		const source = { async *[Symbol.asyncIterator]() {}, result: async () => result };
+		const stream = lazyStream(model, async () => source, { onResult: (value) => observed.push(value) });
+		expect(await stream.result()).toBe(result);
+		expect(observed).toEqual([result]);
 	});
 
-	it("records image and classifier requests without an acquire span or fabricated usage", async () => {
-		const telemetry = new InMemoryTelemetryContext();
-		const models = createModels();
-		models.setProvider(
-			createProvider({
-				id: "telemetry-images-provider",
-				auth: { apiKey: { name: "Test key", resolve: async () => ({ auth: {} }) } },
-				models: [imageModel],
-				images: {
-					[imageModel.api]: {
-						generateImages: async (requestModel) => ({
-							api: requestModel.api,
-							provider: requestModel.provider,
-							model: requestModel.id,
-							output: [],
-							stopReason: "stop",
-							timestamp: 0,
-						}),
-					},
-				},
-			}),
+	it("reports setup failure events and the result once", async () => {
+		const observed: string[] = [];
+		const stream = lazyStream(
+			model,
+			async () => {
+				throw new Error("setup-secret");
+			},
+			{
+				onEvent: (event) => observed.push(event.type),
+				onResult: (result) => observed.push(result?.stopReason ?? "missing"),
+			},
 		);
-		models.setProvider(
-			createProvider({
-				id: "telemetry-classifier-provider",
-				auth: { apiKey: { name: "Test key", resolve: async () => ({ auth: {} }) } },
-				models: [classifierModel],
-				classifiers: {
-					[classifierModel.api]: {
-						classify: async (requestModel) => ({
-							api: requestModel.api,
-							provider: requestModel.provider,
-							model: requestModel.id,
-							answers: {},
-							stopReason: "stop",
-							timestamp: 0,
-						}),
-					},
-				},
-			}),
-		);
-
-		await models.generateImages(imageModel, imagesContext, { telemetryContext: telemetry });
-		await models.classify(classifierModel, classifierContext, { telemetryContext: telemetry });
-		await tick();
-
-		const spans = telemetry.getSpans();
-		expect(spans.map((span) => span.name)).toEqual(["tg.span.provider.request", "tg.span.provider.request"]);
-		expect(acquiresIn(spans)).toHaveLength(0);
-		const [imageSpan, classifierSpan] = spans as readonly [RecordedTelemetrySpan, RecordedTelemetrySpan];
-		expect(imageSpan.attributes).toMatchObject({
-			provider: "telemetry-images-provider",
-			api: "telemetry-images",
-			model: "image-model",
-			stopReason: "stop",
-			retried: false,
-		});
-		expect(classifierSpan.attributes).toMatchObject({
-			provider: "telemetry-classifier-provider",
-			api: "telemetry-classifier",
-			model: "classifier-model",
-			stopReason: "stop",
-			retried: false,
-		});
-		for (const span of spans) {
-			expect(
-				Object.keys(span.attributes).filter((key) => key.startsWith("tokens.") || key.startsWith("cost.")),
-			).toEqual([]);
-			expect(span.status).toEqual({ status: "ok" });
-		}
+		expect((await stream.result()).errorMessage).toBe("setup-secret");
+		expect(observed).toEqual(["error", "error"]);
 	});
 });

@@ -432,13 +432,14 @@ describe("faux provider", () => {
 	it("streams an explicit assistant error message as a terminal error", async () => {
 		const registration = registerFauxProvider({ tokenSize: { min: 2, max: 2 } });
 		registrations.push(registration);
-		registration.setResponses([
-			{
-				...fauxAssistantMessage("partial"),
-				stopReason: "error",
-				errorMessage: "upstream failed",
-			},
-		]);
+		const response = {
+			...fauxAssistantMessage("partial"),
+			stopReason: "error" as const,
+			errorMessage: "upstream failed",
+		};
+		registration.setResponses([response]);
+		// A stream refuses to time a message that predates it; this response is generated now.
+		response.timestamp = Date.now() + 1;
 
 		const events = await collectEvents(
 			stream(registration.getModel(), { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] }),
@@ -460,13 +461,14 @@ describe("faux provider", () => {
 	it("streams an explicit assistant aborted message as a terminal error", async () => {
 		const registration = registerFauxProvider({ tokenSize: { min: 2, max: 2 } });
 		registrations.push(registration);
-		registration.setResponses([
-			{
-				...fauxAssistantMessage("partial"),
-				stopReason: "aborted",
-				errorMessage: "Request was aborted",
-			},
-		]);
+		const response = {
+			...fauxAssistantMessage("partial"),
+			stopReason: "aborted" as const,
+			errorMessage: "Request was aborted",
+		};
+		registration.setResponses([response]);
+		// A stream refuses to time a message that predates it; this response is generated now.
+		response.timestamp = Date.now() + 1;
 
 		const events = await collectEvents(
 			stream(registration.getModel(), { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] }),
@@ -486,7 +488,10 @@ describe("faux provider", () => {
 	it("measures the request window from the stream start to the terminal event", async () => {
 		const registration = registerFauxProvider({ tokensPerSecond: 200, tokenSize: { min: 4, max: 4 } });
 		registrations.push(registration);
-		registration.setResponses([fauxAssistantMessage("abcdefghijklmnopqrstuvwxyz")]);
+		const response = fauxAssistantMessage("abcdefghijklmnopqrstuvwxyz");
+		registration.setResponses([response]);
+		// A stream refuses to time a message that predates it; this response is generated now.
+		response.timestamp = Date.now() + 1;
 
 		const events = await collectEvents(
 			stream(registration.getModel(), { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] }),

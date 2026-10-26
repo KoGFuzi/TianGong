@@ -27,6 +27,7 @@ import type {
 import { appendAssistantMessageDiagnostic, createAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord, providerHeadersToRecord } from "../utils/headers.ts";
+import { getIdentityHeaders } from "../utils/identity.ts";
 import { parseStreamingJsonThrottled } from "../utils/json-parse.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
 
@@ -177,7 +178,7 @@ function appendRewriteDiagnostic(message: AssistantMessage, rewrite: TgMessagesR
 	});
 }
 
-function createEventConverter(model: Model<"tg-messages">, startedAt: number) {
+function createEventConverter(model: Model<"tg-messages">) {
 	const partial: AssistantMessage = {
 		role: "assistant",
 		content: [],
@@ -202,7 +203,6 @@ function createEventConverter(model: Model<"tg-messages">, startedAt: number) {
 					partial.providerThinkingLevel = event.providerThinkingLevel;
 				}
 				appendRewriteDiagnostic(partial, event.rewrite);
-				partial.durationMs = performance.now() - startedAt;
 				return { type: "done", reason: event.reason, message: partial };
 			case "error":
 				Object.assign(partial, {
@@ -215,7 +215,6 @@ function createEventConverter(model: Model<"tg-messages">, startedAt: number) {
 					partial.providerThinkingLevel = event.providerThinkingLevel;
 				}
 				appendRewriteDiagnostic(partial, event.rewrite);
-				partial.durationMs = performance.now() - startedAt;
 				return { type: "error", reason: event.reason, error: partial };
 			case "start":
 				break;
@@ -322,12 +321,7 @@ function parseTgMessagesEvent(raw: string): TgMessagesEvent | undefined {
 	return data && data !== "[DONE]" ? (JSON.parse(data) as TgMessagesEvent) : undefined;
 }
 
-function createErrorEvent(
-	model: Model<"tg-messages">,
-	error: unknown,
-	aborted: boolean,
-	startedAt: number,
-): AssistantMessageEvent {
+function createErrorEvent(model: Model<"tg-messages">, error: unknown, aborted: boolean): AssistantMessageEvent {
 	const reason = aborted ? "aborted" : "error";
 	const assistantMessage: AssistantMessage = {
 		role: "assistant",
@@ -338,7 +332,6 @@ function createErrorEvent(
 		usage: createEmptyUsage(),
 		stopReason: reason,
 		errorMessage: error instanceof Error ? error.message : String(error),
-		durationMs: performance.now() - startedAt,
 		timestamp: Date.now(),
 	};
 
@@ -366,8 +359,7 @@ export const stream: StreamFunction<"tg-messages", TgMessagesOptions> = (
 	options?: TgMessagesOptions,
 ): AssistantMessageEventStream => {
 	const eventStream = new AssistantMessageEventStream();
-	const startedAt = performance.now();
-	const convertEvent = createEventConverter(model, startedAt);
+	const convertEvent = createEventConverter(model);
 
 	void (async () => {
 		try {
@@ -400,12 +392,15 @@ export const stream: StreamFunction<"tg-messages", TgMessagesOptions> = (
 
 			const response = await (options?.fetch ?? globalThis.fetch)(url, {
 				method: "POST",
-				headers: {
-					authorization: `Bearer ${apiKey}`,
-					accept: "text/event-stream",
-					"content-type": "application/json",
-					...providerHeadersToRecord(options?.headers),
-				},
+				headers: providerHeadersToRecord(
+					getIdentityHeaders(model, options?.identity),
+					{
+						authorization: `Bearer ${apiKey}`,
+						accept: "text/event-stream",
+						"content-type": "application/json",
+					},
+					options?.headers,
+				),
 				body: JSON.stringify(payload),
 				signal: options?.signal,
 			});
@@ -431,7 +426,7 @@ export const stream: StreamFunction<"tg-messages", TgMessagesOptions> = (
 
 			throw new Error(`${model.provider} stream ended without a terminal event`);
 		} catch (error) {
-			eventStream.push(createErrorEvent(model, error, options?.signal?.aborted ?? false, startedAt));
+			eventStream.push(createErrorEvent(model, error, options?.signal?.aborted ?? false));
 		}
 	})();
 

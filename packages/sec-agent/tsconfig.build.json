@@ -6,6 +6,8 @@
 			"@earendil-works/pi-codemode": ["../codemode/dist/index.d.ts"],
 			"@OnePanda-TgSec/chord": ["../chord/dist/index.d.ts"],
 			"@OnePanda-TgSec/tg-ai": ["../ai/dist/index.d.ts"],
+			"@OnePanda-TgSec/tg-ai/auth/node": ["../ai/dist/auth-node.d.ts"],
+			"@OnePanda-TgSec/tg-ai/providers/all": ["../ai/dist/providers/all.d.ts"],
 			"@OnePanda-TgSec/tg-gibraltar": ["../gibraltar/dist/index.d.ts"],
 			"@OnePanda-TgSec/tg-gibraltar/env": ["../gibraltar/dist/env/index.d.ts"],
 			"@OnePanda-TgSec/tg-gibraltar/env/node": ["../gibraltar/dist/env/node.d.ts"],

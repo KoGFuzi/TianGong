@@ -30,7 +30,7 @@ export type TgSecAttestContext = {
 	context: Context;
 	/** Probe 5: the session's mode document, read through a real `HookApi` or `Session`. */
 	modeReader: TgSecModeReader;
-	/** Probe 1: a read of a path the confined ExecutionEnv must refuse with `EACCES`. */
+	/** Probe 1: a read of a path the confined ExecutionEnv must refuse (`EACCES`, or `EPERM` on Windows). */
 	forbiddenRead: () => Promise<unknown>;
 	/** Probe 4: the tools actually registered, against the track preset's declared set. */
 	registeredTools: readonly string[];
@@ -75,7 +75,11 @@ function errorCode(error: unknown): string | undefined {
 	return undefined;
 }
 
-/** Probe 1: the restricted ExecutionEnv is in effect — the forbidden read must fail with EACCES. */
+/**
+ * Probe 1: the restricted ExecutionEnv is in effect — the forbidden read must fail with an
+ * OS-refusal error. `EACCES` is the POSIX shape; Windows surfaces the same refusal as `EPERM`.
+ * Anything else — a success, an `ENOENT`, a transport error — fails the probe.
+ */
 export function probeRestrictedEnv(read: () => Promise<unknown>): TgSecProbe {
 	return {
 		name: "restricted-env",
@@ -84,8 +88,8 @@ export function probeRestrictedEnv(read: () => Promise<unknown>): TgSecProbe {
 				await read();
 			} catch (error) {
 				const code = errorCode(error);
-				if (code === "EACCES") return;
-				throw new Error(`expected an EACCES refusal, got ${code ?? String(error)}`);
+				if (code === "EACCES" || code === "EPERM") return;
+				throw new Error(`expected an EACCES/EPERM refusal, got ${code ?? String(error)}`);
 			}
 			throw new Error("the forbidden read succeeded; the confined ExecutionEnv is not in effect");
 		},

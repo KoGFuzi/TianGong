@@ -4,6 +4,13 @@ All notable changes to this package will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Attestation probe 1 (`restricted-env`) accepts `EPERM` alongside `EACCES` as its refusal code.
+  The probe still fails on success and on every other code (`ENOENT` included), so the fail-closed
+  posture is unchanged; Windows surfaces an OS-refused read as `EPERM`, and the refusal — not the
+  specific errno — is what proves the confined environment is in effect.
+
 ### Breaking Changes
 
 - `extractConnectionTargets(request)` returns `readonly TgSecConnectionTarget[]`

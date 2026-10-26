@@ -22,6 +22,23 @@ export interface SplitErrorToolResult {
 	images: ImageContent[];
 }
 
+/**
+ * Split the images out of an error tool result, for APIs that reject images in error results
+ * (Anthropic, and Claude on Bedrock). Send the returned content as the tool result and the caption and
+ * images after all tool results of the turn, in the same user message. Returns undefined for results
+ * that need no split (#10794).
+ */
+export function splitErrorToolResultImages(msg: ToolResultMessage): SplitErrorToolResult | undefined {
+	if (!msg.isError) return undefined;
+	const images = msg.content.filter((block): block is ImageContent => block.type === "image");
+	if (images.length === 0) return undefined;
+	return {
+		content: replaceImagesWithPlaceholder(msg.content, ERROR_TOOL_IMAGE_PLACEHOLDER),
+		caption: `Images from the error result of tool call ${msg.toolCallId} (${msg.toolName}):`,
+		images,
+	};
+}
+
 function replaceImagesWithPlaceholder(content: (TextContent | ImageContent)[], placeholder: string): TextContent[] {
 	const result: TextContent[] = [];
 	let previousWasPlaceholder = false;
@@ -40,23 +57,6 @@ function replaceImagesWithPlaceholder(content: (TextContent | ImageContent)[], p
 	}
 
 	return result;
-}
-
-/**
- * Split the images out of an error tool result, for APIs that reject images in error results
- * (Anthropic, and Claude on Bedrock). Send the returned content as the tool result and the caption and
- * images after all tool results of the turn, in the same user message. Returns undefined for results
- * that need no split (#10794).
- */
-export function splitErrorToolResultImages(msg: ToolResultMessage): SplitErrorToolResult | undefined {
-	if (!msg.isError) return undefined;
-	const images = msg.content.filter((block): block is ImageContent => block.type === "image");
-	if (images.length === 0) return undefined;
-	return {
-		content: replaceImagesWithPlaceholder(msg.content, ERROR_TOOL_IMAGE_PLACEHOLDER),
-		caption: `Images from the error result of tool call ${msg.toolCallId} (${msg.toolName}):`,
-		images,
-	};
 }
 
 function downgradeUnsupportedImages<TApi extends Api>(messages: Message[], model: Model<TApi>): Message[] {

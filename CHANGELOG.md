@@ -32,7 +32,10 @@ Workspace-level history. Package-level history lives in `packages/*/CHANGELOG.md
   `tg (...)`.
 - Config directory resolved against five XDG roots instead of one, following the layout `opencode`
   uses. `tg-ai` exposes `tiangongDir()`, `tiangongConfigPath()`, `tiangongDataPath()`,
-  `tiangongSessionDbPath()`, and friends; `tg-ai login` writes credentials under the data root.
+  `tiangongSessionDbPath()`, and friends.
+- OAuth credential commands moved from the `tg-ai` bin to the product CLI: `tg-ai login` / `tg-ai list`
+  became `tg-sec login` / `tg-sec list`, and `@OnePanda-TgSec/tg-ai` no longer publishes a bin. The
+  `auth.json` location and format are unchanged.
 - `@OnePanda-TgSec/tg-gibraltar` converged on SQLite as its only production storage backend, and the
   append-only JSONL backend was removed along with its `/storage/jsonl` export subpaths.
 - `packages/gibraltar` `repository.directory` corrected from `packages/durable` to

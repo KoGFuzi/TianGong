@@ -29,7 +29,7 @@ describe("evidence blob write", () => {
 		expect(fs.existsSync(at)).toBe(true);
 	});
 
-	it("gives a directory mode 0700 and a blob mode 0600", async () => {
+	it.skipIf(process.platform === "win32")("gives a directory mode 0700 and a blob mode 0600", async () => {
 		await store.writeBody(BODY);
 		const at = blobPath(dir, HASH);
 		expect((fs.statSync(at).mode & 0o777).toString(8)).toBe("600");

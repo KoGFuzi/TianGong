@@ -2,8 +2,25 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Windows compatibility, without touching the POSIX durability contract: the evidence blob
+  writer skips the **directory** fsync on `win32` (Windows refuses to open a directory for fsync
+  with EPERM); the blob file's own fsync and the staging→rename sequence are unchanged. Probe 1's
+  forbidden read targets the volume's ACL-protected `System Volume Information` **directory** on
+  `win32` — a file inside it reports `ENOENT` there, while opening the directory raises the OS
+  refusal — and `probeRestrictedEnv` accepts that refusal as `EPERM` alongside `EACCES`. Evidence
+  GC derives a blob's name with `basename()`; the previous `lastIndexOf("/")` was a no-op on
+  Windows paths and reaped every blob, including those a bound snapshot still referenced. Test
+  support closes tracked evidence stores before sweeping temp directories (Windows refuses to
+  unlink a SQLite file while its handle is open), retries the sweep, and skips POSIX mode
+  assertions on `win32`.
+
 ### Added
 
+- `tg-sec login [provider]` and `tg-sec list` now own the OAuth credential bootstrap that used to be
+  published as the `tg-ai` bin. They resolve the same `builtinProviders()` OAuth providers and write
+  the same `auth.json` through `FileCredentialStore`; the smoke turn's flags are unchanged.
 - New house package `@OnePanda-TgSec/tg-sec-agent`, built gibraltar-native per
   `docs/sec-agent-design.md` 批3: campaign bootstrap over `openNodeSqliteStorage` with one
   project per campaign, `harness.root` + `resume()` at startup, the `tg.sec.action-tree`

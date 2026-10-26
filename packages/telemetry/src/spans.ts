@@ -78,6 +78,114 @@ export const TG_SPAN_SCHEMA = defineTelemetrySchema({
 			},
 			status: { default: "ok", errorWhen: "The call ends with an error or aborted stop reason, or throws." },
 		},
+		"tg.span.ai.request": {
+			description:
+				"One logical model request observed inside the ai adapter, including authentication and provider setup. Mirrors the ai package's own schema so house consumers can validate the same spans.",
+			parents: { kind: "any" },
+			startAttributes: {
+				provider: {
+					type: "string",
+					required: true,
+					cardinality: "low",
+					description: 'Provider catalog id, for example "anthropic".',
+				},
+				api: {
+					type: "string",
+					required: true,
+					cardinality: "low",
+					description: 'API identifier, for example "anthropic-messages".',
+				},
+				model: {
+					type: "string",
+					required: true,
+					cardinality: "low",
+					description: "Requested catalog model id. Never free text.",
+				},
+				reasoning: {
+					type: "string",
+					required: false,
+					cardinality: "low",
+					description: "Scalar requested reasoning level, when one was set.",
+				},
+			},
+			endAttributes: {
+				stop: {
+					type: "string",
+					values: ["pending", "stop", "length", "toolUse", "error", "aborted", "deferred"],
+					cardinality: "low",
+					description: "Normalized stop reason.",
+				},
+				"usage.input": { type: "number", cardinality: "low", description: "Uncached input tokens." },
+				"usage.output": { type: "number", cardinality: "low", description: "Output tokens." },
+				"usage.cache_read": { type: "number", cardinality: "low", description: "Cache-read tokens." },
+				"usage.cache_write": { type: "number", cardinality: "low", description: "Cache-write tokens." },
+				"cost.total": { type: "number", cardinality: "low", description: "Total request cost in USD." },
+				"response.id": {
+					type: "string",
+					cardinality: "high",
+					description: "Provider response identifier.",
+				},
+			},
+			status: {
+				default: "ok",
+				errorWhen:
+					"Stop reason is error: provider_error with at most 500 error-message characters. Aborted stays ok.",
+			},
+		},
+		"tg.span.ai.poll": {
+			description:
+				"One deferred-response poll, not the deferred request's lifetime. Same shape as tg.span.ai.request.",
+			parents: { kind: "any" },
+			startAttributes: {
+				provider: {
+					type: "string",
+					required: true,
+					cardinality: "low",
+					description: 'Provider catalog id, for example "anthropic".',
+				},
+				api: {
+					type: "string",
+					required: true,
+					cardinality: "low",
+					description: 'API identifier, for example "anthropic-messages".',
+				},
+				model: {
+					type: "string",
+					required: true,
+					cardinality: "low",
+					description: "Requested catalog model id. Never free text.",
+				},
+				reasoning: {
+					type: "string",
+					required: false,
+					cardinality: "low",
+					description: "Scalar requested reasoning level, when one was set.",
+				},
+			},
+			endAttributes: {
+				stop: {
+					type: "string",
+					values: ["pending", "stop", "length", "toolUse", "error", "aborted", "deferred"],
+					cardinality: "low",
+					description: "Normalized stop reason.",
+				},
+				"usage.input": { type: "number", cardinality: "low", description: "Uncached input tokens." },
+				"usage.output": { type: "number", cardinality: "low", description: "Output tokens." },
+				"usage.cache_read": { type: "number", cardinality: "low", description: "Cache-read tokens." },
+				"usage.cache_write": { type: "number", cardinality: "low", description: "Cache-write tokens." },
+				"cost.total": { type: "number", cardinality: "low", description: "Total request cost in USD." },
+				"response.id": {
+					type: "string",
+					cardinality: "high",
+					description: "Provider response identifier.",
+				},
+			},
+			status: {
+				default: "ok",
+				errorWhen:
+					"Stop reason is error: provider_error with at most 500 error-message characters. Aborted stays ok.",
+			},
+		},
 		"tg.span.agent.turn": {
 			description: "One agent turn: one provider response plus the tool calls it issued.",
 			parents: { kind: "root_or_external" },

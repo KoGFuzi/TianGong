@@ -40,12 +40,12 @@ import type {
 import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
+import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
 import { parseJsonWithRepair, parseStreamingJsonThrottled, parseToolCallArguments } from "../utils/json-parse.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { retryProviderRequest } from "../utils/provider-retry.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { getSystemMessageText, renderSystemMessageUpdate } from "../utils/text.ts";
-import { getTgUserAgent } from "../utils/tg-user-agent.ts";
 import {
 	getCurrentTools,
 	getInitialSystemMessage,
@@ -131,9 +131,6 @@ const fromClaudeCodeName = (name: string, tools?: Tool[]) => {
 	return name;
 };
 
-/**
- * Convert content blocks to Anthropic API format
- */
 function convertImageBlock(image: ImageContent) {
 	return {
 		type: "image" as const,
@@ -145,6 +142,9 @@ function convertImageBlock(image: ImageContent) {
 	};
 }
 
+/**
+ * Convert content blocks to Anthropic API format
+ */
 function convertContentBlocks(content: (TextContent | ImageContent)[]):
 	| string
 	| Array<
@@ -302,10 +302,6 @@ function mergeHeaders(...headerSources: (ProviderHeaders | undefined)[]): Provid
 		}
 	}
 	return merged;
-}
-
-function mergeClientHeaders(...headerSources: (ProviderHeaders | undefined)[]): ProviderHeaders {
-	return mergeHeaders({ "User-Agent": getTgUserAgent() }, ...headerSources);
 }
 
 function hasHeader(headers: ProviderHeaders | undefined, name: string): boolean {
@@ -582,18 +578,12 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 	const currentTools = getCurrentTools(normalizedContext.messages);
 
 	(async () => {
-		const thinkingDisabled =
-			model.reasoning && options?.thinkingEnabled === false && model.thinkingLevelMap?.off !== null;
-		const providerThinkingLevel =
-			model.compat?.supportsMidConvoEffort && !thinkingDisabled ? (options?.effort ?? "high") : undefined;
-		const startedAt = performance.now();
 		const output: AssistantMessage = {
 			role: "assistant",
 			content: [],
 			api: model.api as Api,
 			provider: model.provider,
 			model: model.id,
-			...(providerThinkingLevel === undefined ? {} : { providerThinkingLevel }),
 			usage: {
 				input: 0,
 				output: 0,
@@ -640,6 +630,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					copilotDynamicHeaders,
 					cacheSessionId,
 					federation,
+					options?.identity,
 				);
 				client = created.client;
 				isOAuth = created.isOAuthToken;
@@ -654,6 +645,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 			for (;;) {
 				options?.signal?.throwIfAborted();
 				const built = buildParams(model, normalizedContext, isOAuth, options, disablePreferredStrictTools);
+				if (built.providerThinkingLevel) output.providerThinkingLevel = built.providerThinkingLevel;
 				let params = built.params;
 				const nextParams = await options?.onPayload?.(params, model);
 				if (nextParams !== undefined) {
@@ -666,7 +658,6 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 							maxRetries: options?.maxRetries,
 							maxRetryDelayMs: options?.maxRetryDelayMs,
 							signal: options?.signal,
-							onRetry: options?.onRetry,
 						},
 					);
 					break;
@@ -924,7 +915,6 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				});
 			}
 
-			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -935,7 +925,6 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
-			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -1031,6 +1020,7 @@ function createClient(
 	dynamicHeaders?: Record<string, string>,
 	sessionId?: string,
 	federation?: AnthropicFederationConfig,
+	identity?: ClientIdentity,
 ): { client: Anthropic; isOAuthToken: boolean } {
 	// Copilot: Bearer auth.
 	if (model.provider === "github-copilot") {
@@ -1040,7 +1030,8 @@ function createClient(
 			baseURL: model.baseUrl,
 			dangerouslyAllowBrowser: true,
 			fetch,
-			defaultHeaders: mergeClientHeaders(
+			defaultHeaders: mergeHeaders(
+				getIdentityHeaders(model, identity),
 				{
 					accept: "application/json",
 					"anthropic-dangerous-direct-browser-access": "true",
@@ -1054,7 +1045,7 @@ function createClient(
 		return { client, isOAuthToken: false };
 	}
 
-	// OAuth: Bearer auth, Claude Code identity headers
+	// OAuth: Bearer auth, Claude Code identity headers instead of the client identity.
 	if (apiKey && isOAuthToken(apiKey)) {
 		const client = new TgAnthropic({
 			apiKey: null,
@@ -1062,7 +1053,7 @@ function createClient(
 			baseURL: model.baseUrl,
 			dangerouslyAllowBrowser: true,
 			fetch,
-			defaultHeaders: mergeClientHeaders(
+			defaultHeaders: mergeHeaders(
 				{
 					accept: "application/json",
 					"anthropic-dangerous-direct-browser-access": "true",
@@ -1084,7 +1075,8 @@ function createClient(
 		const header = compat.sessionAffinityFormat === "openrouter" ? "x-session-id" : "x-session-affinity";
 		sessionAffinityHeaders[header] = sessionId;
 	}
-	const defaultHeaders = mergeClientHeaders(
+	const defaultHeaders = mergeHeaders(
+		getIdentityHeaders(model, identity),
 		{
 			accept: "application/json",
 			"anthropic-dangerous-direct-browser-access": "true",
@@ -1171,7 +1163,12 @@ function buildParams(
 	isOAuthToken: boolean,
 	options?: AnthropicOptions,
 	disablePreferredStrictTools = false,
-): { params: MessageCreateParamsStreaming; hasPreferredStrictTools: boolean } {
+): {
+	params: MessageCreateParamsStreaming;
+	hasPreferredStrictTools: boolean;
+	/** Effort of the final effort marker, recorded on the reply so later requests can replay it. */
+	providerThinkingLevel: AnthropicEffort | undefined;
+} {
 	const { cacheControl } = getCacheControl(model, options?.cacheRetention, options?.env);
 	const compat = getAnthropicCompat(model);
 	const initialSystemMessage = getInitialSystemMessage(context.messages);
@@ -1282,8 +1279,8 @@ function buildParams(
 		// No effort is sent, so the model default applies. Anthropic rejects `block_binding`
 		// with disabled thinking.
 		params.thinking = { type: "disabled" };
-	} else if (model.compat?.supportsMidConvoEffort === true) {
-		// Managed effort models always use adaptive thinking so prefix mismatches can
+	} else if (effortMessages) {
+		// Managed effort models use adaptive thinking so prefix mismatches can
 		// be dropped instead of surfacing as persistent 400 responses.
 		params.thinking = {
 			type: "adaptive",
@@ -1331,7 +1328,7 @@ function buildParams(
 		params.fallbacks = allowedFallbackModels.map((fallback) => ({ model: fallback.model }));
 	}
 
-	return { params, hasPreferredStrictTools };
+	return { params, hasPreferredStrictTools, providerThinkingLevel: effortMessages ? activeEffort : undefined };
 }
 
 // Normalize tool call IDs to match Anthropic's required pattern and length

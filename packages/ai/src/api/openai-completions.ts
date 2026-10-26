@@ -39,12 +39,12 @@ import { formatProviderError, normalizeProviderError } from "../utils/error-body
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
+import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
 import { parseStreamingJsonThrottled, parseToolCallArguments } from "../utils/json-parse.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { retryProviderRequest } from "../utils/provider-retry.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { getSystemMessageText, renderSystemMessageUpdate } from "../utils/text.ts";
-import { getTgUserAgent } from "../utils/tg-user-agent.ts";
 import {
 	getDeclaredTools,
 	resolveTranscript,
@@ -62,7 +62,12 @@ import {
 } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
-import { buildBaseOptions, clampThinkingBudgetToAnswerRoom, thinkingBudgetForLevel } from "./simple-options.ts";
+import {
+	buildBaseOptions,
+	clampThinkingBudgetToAnswerRoom,
+	resolveSamplingParams,
+	thinkingBudgetForLevel,
+} from "./simple-options.ts";
 import { transformMessages } from "./transform-messages.ts";
 
 /**
@@ -305,7 +310,6 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 	const normalizedContext = resolveTranscript(context, getCompat(model).supportsMidConvoSystemMessages);
 
 	(async () => {
-		const startedAt = performance.now();
 		const output: AssistantMessage = {
 			role: "assistant",
 			content: [],
@@ -347,6 +351,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				normalizedContext,
 				apiKey,
 				options?.headers,
+				options?.identity,
 				options?.fetch,
 				cacheSessionId,
 				compat,
@@ -374,7 +379,6 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 					maxRetries: options?.maxRetries,
 					maxRetryDelayMs: options?.maxRetryDelayMs,
 					signal: options?.signal,
-					onRetry: options?.onRetry,
 				},
 			);
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
@@ -571,9 +575,8 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 
 				// Fallback: some providers (e.g., Moonshot) return usage
 				// in choice.usage instead of the standard chunk.usage
-				const choiceWithUsage = choice as { usage?: Parameters<typeof parseChunkUsage>[0] };
-				if (!chunk.usage && choiceWithUsage.usage) {
-					output.usage = parseChunkUsage(choiceWithUsage.usage, model);
+				if (!chunk.usage && (choice as any).usage) {
+					output.usage = parseChunkUsage((choice as any).usage, model);
 				}
 
 				if (choice.finish_reason) {
@@ -587,6 +590,8 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				}
 
 				if (choice.delta) {
+					// Handle reasoning before content: some proxies (e.g. LiteLLM) aggregate reasoning and
+					// answer into one delta, and the thinking block must precede the text block.
 					// Some endpoints return reasoning in reasoning_content (llama.cpp),
 					// or reasoning (other openai compatible endpoints)
 					// Use the first non-empty reasoning field to avoid duplication
@@ -633,8 +638,6 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 						}
 					}
 
-					// Handle reasoning before content: some proxies (e.g. LiteLLM) aggregate reasoning and
-					// answer into one delta, and the thinking block must precede the text block.
 					if (
 						choice.delta.content !== null &&
 						choice.delta.content !== undefined &&
@@ -702,7 +705,6 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				throw new Error("Stream ended without finish_reason");
 			}
 
-			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -726,7 +728,6 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 			if (rawMetadata && !output.errorMessage.includes(String(rawMetadata))) {
 				output.errorMessage += `\n${rawMetadata}`;
 			}
-			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -761,11 +762,12 @@ function createClient(
 	context: TranscriptContext,
 	apiKey: string,
 	optionsHeaders?: ProviderHeaders,
+	identity?: ClientIdentity,
 	fetch?: typeof globalThis.fetch,
 	sessionId?: string,
 	compat: ResolvedOpenAICompletionsCompat = getCompat(model),
 ) {
-	const headers: ProviderHeaders = { "User-Agent": getTgUserAgent(), ...model.headers };
+	const headers: ProviderHeaders = { ...getIdentityHeaders(model, identity), ...model.headers };
 	if (model.provider === "github-copilot") {
 		const hasImages = hasCopilotVisionInput(context.messages);
 		const copilotHeaders = buildCopilotDynamicHeaders({
@@ -801,21 +803,6 @@ function createClient(
 	});
 }
 
-/** Chat-completion params plus the vendor fields the OpenAI SDK types do not carry. */
-type NonStandardChatCompletionParams = Omit<
-	OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
-	"reasoning_effort"
-> & {
-	enable_thinking?: boolean;
-	priority?: number;
-	reasoning_effort?: string;
-	chat_template_kwargs?: Record<string, unknown>;
-	thinking?: { type: "enabled" | "disabled" };
-	tool_stream?: boolean;
-	provider?: unknown;
-	providerOptions?: unknown;
-};
-
 function buildParams(
 	model: Model<"openai-completions">,
 	context: TranscriptContext,
@@ -829,7 +816,9 @@ function buildParams(
 ) {
 	const transcriptTools = resolveTranscriptTools(
 		context.messages,
-		compat.supportsMidConvoSystemMessages === true && compat.supportsMidConvoToolAdditions === true,
+		compat.supportsMidConvoSystemMessages === true && compat.supportsMidConvoToolAdditions === true
+			? "additions"
+			: "none",
 	);
 	const messages = convertMessages(model, context, compat, {
 		grammarToolInputProperties,
@@ -847,8 +836,6 @@ function buildParams(
 				: undefined,
 		prompt_cache_retention: cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined,
 	};
-
-	const vendorParams = params as NonStandardChatCompletionParams;
 
 	if (compat.supportsUsageInStreaming !== false) {
 		params.stream_options = { include_usage: true };
@@ -874,7 +861,7 @@ function buildParams(
 	if (transcriptTools.requestTools.length > 0) {
 		params.tools = convertTools(transcriptTools.requestTools, compat);
 		if (compat.zaiToolStream) {
-			vendorParams.tool_stream = true;
+			(params as any).tool_stream = true;
 		}
 	} else if (hasToolHistory(context.messages)) {
 		// Anthropic (via LiteLLM/proxy) requires tools param when conversation has tool_calls/tool_results
@@ -890,7 +877,7 @@ function buildParams(
 	}
 
 	if (compat.vllmPriority !== undefined) {
-		vendorParams.priority = compat.vllmPriority;
+		(params as any).priority = compat.vllmPriority;
 	}
 
 	const thinkingTokenBudgetField = resolveThinkingTokenBudgetField(compat);
@@ -910,22 +897,22 @@ function buildParams(
 			}
 		}
 	} else if (compat.thinkingFormat === "qwen" && model.reasoning) {
-		vendorParams.enable_thinking = !!options?.reasoningEffort;
+		(params as any).enable_thinking = !!options?.reasoningEffort;
 		if (options?.reasoningEffort && compat.supportsReasoningEffort) {
 			const effort = model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
 			if (typeof effort === "string") {
-				vendorParams.reasoning_effort = effort;
+				(params as any).reasoning_effort = effort;
 			}
 		}
 	} else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
-		vendorParams.chat_template_kwargs = {
+		(params as any).chat_template_kwargs = {
 			enable_thinking: !!options?.reasoningEffort,
 			preserve_thinking: true,
 		};
 	} else if (compat.thinkingFormat === "chat-template" && model.reasoning) {
 		const chatTemplateKwargs = buildChatTemplateValues(model, options, compat.chatTemplateKwargs, thinkingBudget);
 		if (chatTemplateKwargs) {
-			vendorParams.chat_template_kwargs = chatTemplateKwargs;
+			(params as any).chat_template_kwargs = chatTemplateKwargs;
 		}
 	} else if (compat.thinkingFormat === "baseten" && model.reasoning) {
 		const basetenParams = params as Omit<typeof params, "reasoning_effort"> & {
@@ -946,12 +933,13 @@ function buildParams(
 		}
 	} else if (compat.thinkingFormat === "deepseek" && model.reasoning) {
 		if (options?.reasoningEffort) {
-			vendorParams.thinking = { type: "enabled" };
+			(params as any).thinking = { type: "enabled" };
 		} else if (model.thinkingLevelMap?.off !== null) {
-			vendorParams.thinking = { type: "disabled" };
+			(params as any).thinking = { type: "disabled" };
 		}
 		if (options?.reasoningEffort && compat.supportsReasoningEffort) {
-			vendorParams.reasoning_effort = model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+			(params as any).reasoning_effort =
+				model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
 		}
 	} else if (compat.thinkingFormat === "openrouter" && model.reasoning) {
 		// OpenRouter normalizes reasoning across providers via a nested reasoning object.
@@ -986,11 +974,11 @@ function buildParams(
 		}
 	} else if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
 		// OpenAI-style reasoning_effort
-		vendorParams.reasoning_effort = model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+		(params as any).reasoning_effort = model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
 	} else if (!options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
 		const offValue = model.thinkingLevelMap?.off;
 		if (typeof offValue === "string") {
-			vendorParams.reasoning_effort = offValue;
+			(params as any).reasoning_effort = offValue;
 		}
 	}
 
@@ -1004,7 +992,7 @@ function buildParams(
 
 	// OpenRouter provider routing preferences
 	if (model.compat?.openRouterRouting) {
-		vendorParams.provider = model.compat.openRouterRouting;
+		(params as any).provider = model.compat.openRouterRouting;
 	}
 
 	// Vercel AI Gateway provider routing preferences
@@ -1014,12 +1002,15 @@ function buildParams(
 			const gatewayOptions: Record<string, string[]> = {};
 			if (routing.only) gatewayOptions.only = routing.only;
 			if (routing.order) gatewayOptions.order = routing.order;
-			vendorParams.providerOptions = { gateway: gatewayOptions };
+			(params as any).providerOptions = { gateway: gatewayOptions };
 		}
 	}
 
-	// Last so custom keys override the named request fields. Per-request keys override model defaults.
-	Object.assign(params, model.samplingParams, options?.samplingParams);
+	// Last so model and request sampling parameters override named request fields.
+	const samplingParams = resolveSamplingParams(model, options?.reasoningEffort, options?.samplingParams);
+	if (samplingParams) {
+		Object.assign(params, samplingParams);
+	}
 
 	return params;
 }
@@ -1243,11 +1234,14 @@ export function convertMessages(
 	const transformedMessages = transformMessages(normalizedContext.messages, model, (id) => normalizeToolCallId(id));
 	const transcriptTools = resolveTranscriptTools(
 		normalizedContext.messages,
-		compat.supportsMidConvoSystemMessages === true && compat.supportsMidConvoToolAdditions === true,
+		compat.supportsMidConvoSystemMessages === true && compat.supportsMidConvoToolAdditions === true
+			? "additions"
+			: "none",
 	);
 	const instructionRole = model.reasoning && compat.supportsDeveloperRole ? "developer" : "system";
 
 	let lastRole: string | null = null;
+	let systemIndex = 0;
 
 	for (let i = 0; i < transformedMessages.length; i++) {
 		const msg = transformedMessages[i];
@@ -1261,7 +1255,8 @@ export function convertMessages(
 		}
 
 		if (msg.role === "system") {
-			const addedTools = i > 0 && transcriptTools.anchorsAdditions ? (msg.toolsAdded ?? []) : [];
+			// transformMessages keeps system messages in order, so their position matches the transcript.
+			const addedTools = systemIndex++ >= transcriptTools.foldedSystemMessages ? (msg.toolsAdded ?? []) : [];
 			if (addedTools.length > 0) {
 				const kimiToolMessage: KimiToolSystemMessageParam = {
 					role: "system",

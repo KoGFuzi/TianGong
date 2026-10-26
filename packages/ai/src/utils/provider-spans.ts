@@ -1,9 +1,9 @@
 import {
 	createTypedSpanStarter,
 	NOOP_TELEMETRY_CONTEXT,
-	type TelemetryContext,
 	type TelemetrySchemaSpanEndAttributes,
 	type TelemetrySchemaSpanStartAttributes,
+	type TelemetrySpan,
 	TG_SPAN_SCHEMA,
 } from "@OnePanda-TgSec/tg-telemetry";
 import type { AssistantMessage } from "../types.ts";
@@ -16,24 +16,20 @@ export interface ProviderSpanTarget {
 	readonly id: string;
 }
 
-/** Telemetry plumbing shared by every provider call. */
+/** Telemetry plumbing shared by every provider call: the 1.4.0 request-option span. */
 interface TelemetryOptions {
-	readonly telemetryContext?: TelemetryContext;
-	readonly onRetry?: () => void;
-}
-
-/** Token usage shape shared by chat messages, image responses, and classifier results. */
-interface ProviderUsage {
-	readonly input: number;
-	readonly output: number;
-	readonly cacheRead: number;
-	readonly cacheWrite: number;
-	readonly cost: { readonly total: number };
+	readonly telemetry?: TelemetrySpan;
 }
 
 /** Result fields shared by image generation and classification responses. */
 interface ProviderResult {
-	readonly usage?: ProviderUsage;
+	readonly usage?: {
+		readonly input: number;
+		readonly output: number;
+		readonly cacheRead: number;
+		readonly cacheWrite: number;
+		readonly cost: { readonly total: number };
+	};
 	readonly stopReason: string;
 	readonly errorMessage?: string;
 }
@@ -43,8 +39,8 @@ type RequestEndAttributes = TelemetrySchemaSpanEndAttributes<typeof TG_SPAN_SCHE
 
 const REQUEST_SPAN = "tg.span.provider.request";
 
-function isTelemetryActive(context: TelemetryContext | undefined): context is TelemetryContext {
-	return context !== undefined && context !== NOOP_TELEMETRY_CONTEXT;
+function isTelemetryActive(span: TelemetrySpan | undefined): span is TelemetrySpan {
+	return span !== undefined && span !== NOOP_TELEMETRY_CONTEXT;
 }
 
 function startAttributes(target: ProviderSpanTarget): RequestStartAttributes {
@@ -65,7 +61,7 @@ function toStopReason(value: string): RequestEndAttributes["stopReason"] {
 	}
 }
 
-function usageAttributes(usage: ProviderUsage | undefined): RequestEndAttributes {
+function usageAttributes(usage: ProviderResult["usage"]): RequestEndAttributes {
 	if (usage === undefined) return {};
 	return {
 		"tokens.input": usage.input,
@@ -76,21 +72,19 @@ function usageAttributes(usage: ProviderUsage | undefined): RequestEndAttributes
 	};
 }
 
-function requestEndAttributes(message: AssistantMessage, retries: number): RequestEndAttributes {
+function requestEndAttributes(message: AssistantMessage): RequestEndAttributes {
 	const errorName = diagnosticErrorName(message);
 	const stopReason = toStopReason(message.stopReason);
 	return {
-		retried: retries > 0,
 		...usageAttributes(message.usage),
 		...(stopReason !== undefined ? { stopReason } : {}),
 		...(errorName !== undefined ? { errorName } : {}),
 	};
 }
 
-function resultEndAttributes(result: ProviderResult, retries: number): RequestEndAttributes {
+function resultEndAttributes(result: ProviderResult): RequestEndAttributes {
 	const stopReason = toStopReason(result.stopReason);
 	return {
-		retried: retries > 0,
 		...usageAttributes(result.usage),
 		...(stopReason !== undefined ? { stopReason } : {}),
 	};
@@ -104,16 +98,6 @@ function diagnosticErrorName(message: AssistantMessage): string | undefined {
 	return undefined;
 }
 
-function retryCounter(): { readonly onRetry: () => void; count: () => number } {
-	let retries = 0;
-	return {
-		onRetry: () => {
-			retries += 1;
-		},
-		count: () => retries,
-	};
-}
-
 async function forwardRemaining(inner: AssistantMessageEventStream, outer: AssistantMessageEventStream): Promise<void> {
 	for await (const event of inner) outer.push(event);
 	outer.end(await inner.result());
@@ -124,20 +108,19 @@ async function forwardRemaining(inner: AssistantMessageEventStream, outer: Assis
  *
  * The adapter stream opens synchronously, so a thrown setup error still propagates
  * synchronously; the span covers the stream lifetime and receives its end attributes
- * when the stream settles. Without an active telemetry context the call is untouched.
+ * when the stream settles. Without an active telemetry span the call is untouched.
  */
 export function providerRequestStream<TModel extends ProviderSpanTarget, TOptions extends TelemetryOptions>(
 	model: TModel,
 	options: TOptions | undefined,
 	open: (options: TOptions | undefined) => AssistantMessageEventStream,
 ): AssistantMessageEventStream {
-	const telemetryContext = options?.telemetryContext;
-	if (!isTelemetryActive(telemetryContext)) return open(options);
-	const startSpan = createTypedSpanStarter(telemetryContext, [TG_SPAN_SCHEMA]);
-	const counter = retryCounter();
+	const telemetry = options?.telemetry;
+	if (!isTelemetryActive(telemetry)) return open(options);
+	const startSpan = createTypedSpanStarter(telemetry, [TG_SPAN_SCHEMA]);
 	let inner: AssistantMessageEventStream;
 	try {
-		inner = open(options === undefined ? undefined : { ...options, onRetry: counter.onRetry });
+		inner = open(options);
 	} catch (error) {
 		// A setup throw stays synchronous; the failed attempt is still recorded.
 		const errorName = error instanceof Error ? error.name : "ThrownValue";
@@ -152,7 +135,7 @@ export function providerRequestStream<TModel extends ProviderSpanTarget, TOption
 		for await (const event of inner) outer.push(event);
 		const message = await inner.result();
 		const errorName = diagnosticErrorName(message);
-		span.setAttributes(requestEndAttributes(message, counter.count()));
+		span.setAttributes(requestEndAttributes(message));
 		if (message.stopReason === "error" || message.stopReason === "aborted") {
 			span.setStatus({
 				status: "error",
@@ -170,20 +153,19 @@ export function providerRequestStream<TModel extends ProviderSpanTarget, TOption
 
 /**
  * Wraps an awaited provider call (image generation, classification) in a
- * `tg.span.provider.request` span. Without an active telemetry context the call is untouched.
+ * `tg.span.provider.request` span. Without an active telemetry span the call is untouched.
  */
 export async function providerRequestResult<TResult extends ProviderResult, TOptions extends TelemetryOptions>(
 	model: ProviderSpanTarget,
 	options: TOptions | undefined,
 	run: (options: TOptions | undefined) => Promise<TResult>,
 ): Promise<TResult> {
-	const telemetryContext = options?.telemetryContext;
-	if (!isTelemetryActive(telemetryContext)) return await run(options);
-	const counter = retryCounter();
-	const startSpan = createTypedSpanStarter(telemetryContext, [TG_SPAN_SCHEMA]);
+	const telemetry = options?.telemetry;
+	if (!isTelemetryActive(telemetry)) return await run(options);
+	const startSpan = createTypedSpanStarter(telemetry, [TG_SPAN_SCHEMA]);
 	return await startSpan(REQUEST_SPAN, startAttributes(model), async (span) => {
-		const result = await run(options === undefined ? undefined : { ...options, onRetry: counter.onRetry });
-		span.setAttributes(resultEndAttributes(result, counter.count()));
+		const result = await run(options);
+		span.setAttributes(resultEndAttributes(result));
 		if (result.stopReason === "error" || result.stopReason === "aborted") {
 			span.setStatus({ status: "error", error: { name: "Error", message: result.errorMessage ?? "" } });
 		}

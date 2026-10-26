@@ -215,7 +215,9 @@ describe("FileCredentialStore", () => {
 		expect(Object.keys(JSON.parse(readFileSync(path, "utf8")))).toEqual(["anthropic"]);
 	});
 
-	it("creates the file mode 0600 inside a 0700 directory", async () => {
+	// POSIX permission bits are not expressible on Windows (chmod maps only to the read-only
+	// attribute), so the mode assertions run where they mean something.
+	it.skipIf(process.platform === "win32")("creates the file mode 0600 inside a 0700 directory", async () => {
 		const { path, root, store } = credentialFile();
 		await store.modify("anthropic", async () => oauth("access-1"));
 
@@ -224,7 +226,7 @@ describe("FileCredentialStore", () => {
 		expect(statSync(path).mode & 0o777).toBe(0o600);
 	});
 
-	it("re-tightens permissions on an existing loose file", async () => {
+	it.skipIf(process.platform === "win32")("re-tightens permissions on an existing loose file", async () => {
 		const { path, store } = credentialFile();
 		await store.modify("anthropic", async () => oauth("access-1"));
 		chmodSync(path, 0o644);
@@ -255,15 +257,23 @@ describe("FileCredentialStore", () => {
 		await store.modify("anthropic", async () => oauth("old"));
 
 		const controller = new AbortController();
+		// Abort only once the mutation is running: a fixed timer can fire before a queued call
+		// starts under a loaded test runner, and that case intentionally skips the mutation.
+		let startedRefresh!: () => void;
+		const refreshStarted = new Promise<void>((resolve) => {
+			startedRefresh = resolve;
+		});
 		const refresh = store.modify(
 			"anthropic",
 			async () => {
+				startedRefresh();
 				await new Promise((resolve) => setTimeout(resolve, 20));
 				return oauth("rotated");
 			},
 			{ signal: controller.signal },
 		);
-		setTimeout(() => controller.abort(), 5);
+		await refreshStarted;
+		controller.abort();
 
 		await expect(refresh).rejects.toThrow(/abort/i);
 
@@ -322,9 +332,11 @@ describe("FileCredentialStore", () => {
 		const script = join(root, "worker.ts");
 		// A relative import keeps the child on this package's TypeScript sources; Node resolves it
 		// from the script's own location, so the temp directory needs no node_modules of its own.
+		// The specifier stays a `file://` URL: a bare absolute path is an invalid ESM specifier on
+		// Windows (`ERR_UNSUPPORTED_ESM_URL_SCHEME`).
 		writeFileSync(
 			script,
-			`import { FileCredentialStore } from ${JSON.stringify(fileURLToPath(new URL("../src/auth-node.ts", import.meta.url)))};
+			`import { FileCredentialStore } from ${JSON.stringify(new URL("../src/auth-node.ts", import.meta.url).href)};
 const store = new FileCredentialStore({ path: ${JSON.stringify(path)} });
 const seen: string[] = [];
 for (let i = 0; i < 4; i++) {

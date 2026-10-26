@@ -20,8 +20,8 @@ check:house-standard` asserts against that record, so the two cannot drift apart
 | `packages/sec-guard` | `@OnePanda-TgSec/tg-sec-guard` | **TianGong-authored**, from `docs/sec-guard-design.md` | House, added 2026-10-22 |
 | `packages/agent` | `@OnePanda-TgSec/tg-agent-core` | pi agent, adopted and rebranded | **Removed 2026-10-22** (snapshot in `scripts/legacy/agent-core`) |
 | `packages/sec-agent` | `@OnePanda-TgSec/tg-sec-agent` | **TianGong-authored**, from `docs/sec-agent-design.md`; rebuilds the adopted-and-removed `tg-sec-agent` (snapshot in `scripts/legacy/sec-agent`) | House, added 2026-10-23 (batch 3) |
-| `packages/codemode` | `@earendil-works/pi-codemode` | **pi agent 1.3.0, migrated verbatim** | **Vendored, frozen** |
-| `packages/mcp` | `@earendil-works/pi-mcp` | **pi agent 1.3.0, migrated verbatim** | **Vendored, frozen** |
+| `packages/codemode` | `@earendil-works/pi-codemode` | **pi agent 1.4.0, migrated verbatim** | **Vendored, frozen** |
+| `packages/mcp` | `@earendil-works/pi-mcp` | **pi agent 1.4.0, migrated verbatim** | **Vendored, frozen** |
 
 Upstream project for every row above: **[pi agent](https://github.com/earendil-works/pi)**
 (`earendil-works/pi`), MIT licensed, authored upstream as "Earendil Works".
@@ -71,12 +71,13 @@ What *is* ours is the workspace that hosts them: they are built by `bun run buil
 | --- | --- |
 | Upstream package | `@earendil-works/pi-codemode` |
 | Upstream path | `packages/codemode` in `earendil-works/pi` |
-| Upstream version adopted | `1.3.0` |
+| Upstream version adopted | `1.4.0` |
 | Upstream author | Earendil Works |
 | Upstream license | MIT |
 | Adopted into TianGong | 2026-10-04 |
 | Re-synced | 2026-10-10 (from `1.0.1`) |
 | Re-synced | 2026-10-17 (from `1.1.0`) |
+| Re-synced | 2026-10-24 (from `1.3.0`; 1.4.0 was a version-bump-only release upstream) |
 | Role in this repo | QuickJS/WASI sandbox whose only capability is calling injected tools |
 
 What it provides: a sandboxed JavaScript execution runtime (`quickjs-wasi`) plus the type
@@ -113,12 +114,13 @@ Notes:
 | --- | --- |
 | Upstream package | `@earendil-works/pi-mcp` |
 | Upstream path | `packages/mcp` in `earendil-works/pi` |
-| Upstream version adopted | `1.3.0` |
+| Upstream version adopted | `1.4.0` |
 | Upstream author | Earendil Works |
 | Upstream license | MIT, plus `LICENSES/modelcontextprotocol-typescript-sdk.txt` for the vendored type definitions |
 | Adopted into TianGong | 2026-10-04 |
 | Re-synced | 2026-10-10 (from `1.0.1`) |
 | Re-synced | 2026-10-17 (from `1.1.0`) |
+| Re-synced | 2026-10-24 (from `1.3.0`; 1.4.0 was a version-bump-only release upstream) |
 | Role in this repo | Standalone Model Context Protocol client: transport-neutral core, stdio and Streamable HTTP transports, OAuth subset, in-memory testing transport |
 
 What it provides: an MCP client that depends on neither the official MCP SDK nor any other pi
@@ -155,7 +157,8 @@ Notes:
 The vendored copy is a **complete mirror**, not a subset: every file upstream ships in
 `packages/mcp/` and `packages/codemode/` is present here, and every one of them is byte-identical
 (verified by git object hash) — with **one recorded local deviation**: the `shx` devDependency in
-both `package.json` files is pinned to `0.4.0`, while upstream 1.3.0 ships `0.3.4`. TianGong keeps a
+both `package.json` files is pinned to `0.4.0`, while upstream ships `0.3.4` (unchanged through
+1.4.0). TianGong keeps a
 single `shx` version across the workspace and avoids the deprecated `shelljs@0.8.5`/`glob@7` tree
 that `0.3.4` resolves to. The pin is version-controlled and re-applied on every re-sync.
 

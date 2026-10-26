@@ -25,10 +25,10 @@ import type {
 import { formatProviderError, normalizeProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { providerHeadersToRecord } from "../utils/headers.ts";
+import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { getSystemMessageText } from "../utils/text.ts";
-import { getTgUserAgent } from "../utils/tg-user-agent.ts";
 import { collapseSystemMessages, getCurrentTools, getInitialSystemMessage } from "../utils/transcript.ts";
 import type { GoogleApiThinkingLevel, ResolvedGoogleThinkingLevel } from "./google-shared.ts";
 import {
@@ -74,7 +74,6 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 	const normalizedContext = collapseSystemMessages(context);
 
 	(async () => {
-		const startedAt = performance.now();
 		const output: AssistantMessage = {
 			role: "assistant",
 			content: [],
@@ -100,8 +99,15 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 			const apiKey = resolveApiKey(options);
 			// Create the client using either a Vertex API key, if provided, or ADC with project and location
 			const client = apiKey
-				? createClientWithApiKey(model, apiKey, options?.headers)
-				: createClient(model, resolveProject(options), resolveLocation(options), options?.headers, options?.env);
+				? createClientWithApiKey(model, apiKey, options?.headers, options?.identity)
+				: createClient(
+						model,
+						resolveProject(options),
+						resolveLocation(options),
+						options?.headers,
+						options?.env,
+						options?.identity,
+					);
 			let params = buildParams(model, normalizedContext, options);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
@@ -292,7 +298,6 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 				throw new Error(errorMessage);
 			}
 
-			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -304,7 +309,6 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatProviderError(normalizeProviderError(error));
-			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -363,6 +367,7 @@ function createClient(
 	location: string,
 	optionsHeaders?: ProviderHeaders,
 	env?: ProviderEnv,
+	identity?: ClientIdentity,
 ): GoogleGenAI {
 	const googleAuthOptions = buildGoogleAuthOptions(env);
 	return new GoogleGenAI({
@@ -371,7 +376,7 @@ function createClient(
 		location,
 		apiVersion: API_VERSION,
 		...(googleAuthOptions ? { googleAuthOptions } : {}),
-		httpOptions: buildHttpOptions(model, optionsHeaders),
+		httpOptions: buildHttpOptions(model, optionsHeaders, identity),
 	});
 }
 
@@ -379,16 +384,21 @@ function createClientWithApiKey(
 	model: Model<"google-vertex">,
 	apiKey: string,
 	optionsHeaders?: ProviderHeaders,
+	identity?: ClientIdentity,
 ): GoogleGenAI {
 	return new GoogleGenAI({
 		vertexai: true,
 		apiKey,
 		apiVersion: API_VERSION,
-		httpOptions: buildHttpOptions(model, optionsHeaders),
+		httpOptions: buildHttpOptions(model, optionsHeaders, identity),
 	});
 }
 
-function buildHttpOptions(model: Model<"google-vertex">, optionsHeaders?: ProviderHeaders): HttpOptions | undefined {
+function buildHttpOptions(
+	model: Model<"google-vertex">,
+	optionsHeaders?: ProviderHeaders,
+	identity?: ClientIdentity,
+): HttpOptions | undefined {
 	const httpOptions: HttpOptions = {};
 	const baseUrl = resolveCustomBaseUrl(model.baseUrl);
 	if (baseUrl) {
@@ -399,7 +409,7 @@ function buildHttpOptions(model: Model<"google-vertex">, optionsHeaders?: Provid
 		}
 	}
 
-	const headers = providerHeadersToRecord({ "User-Agent": getTgUserAgent(), ...model.headers, ...optionsHeaders });
+	const headers = providerHeadersToRecord(getIdentityHeaders(model, identity), model.headers, optionsHeaders);
 	if (headers) {
 		httpOptions.headers = headers;
 	}

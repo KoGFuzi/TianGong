@@ -1,14 +1,7 @@
 const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
 
-/**
- * Retries for a transient provider failure when the caller sets none.
- *
- * Two matches the default the pinned OpenAI and Anthropic SDKs apply on their own, which is what
- * `ProviderRequestOptions.maxRetries` documents. Without this default a caller who left
- * `maxRetries` unset got exactly one attempt: the adapters pass the option straight through with
- * no fallback, so the SDK default never applied because the SDKs are invoked with `maxRetries: 0`.
- */
-export const DEFAULT_MAX_RETRIES = 2;
+/** Two matches the pinned OpenAI and Anthropic SDK defaults, which this helper mirrors. */
+const DEFAULT_MAX_RETRIES = 2;
 
 interface ProviderRetryOptions {
 	maxRetries?: number;
@@ -16,8 +9,6 @@ interface ProviderRetryOptions {
 	signal?: AbortSignal;
 	/** HTTP statuses that fail at once although the default policy would retry them. */
 	noRetryStatuses?: readonly number[];
-	/** Invoked after a retry is scheduled and before its backoff wait. */
-	onRetry?: () => void;
 }
 
 interface ProviderError extends Error {
@@ -132,7 +123,6 @@ export async function retryProviderRequest<T>(
 			if (retriesRemaining <= 0 || !isProviderError(error) || !isRetryableProviderError(error)) throw error;
 			if (error.status !== undefined && options.noRetryStatuses?.includes(error.status)) throw error;
 
-			options.onRetry?.();
 			const retryIndex = maxRetries - retriesRemaining;
 			retriesRemaining--;
 			await abortableSleep(getRetryDelayMs(error, retryIndex, options.maxRetryDelayMs), options.signal);

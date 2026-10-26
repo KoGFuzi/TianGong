@@ -1,3 +1,5 @@
+#!/usr/bin/env bun
+
 import type { Context } from "@OnePanda-TgSec/chord";
 import { BACKGROUND_CONTEXT } from "@OnePanda-TgSec/chord/context";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@OnePanda-TgSec/tg-ai";
@@ -19,6 +21,7 @@ import { watchSecEvents } from "../observation.ts";
 import type { TaskChildPolicy } from "../task-tool.ts";
 import { createSecToolsExtension } from "../tools/extension.ts";
 import type { HttpRequest, HttpResponse, RequestExecutor } from "../tools/transport.ts";
+import { oauthProviderNames, runAuthCommand } from "./auth.ts";
 
 /** The session port the CLI hands the guard before the harness exists; attached once it does. */
 function createDeferredSessionPort(): TgSecSessionPort & { attach(session: TgSecSessionPort): void } {
@@ -74,6 +77,27 @@ type CliOptions = {
 	input: string;
 };
 
+function usage(): string {
+	const providers = oauthProviderNames().join("\n");
+	return `usage:
+  tg-sec login [provider]   Login to an OAuth provider
+  tg-sec list               List OAuth providers
+  tg-sec [options]          Run the smoke turn
+
+smoke options:
+  --project <name>          Campaign project (default: smoke)
+  --lane redteam|ctf|src    Campaign lane (default: redteam)
+  --mode strict|judge-auto|auto|yolo
+                            Permission mode (default: strict)
+  --db <file>               SQLite file (default: per-project XDG path)
+  --evidence <dir>          Evidence directory (prints a summary when set)
+  --input <text>            Smoke turn input
+
+OAuth providers:
+${providers}
+`;
+}
+
 function parseArgs(argv: readonly string[]): CliOptions {
 	let project = "smoke";
 	let lane: SecAgentLane = "redteam";
@@ -85,9 +109,7 @@ function parseArgs(argv: readonly string[]): CliOptions {
 		const flag = argv[index];
 		const value = argv[index + 1];
 		if (flag === "--help") {
-			process.stdout.write(
-				"usage: tg-sec [--project <name>] [--lane redteam|ctf|src] [--mode strict|judge-auto|auto|yolo] [--db <file>] [--evidence <dir>] [--input <text>]\n",
-			);
+			process.stdout.write(usage());
 			process.exit(0);
 		}
 		if (flag === undefined || value === undefined)
@@ -121,7 +143,17 @@ function parseArgs(argv: readonly string[]): CliOptions {
  * costs no tokens and reads no keys.
  */
 async function main(): Promise<void> {
-	const options = parseArgs(process.argv.slice(2));
+	const argv = process.argv.slice(2);
+	const command = argv[0];
+	if (command === "login" || command === "list") {
+		await runAuthCommand(command, argv.slice(1));
+		return;
+	}
+	if (command === "help" || command === "--help" || command === "-h") {
+		process.stdout.write(usage());
+		return;
+	}
+	const options = parseArgs(argv);
 	const context = BACKGROUND_CONTEXT;
 	const print = (line: string) => process.stdout.write(`${line}\n`);
 	const telemetry = new InMemoryTelemetryContext();
@@ -252,4 +284,7 @@ async function main(): Promise<void> {
 	await store.close();
 }
 
-await main();
+main().catch((error: unknown) => {
+	console.error("Error:", error instanceof Error ? error.message : String(error));
+	process.exit(1);
+});

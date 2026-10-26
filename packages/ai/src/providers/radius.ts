@@ -27,7 +27,9 @@ export function radiusProvider(options: RadiusProviderOptions = {}): Provider<"t
 		gateway === normalizeRadiusGatewayUrl(DEFAULT_RADIUS_GATEWAY)
 			? Object.values(RADIUS_MODELS).map((model) => ({ ...model, provider: id }))
 			: [];
-	let dynamicModels = getRadiusModels(id, undefined);
+	// Gateway catalog for this account. Radius org owners can disable models, so once known it replaces
+	// the shipped baseline instead of overlaying it. The baseline only covers the time before any catalog exists.
+	let dynamicModels: Model<"tg-messages">[] | undefined;
 	const streams = tgMessagesApi();
 
 	return {
@@ -37,16 +39,11 @@ export function radiusProvider(options: RadiusProviderOptions = {}): Provider<"t
 			apiKey: envApiKeyAuth("Radius API key", ["RADIUS_API_KEY"]),
 			oauth: lazyOAuth({ name, load: () => loadRadiusOAuth({ name, gateway }) }),
 		},
-		getModels: () => {
-			// The gateway catalog is authoritative once it has been refreshed: overlaying it on the
-			// static baseline kept withdrawn models visible forever. Fall back to the baseline only
-			// while no catalog has been fetched, so an unreachable gateway never hides every model.
-			return dynamicModels.length > 0 ? [...dynamicModels] : [...baselineModels];
-		},
+		getModels: () => dynamicModels ?? baselineModels,
 		refreshModels: async (context) => {
 			const stored = context.stored;
 			if (stored) {
-				const restored = stored.models.filter((model) => model.provider === id) as typeof dynamicModels;
+				const restored = stored.models.filter((model) => model.provider === id) as Model<"tg-messages">[];
 				if (
 					!(await context.publish({
 						update: () => {

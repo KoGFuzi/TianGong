@@ -17,7 +17,7 @@ import {
 import type { TaskChildPolicy } from "../src/task-tool.ts";
 import { createSecToolsExtension } from "../src/tools/extension.ts";
 import type { RequestExecutor } from "../src/tools/transport.ts";
-import { cleanupTempDirs, context, fauxModel, fauxSetup, tempDir } from "./support.ts";
+import { cleanupTempDirs, context, fauxModel, fauxSetup, tempDir, trackStore } from "./support.ts";
 
 afterEach(cleanupTempDirs);
 
@@ -214,6 +214,7 @@ describe("guard-wiring attestation end to end", () => {
 		agent.registry.install(createSecCoreExtension({ lane: "redteam", wiring, policies }));
 		// The batch-5 forensic surface the declared set names: installing it keeps probe 4 aligned.
 		const store = await openTgSecEvidenceStore({ dir: await tempDir("tg-sec-guard-ev-") });
+		trackStore(store);
 		agent.registry.install(createSecToolsExtension({ store, executor: guardFauxExecutor }));
 		// beforeTool re-reads the live mode document on every call; persist it so the constructed
 		// mode and the document agree instead of the harness default (`auto`) silently winning.

@@ -123,6 +123,9 @@ export class EvidenceBlobStore {
 
 /** Flush a directory entry so a rename into it is durable across a crash. */
 function fsyncDirectory(path: string): void {
+	// Windows cannot open a directory for fsync (EPERM). The blob file's own fsync and the
+	// rename still hold; only the directory-entry flush is unavailable there.
+	if (process.platform === "win32") return;
 	const fd = fs.openSync(path, "r");
 	try {
 		fs.fsyncSync(fd);

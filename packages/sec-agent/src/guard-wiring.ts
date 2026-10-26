@@ -22,7 +22,7 @@ import {
 } from "@OnePanda-TgSec/tg-sec-guard";
 import type { TelemetryContext } from "@OnePanda-TgSec/tg-telemetry";
 import { chmod, mkdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, parse } from "node:path";
 import type { SecAgentLane } from "./bootstrap.ts";
 import { createModelJudgeTransport } from "./judge-transport.ts";
 
@@ -87,13 +87,21 @@ export function secAttestRulesSample(): ToolHookCall {
 }
 
 /**
- * Probe 1's forbidden read: a `000`-mode directory under `dataDir`, then a read attempt inside it —
- * the confined-filesystem shape the probe contract asks for ("a read the ExecutionEnv must refuse
- * with EACCES"). Under a root uid nothing is unreadable, the read succeeds, and the probe fails:
- * the honest answer, because on a root process no confinement is in effect to attest.
+ * Probe 1's forbidden read. POSIX: a `000`-mode directory under `dataDir`, then a read attempt
+ * inside it — the confined-filesystem shape the probe contract asks for (the parent directory
+ * denies the lookup, so the refusal is EACCES before existence ever matters). Under a root uid
+ * nothing is unreadable, the read succeeds, and the probe fails: the honest answer, because on a
+ * root process no confinement is in effect to attest. Windows: chmod does not produce a readable
+ * refusal, so the read targets the volume's ACL-protected system directory — refused by the OS
+ * even for administrators, which is the same honest proof.
  */
 export function secAttestForbiddenRead(dataDir: string): () => Promise<unknown> {
 	return async () => {
+		if (process.platform === "win32") {
+			// Read the protected directory itself: a file inside it reports ENOENT on Windows,
+			// while opening the directory raises the OS refusal the probe expects.
+			return readFile(join(parse(dataDir).root, "System Volume Information"));
+		}
 		const locked = join(dataDir, "attest-locked");
 		await mkdir(locked, { recursive: true, mode: 0o700 });
 		await chmod(locked, 0o000);

@@ -11,7 +11,7 @@
  *     from house packages. Vendored packages never import us.
  */
 import { readdir, readFile } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import {
 	FORMER_SPECIFIERS,
 	HOUSE_NAMES,
@@ -162,6 +162,7 @@ const ALLOWED_REMAINDERS = [
 	{ pattern: /radius\.pi\.dev/g, reason: "third-party Radius gateway domain" },
 	{ pattern: /x-pi-gateway-upstream-provider/g, reason: "third-party Radius gateway header" },
 	{ pattern: /pi-gateway/g, reason: "third-party Radius OAuth client id" },
+	{ pattern: /pi-messages/g, reason: "upstream Radius Messages API id, translated to tg-messages at generation" },
 	// The native TUI addon and its compiled fixtures keep upstream C macros (out of scope).
 	{ pattern: /PI_(?:NAPI|CLIPBOARD)_[A-Z_]*/g, reason: "native addon C macro, matches native/napi.h" },
 	// Upstream project identity.
@@ -203,7 +204,9 @@ const GENERATED_PREFIXES = ["packages/ai/src/providers/data/"];
 for (const pkg of packages) {
 	if (pkg.origin !== "house") continue;
 	for await (const file of walk(pkg.path)) {
-		const where = relative(root, file);
+		// `relative` joins with the platform separator; the frozen/generated prefixes are
+		// declared with "/" so the comparison stays identical on every platform.
+		const where = relative(root, file).split(sep).join("/");
 		if (!CODE_FILES.test(file)) continue;
 		if (FROZEN_CODE_PREFIXES.some((prefix) => where.startsWith(prefix))) continue;
 		if (GENERATED_PREFIXES.some((prefix) => where.startsWith(prefix))) continue;

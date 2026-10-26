@@ -67,7 +67,11 @@
 7. **fsync 为房内新增能力。** writeBody 序列（staging→边算 SHA-256→长度门→可选哈希门→fsync→close→按
    **算得的** hash 定位→存在则先 verify 再 `chtimes` 刷宽限；否则 mkdirAll+rename+父目录 fsync）有意
    超出房规既有模式（src 此前无 fsync 先例，仅 temp+rename / `wx` 认领）。不可变 blob 唯一被允许的原地
-   改动就是那次 `chtimes` 宽限刷新。CHANGELOG 记录。
+   改动就是那次 `chtimes` 宽限刷新。CHANGELOG 记录。**Windows 降级（2026-10-25 勘误）**：win32 不允许
+   对目录句柄 fsync（EPERM），目录 fsync 在该平台跳过——文件级 fsync、staging→rename 序列与宽限刷
+   `chtimes` 不变；持久性契约以 POSIX 平台为准，Windows 降级仅少目录项刷盘这一层。同日：探针 1 的
+   禁读样本在 win32 改读卷保护目录 `System Volume Information`（chmod 在 Windows 造不出可读的拒绝），
+   `probeRestrictedEnv` 接受 `EPERM` 与 `EACCES` 两种拒绝码，其余码（含 ENOENT）仍判失败。
 8. **GC 三段 + 宽限读文件 mtime。** `collect(now)`：先 `UPDATE ... SET unreferenced_at` 标记无 binding
    的快照，再删 `unreferenced_at < now - 24h` 者，最后遍历 `blobs/` 与 `.staging/`，凡不在存活 hash 并集
    （req∪resp）且 `now - mtime >= 24h` 者删除（EVIDENCE_GRACE_MS = 24h）。宽限计时以文件 mtime 为准。

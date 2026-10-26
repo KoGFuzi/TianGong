@@ -214,8 +214,23 @@ function messageToText(message: Message): string {
 	return toolResultToText(message);
 }
 
-function serializeContext(context: TranscriptContext): string {
-	return context.messages.map((message) => `${message.role}:${messageToText(message)}`).join("\n\n");
+/** Length of the prompt text that joins `messages` with blank lines. */
+function joinedLength(messages: readonly string[], count = messages.length): number {
+	let length = count > 0 ? (count - 1) * 2 : 0;
+	for (let index = 0; index < count; index++) length += messages[index]!.length;
+	return length;
+}
+
+/**
+ * Length of the common prefix of the two joined prompts. Equal messages are compared whole; characters are compared
+ * only from the first message that differs.
+ */
+function commonPromptPrefixLength(previous: readonly string[], current: readonly string[]): number {
+	let index = 0;
+	while (index < previous.length && index < current.length && previous[index] === current[index]) index++;
+	const rest = (messages: readonly string[]) =>
+		index === messages.length ? "" : (index > 0 ? "\n\n" : "") + messages.slice(index).join("\n\n");
+	return joinedLength(previous, index) + commonPrefixLength(rest(previous), rest(current));
 }
 
 function commonPrefixLength(a: string, b: string): number {
@@ -231,10 +246,12 @@ function withUsageEstimate(
 	message: AssistantMessage,
 	context: TranscriptContext,
 	options: StreamOptions | undefined,
-	promptCache: Map<string, string>,
+	promptCache: Map<string, readonly string[]>,
 ): AssistantMessage {
-	const promptText = serializeContext(context);
-	const promptTokens = estimateTokens(promptText);
+	// One text per message; the whole prompt joins them with blank lines.
+	const prompt = context.messages.map((message) => `${message.role}:${messageToText(message)}`);
+	const promptLength = joinedLength(prompt);
+	const promptTokens = Math.ceil(promptLength / 4);
 	const outputTokens = estimateTokens(assistantContentToText(message.content));
 	let input = promptTokens;
 	let cacheRead = 0;
@@ -244,14 +261,14 @@ function withUsageEstimate(
 	if (sessionId && options?.cacheRetention !== "none") {
 		const previousPrompt = promptCache.get(sessionId);
 		if (previousPrompt) {
-			const cachedChars = commonPrefixLength(previousPrompt, promptText);
-			cacheRead = estimateTokens(previousPrompt.slice(0, cachedChars));
-			cacheWrite = estimateTokens(promptText.slice(cachedChars));
+			const cachedChars = commonPromptPrefixLength(previousPrompt, prompt);
+			cacheRead = Math.ceil(cachedChars / 4);
+			cacheWrite = Math.ceil((promptLength - cachedChars) / 4);
 			input = Math.max(0, promptTokens - cacheRead);
 		} else {
 			cacheWrite = promptTokens;
 		}
-		promptCache.set(sessionId, promptText);
+		promptCache.set(sessionId, prompt);
 	}
 
 	return {
@@ -305,13 +322,7 @@ function createDeferredMessage(model: Model<string>, handle: DeferredHandle): As
 	};
 }
 
-function createErrorMessage(
-	error: unknown,
-	api: string,
-	provider: string,
-	modelId: string,
-	startedAt: number,
-): AssistantMessage {
+function createErrorMessage(error: unknown, api: string, provider: string, modelId: string): AssistantMessage {
 	return {
 		role: "assistant",
 		content: [],
@@ -321,17 +332,15 @@ function createErrorMessage(
 		usage: DEFAULT_USAGE,
 		stopReason: "error",
 		errorMessage: error instanceof Error ? error.message : String(error),
-		durationMs: performance.now() - startedAt,
 		timestamp: Date.now(),
 	};
 }
 
-function createAbortedMessage(partial: AssistantMessage, startedAt: number): AssistantMessage {
+function createAbortedMessage(partial: AssistantMessage): AssistantMessage {
 	return {
 		...partial,
 		stopReason: "aborted",
 		errorMessage: "Request was aborted",
-		durationMs: performance.now() - startedAt,
 		timestamp: Date.now(),
 	};
 }
@@ -351,11 +360,10 @@ async function streamWithDeltas(
 	maxTokenSize: number,
 	tokensPerSecond: number | undefined,
 	signal: AbortSignal | undefined,
-	startedAt: number,
 ): Promise<void> {
 	const partial: AssistantMessage = { ...message, content: [], stopReason: "pending" };
 	if (signal?.aborted) {
-		const aborted = createAbortedMessage(partial, startedAt);
+		const aborted = createAbortedMessage(partial);
 		stream.push({ type: "error", reason: "aborted", error: aborted });
 		stream.end(aborted);
 		return;
@@ -365,7 +373,7 @@ async function streamWithDeltas(
 
 	for (let index = 0; index < message.content.length; index++) {
 		if (signal?.aborted) {
-			const aborted = createAbortedMessage(partial, startedAt);
+			const aborted = createAbortedMessage(partial);
 			stream.push({ type: "error", reason: "aborted", error: aborted });
 			stream.end(aborted);
 			return;
@@ -379,7 +387,7 @@ async function streamWithDeltas(
 			for (const chunk of splitStringByTokenSize(block.thinking, minTokenSize, maxTokenSize)) {
 				await scheduleChunk(chunk, tokensPerSecond);
 				if (signal?.aborted) {
-					const aborted = createAbortedMessage(partial, startedAt);
+					const aborted = createAbortedMessage(partial);
 					stream.push({ type: "error", reason: "aborted", error: aborted });
 					stream.end(aborted);
 					return;
@@ -402,7 +410,7 @@ async function streamWithDeltas(
 			for (const chunk of splitStringByTokenSize(block.text, minTokenSize, maxTokenSize)) {
 				await scheduleChunk(chunk, tokensPerSecond);
 				if (signal?.aborted) {
-					const aborted = createAbortedMessage(partial, startedAt);
+					const aborted = createAbortedMessage(partial);
 					stream.push({ type: "error", reason: "aborted", error: aborted });
 					stream.end(aborted);
 					return;
@@ -419,7 +427,7 @@ async function streamWithDeltas(
 		for (const chunk of splitStringByTokenSize(JSON.stringify(block.arguments), minTokenSize, maxTokenSize)) {
 			await scheduleChunk(chunk, tokensPerSecond);
 			if (signal?.aborted) {
-				const aborted = createAbortedMessage(partial, startedAt);
+				const aborted = createAbortedMessage(partial);
 				stream.push({ type: "error", reason: "aborted", error: aborted });
 				stream.end(aborted);
 				return;
@@ -433,7 +441,6 @@ async function streamWithDeltas(
 	if (message.stopReason === "pending") {
 		throw new Error("Faux response ended without a stop reason");
 	}
-	message.durationMs = performance.now() - startedAt;
 	if (message.stopReason === "error" || message.stopReason === "aborted") {
 		stream.push({ type: "error", reason: message.stopReason, error: message });
 		stream.end(message);
@@ -455,7 +462,7 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 	let pendingResponses: FauxResponseStep[] = [];
 	const tokensPerSecond = options.tokensPerSecond;
 	const state: FauxProviderState = { callCount: 0, deferredFetchCount: 0, cancelledDeferred: [] };
-	const promptCache = new Map<string, string>();
+	const promptCache = new Map<string, readonly string[]>();
 	const deferredResponses = new Map<
 		string,
 		{
@@ -518,7 +525,6 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 		state.callCount++;
 
 		queueMicrotask(async () => {
-			const startedAt = performance.now();
 			try {
 				await streamOptions?.onResponse?.({ status: 200, headers: {} }, requestModel);
 				if (!step) {
@@ -527,7 +533,6 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 						api,
 						provider,
 						requestModel.id,
-						startedAt,
 					);
 					message = withUsageEstimate(message, context, streamOptions, promptCache);
 					outer.push({ type: "error", reason: "error", error: message });
@@ -559,23 +564,14 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 						maxTokenSize,
 						tokensPerSecond,
 						streamOptions.signal,
-						startedAt,
 					);
 					return;
 				}
 
 				const message = await resolveResponse(step, context, streamOptions, requestModel);
-				await streamWithDeltas(
-					outer,
-					message,
-					minTokenSize,
-					maxTokenSize,
-					tokensPerSecond,
-					streamOptions?.signal,
-					startedAt,
-				);
+				await streamWithDeltas(outer, message, minTokenSize, maxTokenSize, tokensPerSecond, streamOptions?.signal);
 			} catch (error) {
-				const message = createErrorMessage(error, api, provider, requestModel.id, startedAt);
+				const message = createErrorMessage(error, api, provider, requestModel.id);
 				outer.push({ type: "error", reason: "error", error: message });
 				outer.end(message);
 			}
@@ -596,7 +592,6 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 		state.deferredFetchCount++;
 
 		queueMicrotask(async () => {
-			const startedAt = performance.now();
 			try {
 				await fetchOptions?.onResponse?.({ status: 200, headers: {} }, requestModel);
 				const entry = deferredResponses.get(handle.id);
@@ -619,7 +614,6 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 						maxTokenSize,
 						tokensPerSecond,
 						fetchOptions?.signal,
-						startedAt,
 					);
 					return;
 				}
@@ -634,7 +628,7 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 					try {
 						entry.final = await resolveResponse(entry.step, entry.context, submissionOptions, entry.model);
 					} catch (error) {
-						entry.final = createErrorMessage(error, api, provider, entry.model.id, startedAt);
+						entry.final = createErrorMessage(error, api, provider, entry.model.id);
 					}
 				}
 				await streamWithDeltas(
@@ -644,10 +638,9 @@ export function createFauxCore(options: RegisterFauxProviderOptions) {
 					maxTokenSize,
 					tokensPerSecond,
 					fetchOptions?.signal,
-					startedAt,
 				);
 			} catch (error) {
-				const message = createErrorMessage(error, api, provider, requestModel.id, startedAt);
+				const message = createErrorMessage(error, api, provider, requestModel.id);
 				outer.push({ type: "error", reason: "error", error: message });
 				outer.end(message);
 			}

@@ -1,3 +1,5 @@
+import type { TelemetryMetricDefinition, TelemetryMetrics } from "./metrics.ts";
+
 export type AttributeValue = string | number | boolean | readonly string[] | readonly number[] | readonly boolean[];
 
 export interface SpanAttributes {
@@ -12,6 +14,8 @@ export interface SpanOptions {
 export type SpanStatus = { status: "ok" } | { status: "error"; error?: { name: string; message: string } };
 
 export interface TelemetryContext {
+	/** Adapter capabilities remain available on child spans and extracted parents. */
+	readonly metrics?: TelemetryMetrics;
 	startSpan<T>(options: SpanOptions, callback: (span: TelemetrySpan) => T | Promise<T>): Promise<T>;
 }
 
@@ -21,7 +25,21 @@ export interface TelemetrySpan extends TelemetryContext {
 	setStatus(status: SpanStatus): void;
 }
 
-export { NOOP_TELEMETRY_CONTEXT } from "./noop.ts";
+export type {
+	HistogramOptions,
+	InstrumentOptions,
+	SchemaTelemetryCounter,
+	SchemaTelemetryHistogram,
+	TelemetryCounter,
+	TelemetryHistogram,
+	TelemetryMetricAttributeDefinition,
+	TelemetryMetricDefinition,
+	TelemetryMetrics,
+	TelemetryUpDownCounter,
+	TypedTelemetryMetrics,
+} from "./metrics.ts";
+export { createTypedMetrics } from "./metrics.ts";
+export { NOOP_TELEMETRY_CONTEXT, NOOP_TELEMETRY_METRICS } from "./noop.ts";
 
 export interface TelemetryAttributeMetadata {
 	description: string;
@@ -64,6 +82,7 @@ export interface TelemetrySpanDefinition {
 export interface TelemetrySchemaDefinition {
 	version: number;
 	spans: Record<string, TelemetrySpanDefinition>;
+	metrics?: Record<string, TelemetryMetricDefinition>;
 }
 
 /** Typed identity helper for serializable telemetry schema data. */
@@ -336,6 +355,6 @@ export function createTypedSpanStarter<const Schemas extends TelemetrySchemaTupl
 	return bindTypedSpanStarter<Schemas>(telemetryContext);
 }
 
-export type { RecordedTelemetryEvent, RecordedTelemetrySpan } from "./memory.ts";
+export type { RecordedTelemetryEvent, RecordedTelemetryMeasurement, RecordedTelemetrySpan } from "./memory.ts";
 export { InMemoryTelemetryContext } from "./memory.ts";
 export { TG_SPAN_SCHEMA } from "./spans.ts";

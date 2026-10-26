@@ -22,9 +22,9 @@ import type {
 import { formatProviderError, normalizeProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { providerHeadersToRecord } from "../utils/headers.ts";
+import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { getSystemMessageText } from "../utils/text.ts";
-import { getTgUserAgent } from "../utils/tg-user-agent.ts";
 import { collapseSystemMessages, getCurrentTools, getInitialSystemMessage } from "../utils/transcript.ts";
 import type { GoogleApiThinkingLevel, ResolvedGoogleThinkingLevel } from "./google-shared.ts";
 import {
@@ -65,7 +65,6 @@ export const stream: StreamFunction<"google-generative-ai", GoogleOptions> = (
 	const normalizedContext = collapseSystemMessages(context);
 
 	(async () => {
-		const startedAt = performance.now();
 		const output: AssistantMessage = {
 			role: "assistant",
 			content: [],
@@ -92,7 +91,7 @@ export const stream: StreamFunction<"google-generative-ai", GoogleOptions> = (
 			if (!apiKey) {
 				throw new Error(`No API key for provider: ${model.provider}`);
 			}
-			const client = createClient(model, apiKey, options?.headers);
+			const client = createClient(model, apiKey, options?.headers, options?.identity);
 			let params = buildParams(model, normalizedContext, options);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
@@ -284,7 +283,6 @@ export const stream: StreamFunction<"google-generative-ai", GoogleOptions> = (
 				throw new Error(errorMessage);
 			}
 
-			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -296,7 +294,6 @@ export const stream: StreamFunction<"google-generative-ai", GoogleOptions> = (
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatProviderError(normalizeProviderError(error));
-			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -352,13 +349,14 @@ function createClient(
 	model: Model<"google-generative-ai">,
 	apiKey?: string,
 	optionsHeaders?: ProviderHeaders,
+	identity?: ClientIdentity,
 ): GoogleGenAI {
 	const httpOptions: { baseUrl?: string; apiVersion?: string; headers?: Record<string, string> } = {};
 	if (model.baseUrl) {
 		httpOptions.baseUrl = model.baseUrl;
 		httpOptions.apiVersion = ""; // baseUrl already includes version path, don't append
 	}
-	const headers = providerHeadersToRecord({ "User-Agent": getTgUserAgent(), ...model.headers, ...optionsHeaders });
+	const headers = providerHeadersToRecord(getIdentityHeaders(model, identity), model.headers, optionsHeaders);
 	if (headers) {
 		httpOptions.headers = headers;
 	}

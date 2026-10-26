@@ -25,26 +25,26 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
 	// Sign in with ChatGPT: the subscription's shared usage limit, which resets
 	// after hours rather than seconds.
 	"subscription_sharing_usage_limit_exceeded",
+	// Sign in with ChatGPT on a ChatGPT Business plan: a usage limit set by the
+	// workspace admin. Only the admin can raise it.
+	"subscription_sharing_workplace_individual_usage_limit_exceeded",
 ]);
 
 const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	// Generic provider load, HTTP status, and server-side transient failures. Capacity and
-	// server-busy wording is broad ("at capacity" covers the previous "model is at capacity"),
-	// and 529 is Cloudflare's "site is overloaded" — all transient, none may end a turn (#10543).
+	// server-busy wording is broad ("at capacity" covers the previous "model is at capacity",
+	// "server.?busy" covers "server_busy", #10543); 529 is Cloudflare's "site is overloaded" —
+	// all transient, none may end a turn.
 	"overloaded",
 	"currently experiencing high demand",
 	"at capacity",
 	"server.?busy",
+	"servers are currently busy",
 	"rate.?limit",
 	"too many requests",
-	"429",
-	"500",
-	"502",
-	"503",
-	"504",
-	"520",
-	"524",
-	"529",
+	// Status codes must not be part of a longer word or number, e.g. a request id or byte count
+	// (#11057). 529 stays: it is Cloudflare's "site is overloaded".
+	"(?<![a-z0-9])(?:429|500|502|503|504|520|524|529)(?![a-z0-9])",
 	// Also matches "The service is temporarily unavailable" (#10965).
 	"service.?(?:is.?)?(?:temporarily.?)?unavailable",
 	"server.?error",
@@ -103,6 +103,9 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"stream ended before message_stop",
 	"stream ended before a terminal response event",
 	"http2 request did not get a response",
+	// Codex CLI mid-stream disconnect, relayed by proxies that wrap the Codex CLI,
+	// e.g. "stream disconnected before completion: stream closed before response.completed" (#11057).
+	"stream disconnected before completion",
 	// Node ERR_HTTP2_STREAM_CANCEL: the HTTP/2 session died before the request was
 	// sent, e.g. after the Bedrock SDK's 5-minute session timeout (#10379).
 	"pending stream has been canceled",

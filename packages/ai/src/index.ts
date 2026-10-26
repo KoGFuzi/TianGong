@@ -44,6 +44,7 @@ export * from "./utils/event-stream.ts";
 // `./types.ts` re-exports the stream class as a type, and a star export alone would leave the value
 // unreachable from the package root: a type-only alias of the same name shadows it (TS1362).
 export { AssistantMessageEventStream } from "./utils/event-stream.ts";
+export * from "./utils/identity.ts";
 export * from "./utils/json-parse.ts";
 export * from "./utils/overflow.ts";
 export * from "./utils/retry.ts";
@@ -52,3 +53,4 @@ export * from "./utils/transcript.ts";
 export * from "./utils/typebox-helpers.ts";
 export { uuidv7 } from "./utils/uuid.ts";
 export * from "./utils/validation.ts";
+export { TG_AI_VERSION } from "./utils/version.ts";

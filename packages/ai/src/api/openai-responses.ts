@@ -18,20 +18,27 @@ import type {
 import { formatProviderError, normalizeProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
+import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { retryProviderRequest } from "../utils/provider-retry.ts";
-import { getTgUserAgent } from "../utils/tg-user-agent.ts";
 import { getDeclaredTools, resolveTranscript, resolveTranscriptTools } from "../utils/transcript.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
-import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.ts";
-import { buildBaseOptions } from "./simple-options.ts";
+import {
+	convertResponsesMessages,
+	convertResponsesTools,
+	getResponsesToolSupport,
+	processResponsesStream,
+} from "./openai-responses-shared.ts";
+import { buildBaseOptions, resolveSamplingParams } from "./simple-options.ts";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 // OpenAI Responses rejects max_output_tokens below 16: https://github.com/earendil-works/pi/issues/6265
 const OPENAI_RESPONSES_MIN_OUTPUT_TOKENS = 16;
 const CHATGPT_USAGE_URL = "https://chatgpt.com/settings/usage";
+const CHATGPT_WORKSPACE_LIMIT_HINT =
+	"You've reached your ChatGPT workspace's usage limit. Ask your workspace admin to increase it at admin.openai.com → Workspace → Usage limits.";
 // Fixed reasoning.effort while configuration_update items carry the thinking level.
 const CONFIGURATION_UPDATE_REQUEST_EFFORT = "medium";
 
@@ -154,7 +161,6 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 
 	// Start async processing
 	(async () => {
-		const startedAt = performance.now();
 		const compat = getCompat(model);
 		const configurationUpdateEffort = getConfigurationUpdateEffort(model, options, compat);
 		const output: AssistantMessage = {
@@ -190,6 +196,7 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 				normalizedContext,
 				apiKey,
 				options?.headers,
+				options?.identity,
 				options?.fetch,
 				cacheSessionId,
 			);
@@ -216,7 +223,6 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 					maxRetries: options?.maxRetries,
 					maxRetryDelayMs: options?.maxRetryDelayMs,
 					signal: options?.signal,
-					onRetry: options?.onRetry,
 				},
 			);
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
@@ -240,7 +246,6 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 				throw new Error(output.errorMessage || "An unknown error occurred");
 			}
 
-			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -256,10 +261,14 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 				`${model.provider === "openai" ? "OpenAI" : model.provider} API error`,
 			);
 			// Sign in with ChatGPT shares the subscription's usage limit with other apps.
-			output.errorMessage = errorMessage.includes("subscription_sharing_usage_limit_exceeded")
-				? `${errorMessage}\nCheck your ChatGPT usage: ${CHATGPT_USAGE_URL}`
-				: errorMessage;
-			output.durationMs = performance.now() - startedAt;
+			// On ChatGPT Business plans, the workspace admin also sets a per-user limit.
+			if (errorMessage.includes("subscription_sharing_usage_limit_exceeded")) {
+				output.errorMessage = `${errorMessage}\nCheck your ChatGPT usage: ${CHATGPT_USAGE_URL}`;
+			} else if (errorMessage.includes("subscription_sharing_workplace_individual_usage_limit_exceeded")) {
+				output.errorMessage = `${errorMessage}\n${CHATGPT_WORKSPACE_LIMIT_HINT}`;
+			} else {
+				output.errorMessage = errorMessage;
+			}
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -293,11 +302,12 @@ function createClient(
 	context: TranscriptContext,
 	apiKey: string,
 	optionsHeaders?: ProviderHeaders,
+	identity?: ClientIdentity,
 	fetch?: typeof globalThis.fetch,
 	sessionId?: string,
 ) {
 	const compat = getCompat(model);
-	const headers: ProviderHeaders = { "User-Agent": getTgUserAgent(), ...model.headers };
+	const headers: ProviderHeaders = { ...getIdentityHeaders(model, identity), ...model.headers };
 	if (model.provider === "github-copilot") {
 		const hasImages = hasCopilotVisionInput(context.messages);
 		const copilotHeaders = buildCopilotDynamicHeaders({
@@ -336,17 +346,11 @@ function buildParams(
 	model: Model<"openai-responses">,
 	context: TranscriptContext,
 	options: OpenAIResponsesOptions | undefined,
-	compat: Required<OpenAIResponsesCompat> = getCompat(model),
-	grammarToolInputProperties: ReadonlyMap<string, string> = createGrammarToolInputProperties(
-		getDeclaredTools(context.messages),
-		compat.supportsOpenAIGrammarTools,
-	),
+	compat: Required<OpenAIResponsesCompat>,
+	grammarToolInputProperties: ReadonlyMap<string, string>,
 	configurationUpdateEffort: string | undefined,
 ) {
-	const transcriptTools = resolveTranscriptTools(
-		context.messages,
-		compat.supportsAdditionalTools || compat.supportsToolSearch,
-	);
+	const transcriptTools = resolveTranscriptTools(context.messages, getResponsesToolSupport(compat));
 	const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
 		grammarToolInputProperties,
 		supportsMidConvoSystemMessages: compat.supportsMidConvoSystemMessages,
@@ -415,8 +419,11 @@ function buildParams(
 		if (model.provider === "xai") params.include = ["reasoning.encrypted_content"];
 	}
 
-	// Last so custom keys override the named request fields. Per-request keys override model defaults.
-	Object.assign(params, model.samplingParams, options?.samplingParams);
+	// Last so model and request sampling parameters override named request fields.
+	const samplingParams = resolveSamplingParams(model, reasoningEffort ?? "off", options?.samplingParams);
+	if (samplingParams) {
+		Object.assign(params, samplingParams);
+	}
 
 	return params;
 }

@@ -1,13 +1,18 @@
 import {
 	createTypedSpanStarter,
 	NOOP_TELEMETRY_CONTEXT,
-	type TelemetryContext,
+	type TelemetrySpan,
 	TG_SPAN_SCHEMA,
 } from "@OnePanda-TgSec/tg-telemetry";
 import { lazyStream } from "./api/lazy.ts";
 import { defaultProviderAuthContext as defaultAuthContext } from "./auth/context.ts";
 import { InMemoryCredentialStore } from "./auth/credential-store.ts";
-import { type AuthResolutionOverrides, ModelsError, resolveProviderAuth } from "./auth/resolve.ts";
+import {
+	type AuthResolutionOverrides,
+	ModelsError,
+	refreshStoredOAuthCredential,
+	resolveProviderAuth,
+} from "./auth/resolve.ts";
 import type {
 	AuthCheck,
 	AuthContext,
@@ -21,6 +26,7 @@ import type {
 	ProviderAuth,
 } from "./auth/types.ts";
 import { InMemoryModelsStore, type ModelsStore, type ModelsStoreEntry } from "./models-store.ts";
+import { observeModelRequest } from "./telemetry.ts";
 import type {
 	AnyModel,
 	Api,
@@ -58,6 +64,7 @@ import type {
 } from "./types.ts";
 import { operationSignal, raceWithAbortSignal } from "./utils/abort.ts";
 import { ConcurrencyLimiter, DEFAULT_PROVIDER_CONCURRENCY } from "./utils/concurrency-limit.ts";
+import { type ClientIdentity, getOpenCodeSessionHeaders, mergeClientIdentity } from "./utils/identity.ts";
 import {
 	assertChatModel,
 	assertClassifierInputSupported,
@@ -72,6 +79,7 @@ import { providerRequestResult, providerRequestStream } from "./utils/provider-s
 import { normalizeContext } from "./utils/transcript.ts";
 
 export { ModelsError, type ModelsErrorCode } from "./auth/resolve.ts";
+export { AI_TELEMETRY_SCHEMA } from "./telemetry.ts";
 export { getModelType, isModelType } from "./utils/model-operations.ts";
 
 export interface ModelsPublication {
@@ -378,10 +386,12 @@ export interface CreateModelsOptions {
 	credentials?: CredentialStore;
 	modelsStore?: ModelsStore;
 	authContext?: AuthContext;
+	/** Default identity of every request; a request's `identity` overrides it field by field. */
+	identity?: ClientIdentity;
 	/**
-	 * Maximum outbound provider requests in flight per provider id. Defaults to
-	 * {@link DEFAULT_PROVIDER_CONCURRENCY}. Lower it when many sessions share one provider's quota;
-	 * set it to 0 to disable admission control.
+	 * Maximum concurrent outbound requests per provider id. Zero or negative disables admission
+	 * control. Default: {@link DEFAULT_PROVIDER_CONCURRENCY}. Admission fails fast with
+	 * `ConcurrencyLimitError` — the caller's retry budget, not hidden latency, handles the spike.
 	 */
 	providerConcurrency?: number;
 }
@@ -418,6 +428,7 @@ class ModelsImpl implements MutableModels {
 	private credentials: CredentialStore;
 	private modelsStore: ModelsStore;
 	private authContext: AuthContext;
+	private identity: ClientIdentity | undefined;
 	private limiter: ConcurrencyLimiter;
 	private refreshGenerations = new Map<string, number>();
 	private refreshControllers = new Map<string, AbortController>();
@@ -427,7 +438,47 @@ class ModelsImpl implements MutableModels {
 		this.credentials = options?.credentials ?? new InMemoryCredentialStore();
 		this.modelsStore = options?.modelsStore ?? new InMemoryModelsStore();
 		this.authContext = options?.authContext ?? defaultAuthContext();
+		this.identity = options?.identity;
 		this.limiter = new ConcurrencyLimiter({ limit: options?.providerConcurrency ?? DEFAULT_PROVIDER_CONCURRENCY });
+	}
+
+	/**
+	 * Take a provider slot, open `stream`, and release the slot when the stream settles.
+	 *
+	 * With an active telemetry span the wait and admission are recorded as a
+	 * `tg.span.provider.acquire` span, which becomes the parent of the provider request span.
+	 */
+	private async holdSlot(
+		bucket: string,
+		open: (parent: TelemetrySpan | undefined) => AssistantMessageEventStream,
+		signal?: AbortSignal,
+		telemetry?: TelemetrySpan,
+	): Promise<AssistantMessageEventStream> {
+		if (telemetry === undefined || telemetry === NOOP_TELEMETRY_CONTEXT) {
+			return await this.openSlot(bucket, open, signal, undefined);
+		}
+		const startSpan = createTypedSpanStarter(telemetry, [TG_SPAN_SCHEMA]);
+		return await startSpan("tg.span.provider.acquire", { provider: bucket }, (acquireSpan) =>
+			this.openSlot(bucket, open, signal, acquireSpan),
+		);
+	}
+
+	private async openSlot(
+		bucket: string,
+		open: (parent: TelemetrySpan | undefined) => AssistantMessageEventStream,
+		signal: AbortSignal | undefined,
+		parent: TelemetrySpan | undefined,
+	): Promise<AssistantMessageEventStream> {
+		await this.limiter.acquire(bucket, signal);
+		let stream: AssistantMessageEventStream;
+		try {
+			stream = open(parent);
+		} catch (error) {
+			this.limiter.release(bucket);
+			throw error;
+		}
+		void stream.settled().then(() => this.limiter.release(bucket));
+		return stream;
 	}
 
 	setProvider(provider: Provider): void {
@@ -650,15 +701,15 @@ class ModelsImpl implements MutableModels {
 			if (!oauth) return undefined;
 			if (Date.now() < stored.expires) return stored;
 			if (signal.aborted) return undefined;
-			const post = await this.credentials.modify(
+			// A refresh that has started survives cancellation or a superseding model refresh, so a
+			// rotated refresh token is always persisted. A newer refresh then sees the fresh credential.
+			return refreshStoredOAuthCredential(
+				this.credentials,
 				provider.id,
-				async (current) => {
-					if (current?.type !== "oauth" || Date.now() < current.expires) return undefined;
-					return oauth.refresh(current, signal);
-				},
-				{ signal },
+				oauth,
+				(current) => Date.now() >= current.expires,
+				signal,
 			);
-			return post?.type === "oauth" ? post : undefined;
 		}
 
 		const apiKey = provider.auth.apiKey;
@@ -892,59 +943,26 @@ class ModelsImpl implements MutableModels {
 
 		// Explicit request options win per-field; the Models-only transform runs last.
 		const apiKey = options?.apiKey ?? auth.apiKey;
-		let headers = mergeHeaders(auth.headers, options?.headers);
+		const requestModel: TModel = auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model;
+		const sessionId =
+			options && "sessionId" in options && typeof options.sessionId === "string" ? options.sessionId : undefined;
+		let headers = mergeHeaders(
+			mergeHeaders(getOpenCodeSessionHeaders(requestModel, sessionId), auth.headers),
+			options?.headers,
+		);
 		if (options?.transformHeaders) headers = await options.transformHeaders(headers ?? {});
 		const env = resolution.env || options?.env ? { ...(resolution.env ?? {}), ...(options?.env ?? {}) } : undefined;
-		const requestModel: TModel = auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model;
+		const identity = mergeClientIdentity(this.identity, options?.identity);
 		const { transformHeaders: _transformHeaders, ...providerOptions } = options ?? {};
-		const requestOptions = { ...providerOptions, apiKey, headers, env } as Omit<TOptions, "transformHeaders"> &
-			ProviderRequestOptions<TModel>;
+		const requestOptions = {
+			...providerOptions,
+			apiKey,
+			headers,
+			env,
+			...(identity === undefined ? {} : { identity }),
+		} as Omit<TOptions, "transformHeaders"> & ProviderRequestOptions<TModel>;
 
 		return { requestModel, requestOptions };
-	}
-
-	/**
-	 * Take a provider slot, open `stream`, and release the slot when the stream settles.
-	 *
-	 * A streaming response occupies its upstream slot until the stream ends, which is later than the
-	 * moment the adapter returns, so the slot cannot be scoped to the call that opened it.
-	 * `EventStream.settled()` resolves on both a terminal event and `end()`, so the slot returns on
-	 * every path except an abandoned stream the consumer never drains.
-	 *
-	 * With an active telemetry context the wait and admission are recorded as a
-	 * `tg.span.provider.acquire` span, which becomes the parent of the provider request span.
-	 */
-	private async holdSlot(
-		bucket: string,
-		open: (parent: TelemetryContext | undefined) => AssistantMessageEventStream,
-		signal?: AbortSignal,
-		telemetryContext?: TelemetryContext,
-	): Promise<AssistantMessageEventStream> {
-		if (telemetryContext === undefined || telemetryContext === NOOP_TELEMETRY_CONTEXT) {
-			return await this.openSlot(bucket, open, signal, undefined);
-		}
-		const startSpan = createTypedSpanStarter(telemetryContext, [TG_SPAN_SCHEMA]);
-		return await startSpan("tg.span.provider.acquire", { provider: bucket }, (acquireSpan) =>
-			this.openSlot(bucket, open, signal, acquireSpan),
-		);
-	}
-
-	private async openSlot(
-		bucket: string,
-		open: (parent: TelemetryContext | undefined) => AssistantMessageEventStream,
-		signal: AbortSignal | undefined,
-		parent: TelemetryContext | undefined,
-	): Promise<AssistantMessageEventStream> {
-		await this.limiter.acquire(bucket, signal);
-		let stream: AssistantMessageEventStream;
-		try {
-			stream = open(parent);
-		} catch (error) {
-			this.limiter.release(bucket);
-			throw error;
-		}
-		void stream.settled().then(() => this.limiter.release(bucket));
-		return stream;
 	}
 
 	stream<TApi extends Api>(
@@ -953,32 +971,30 @@ class ModelsImpl implements MutableModels {
 		options?: ModelsApiStreamOptions<TApi>,
 	): AssistantMessageEventStream {
 		const transcript = normalizeContext(context);
-		return lazyStream(model, async () => {
-			const provider = this.requireChatProvider(model);
-			// Auth resolves before admission: an OAuth refresh can take seconds and has its own
-			// cross-process exclusion, so holding a request slot across it would throttle unrelated
-			// traffic behind one provider's refresh.
-			const { requestModel, requestOptions } = await this.applyAuth(
-				model,
-				options as ModelsApiStreamOptions<Api> | undefined,
-			);
-			// The slot is held for the life of the stream, not just its opening request: the upstream
-			// slot stays occupied until the last byte arrives. `stream()` returns synchronously, so the
-			// slot cannot be scoped to a promise here; it is released when the stream settles.
-			return await this.holdSlot(
-				model.provider,
-				(parent) =>
-					provider.stream(
-						requestModel,
-						transcript,
-						(parent === undefined
-							? requestOptions
-							: { ...requestOptions, telemetryContext: parent }) as ApiStreamOptions<TApi>,
-					),
-				options?.signal,
-				requestOptions.telemetryContext,
-			);
-		});
+		return lazyStream(
+			model,
+			async () => {
+				const provider = this.requireChatProvider(model);
+				const { requestModel, requestOptions } = await this.applyAuth(
+					model,
+					options as ModelsApiStreamOptions<Api> | undefined,
+				);
+				return await this.holdSlot(
+					model.provider,
+					(parent) =>
+						provider.stream(
+							requestModel,
+							transcript,
+							(parent === undefined
+								? requestOptions
+								: { ...requestOptions, telemetry: parent }) as ApiStreamOptions<TApi>,
+						),
+					options?.signal,
+					requestOptions.telemetry,
+				);
+			},
+			observeModelRequest(model, options, false),
+		);
 	}
 
 	async complete<TApi extends Api>(
@@ -991,24 +1007,27 @@ class ModelsImpl implements MutableModels {
 
 	streamSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): AssistantMessageEventStream {
 		const transcript = normalizeContext(context);
-		return lazyStream(model, async () => {
-			const provider = this.requireChatProvider(model);
-			// See `stream`: auth resolves outside the limiter so a slow refresh does not hold a slot.
-			const { requestModel, requestOptions } = await this.applyAuth(model, options);
-			return await this.holdSlot(
-				model.provider,
-				(parent) =>
-					provider.streamSimple(
-						requestModel,
-						transcript,
-						(parent === undefined
-							? requestOptions
-							: { ...requestOptions, telemetryContext: parent }) as SimpleStreamOptions,
-					),
-				options?.signal,
-				requestOptions.telemetryContext,
-			);
-		});
+		return lazyStream(
+			model,
+			async () => {
+				const provider = this.requireChatProvider(model);
+				const { requestModel, requestOptions } = await this.applyAuth(model, options);
+				return await this.holdSlot(
+					model.provider,
+					(parent) =>
+						provider.streamSimple(
+							requestModel,
+							transcript,
+							(parent === undefined
+								? requestOptions
+								: { ...requestOptions, telemetry: parent }) as SimpleStreamOptions,
+						),
+					options?.signal,
+					requestOptions.telemetry,
+				);
+			},
+			observeModelRequest(model, options, false),
+		);
 	}
 
 	async completeSimple(
@@ -1024,14 +1043,18 @@ class ModelsImpl implements MutableModels {
 		handle: DeferredHandle,
 		options?: ModelsDeferredFetchOptions,
 	): AssistantMessageEventStream {
-		return lazyStream(model, async () => {
-			const provider = this.requireChatProvider(model);
-			if (!provider.fetchDeferred) {
-				throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
-			}
-			const { requestModel, requestOptions } = await this.applyAuth(model, options);
-			return provider.fetchDeferred(requestModel, handle, requestOptions as DeferredFetchOptions);
-		});
+		return lazyStream(
+			model,
+			async () => {
+				const provider = this.requireChatProvider(model);
+				if (!provider.fetchDeferred) {
+					throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
+				}
+				const { requestModel, requestOptions } = await this.applyAuth(model, options);
+				return provider.fetchDeferred!(requestModel, handle, requestOptions as DeferredFetchOptions);
+			},
+			observeModelRequest(model, options, true),
+		);
 	}
 
 	async fetchDeferred(
@@ -1067,7 +1090,7 @@ class ModelsImpl implements MutableModels {
 				throw new ModelsError("provider", `Provider ${model.provider} does not support image generation`);
 			}
 			const { requestModel, requestOptions } = await this.applyAuth(model, options);
-			return await provider.generateImages(requestModel, context, requestOptions);
+			return await provider.generateImages!(requestModel, context, requestOptions);
 		} catch (error) {
 			return imageErrorResult(model, error, options?.signal?.aborted);
 		}
@@ -1086,7 +1109,7 @@ class ModelsImpl implements MutableModels {
 				throw new ModelsError("provider", `Provider ${model.provider} does not support classification`);
 			}
 			const { requestModel, requestOptions } = await this.applyAuth(model, options);
-			return await provider.classify(requestModel, context, requestOptions);
+			return await provider.classify!(requestModel, context, requestOptions);
 		} catch (error) {
 			return classifierErrorResult(model, error, options?.signal?.aborted);
 		}
@@ -1232,7 +1255,9 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 			),
 		streamSimple: (model, context, options) =>
 			dispatch(model, (streams) =>
-				providerRequestStream(model, options, (next) => streams.streamSimple(model, context, next)),
+				providerRequestStream<Model<TApi>, SimpleStreamOptions>(model, options, (next) =>
+					streams.streamSimple(model, context, next),
+				),
 			),
 	};
 
@@ -1273,7 +1298,7 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 					),
 				);
 			}
-			return await providerRequestResult(model, options, (next) =>
+			return await providerRequestResult<AssistantImages, ImagesOptions>(model, options, (next) =>
 				implementation.generateImages(model, context, next),
 			);
 		};
@@ -1287,7 +1312,9 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 					new ModelsError("provider", `Provider ${input.id} has no classifier implementation for "${model.api}"`),
 				);
 			}
-			return await providerRequestResult(model, options, (next) => implementation.classify(model, context, next));
+			return await providerRequestResult<ClassifierResult, ClassifierOptions>(model, options, (next) =>
+				implementation.classify(model, context, next),
+			);
 		};
 	}
 

@@ -9,6 +9,7 @@ import type {
 	ToolExecutionResult,
 	ToolRegistration,
 } from "@OnePanda-TgSec/tg-gibraltar";
+import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, rmSync } from "node:fs";
 import { symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -441,17 +442,21 @@ describe("durable tools", () => {
 			expect(getOrThrow(await env.readTextFile("file.txt", BACKGROUND_CONTEXT))).toBe("ALPHA\nBETA\n");
 		});
 
-		it("serializes concurrent edits through canonical and symlink paths", async () => {
-			const env = new SlowReadExecutionEnv({ cwd: createTempDir() });
-			getOrThrow(await env.writeFile("target.txt", "alpha\nbeta\ngamma\n", BACKGROUND_CONTEXT));
-			await symlink("target.txt", `${env.cwd}/link.txt`);
-			const tool = createEditTool();
-			await Promise.all([
-				run(tool, { path: "target.txt", edits: [{ oldText: "alpha", newText: "ALPHA" }] }, env),
-				run(tool, { path: "link.txt", edits: [{ oldText: "beta", newText: "BETA" }] }, env),
-			]);
-			expect(getOrThrow(await env.readTextFile("target.txt", BACKGROUND_CONTEXT))).toBe("ALPHA\nBETA\ngamma\n");
-		});
+		// Windows only creates symlinks with Developer Mode or SeCreateSymbolicLinkPrivilege.
+		it.skipIf(process.platform === "win32")(
+			"serializes concurrent edits through canonical and symlink paths",
+			async () => {
+				const env = new SlowReadExecutionEnv({ cwd: createTempDir() });
+				getOrThrow(await env.writeFile("target.txt", "alpha\nbeta\ngamma\n", BACKGROUND_CONTEXT));
+				await symlink("target.txt", `${env.cwd}/link.txt`);
+				const tool = createEditTool();
+				await Promise.all([
+					run(tool, { path: "target.txt", edits: [{ oldText: "alpha", newText: "ALPHA" }] }, env),
+					run(tool, { path: "link.txt", edits: [{ oldText: "beta", newText: "BETA" }] }, env),
+				]);
+				expect(getOrThrow(await env.readTextFile("target.txt", BACKGROUND_CONTEXT))).toBe("ALPHA\nBETA\ngamma\n");
+			},
+		);
 
 		it("serializes edits of one file across environment objects of one file system", async () => {
 			const dir = createTempDir();
@@ -466,20 +471,23 @@ describe("durable tools", () => {
 			expect(getOrThrow(await first.readTextFile("file.txt", BACKGROUND_CONTEXT))).toBe("ALPHA\nBETA\n");
 		});
 
-		it("serializes a new file created through a symlinked directory with its canonical path", async () => {
-			const env = new BlockingWriteExecutionEnv({ cwd: createTempDir() });
-			mkdirSync(`${env.cwd}/real`);
-			await symlink(`${env.cwd}/real`, `${env.cwd}/link`);
-			const tool = createWriteTool();
-			const first = run(tool, { path: "link/new.txt", content: "first\n" }, env);
-			await env.firstWriteStarted.promise;
-			const second = run(tool, { path: "real/new.txt", content: "second\n" }, env);
-			await delay(20);
-			expect(env.secondWriteStarted).toBe(false);
-			env.finishFirstWrite.resolve();
-			await Promise.all([first, second]);
-			expect(getOrThrow(await env.readTextFile("real/new.txt", BACKGROUND_CONTEXT))).toBe("second\n");
-		});
+		it.skipIf(process.platform === "win32")(
+			"serializes a new file created through a symlinked directory with its canonical path",
+			async () => {
+				const env = new BlockingWriteExecutionEnv({ cwd: createTempDir() });
+				mkdirSync(`${env.cwd}/real`);
+				await symlink(`${env.cwd}/real`, `${env.cwd}/link`);
+				const tool = createWriteTool();
+				const first = run(tool, { path: "link/new.txt", content: "first\n" }, env);
+				await env.firstWriteStarted.promise;
+				const second = run(tool, { path: "real/new.txt", content: "second\n" }, env);
+				await delay(20);
+				expect(env.secondWriteStarted).toBe(false);
+				env.finishFirstWrite.resolve();
+				await Promise.all([first, second]);
+				expect(getOrThrow(await env.readTextFile("real/new.txt", BACKGROUND_CONTEXT))).toBe("second\n");
+			},
+		);
 
 		it.skipIf(process.platform === "win32")(
 			"keys a missing file whose name contains a backslash like the created file",
@@ -531,7 +539,7 @@ describe("durable tools", () => {
 			await blocked;
 		});
 
-		it("edits regular files through symlinks", async () => {
+		it.skipIf(process.platform === "win32")("edits regular files through symlinks", async () => {
 			const env = createEnv();
 			getOrThrow(await env.writeFile("target.txt", "before\n", BACKGROUND_CONTEXT));
 			await symlink("target.txt", `${env.cwd}/link.txt`);
@@ -712,9 +720,13 @@ describe("durable tools", () => {
 			const result = await run(tool, { command: ":" }, env, withAbortSignal(controller.signal, BACKGROUND_CONTEXT));
 			expect(receivedEnv).toBe(env);
 			expect(receivedSignal).toBe(controller.signal);
-			expect(result.streamed.join("")).toBe(
-				`ready::explicit:${getOrThrow(await env.canonicalPath(workspace, BACKGROUND_CONTEXT))}`,
-			);
+			const canonicalCwd = getOrThrow(await env.canonicalPath(workspace, BACKGROUND_CONTEXT));
+			// MSYS reports its mount path (`/tmp/...`) for Windows temp directories.
+			const shellCwd =
+				process.platform === "win32"
+					? execFileSync("cygpath", ["-u", canonicalCwd], { encoding: "utf8" }).trim()
+					: canonicalCwd;
+			expect(result.streamed.join("")).toBe(`ready::explicit:${shellCwd}`);
 		});
 
 		it("supports command prefixes", async () => {

@@ -9,7 +9,7 @@ import {
 import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fsp from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { EvidenceBlobStore } from "./blobs.ts";
 import { blobsRoot, evidenceIndexPath, stagingDir } from "./config.ts";
 import { TgSecEvidenceConflictError, TgSecEvidenceHashMismatchError, TgSecEvidenceNotFoundError } from "./errors.ts";
@@ -431,7 +431,7 @@ export class TgSecEvidenceStore {
 		let removed = 0;
 		for (const root of [blobsRoot(this.dir), stagingDir(this.dir)]) {
 			await this.walk(root, async (path, mtimeMs) => {
-				const name = path.slice(path.lastIndexOf("/") + 1);
+				const name = basename(path);
 				const hash = name.endsWith(".bin") ? name.slice(0, -4) : name;
 				if (keep.has(hash)) return;
 				if (now - mtimeMs < EVIDENCE_GRACE_MS) return;

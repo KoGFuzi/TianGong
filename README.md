@@ -29,7 +29,7 @@ bun run check            # house standard、格式、类型、相对导入
 | --- | --- | --- |
 | [`@OnePanda-TgSec/tg-ai`](packages/ai) | `packages/ai` | 统一 LLM API：模型发现、provider 注册、流式调用、OAuth、图片模型注册表，全部收敛在一个接口后面。每个 provider 调用自动记录 telemetry span。 |
 | [`@OnePanda-TgSec/tg-agent-core`](packages/agent) | `packages/agent` | Agent 循环：传输抽象、状态管理、工具执行、附件；turn 与工具调用各有一层 telemetry span。 |
-| [`@OnePanda-TgSec/tg-sec-agent`](packages/sec-agent) | `packages/sec-agent` | 编码 agent CLI（`tg`）：read/bash/edit/write 工具、会话管理、扩展、skills、prompt 模板、主题、交互式与 RPC/JSON 模式。 |
+| [`@OnePanda-TgSec/tg-sec-agent`](packages/sec-agent) | `packages/sec-agent` | 安全 agent 运行时：gibraltar-native campaign harness、证据存储、sec-guard 接线，以及 `tg-sec` 冒烟/凭据 CLI。 |
 | [`@OnePanda-TgSec/tg-env`](packages/env) | `packages/env` | 远程执行环境：通过 SSH 部署并在远端运行的 `tg-env` daemon，以及与之通信的 `RemoteExecutionEnv`；文件、命令、监听与伪终端。 |
 | [`@OnePanda-TgSec/tg-gibraltar`](packages/gibraltar) | `packages/gibraltar` | 持久化会话、任务与文档运行时。生产环境只用 SQLite；一切内容先落库再展示，进程被杀也能从断点恢复；带会话删除/导出/备份与项目级用量聚合。 |
 | [`@OnePanda-TgSec/tg-tui`](packages/tui) | `packages/tui` | 终端 UI 库：差分渲染、全功能文本编辑器、Markdown 与 LaTeX 渲染、终端内图片。 |
@@ -84,7 +84,7 @@ House 包以原名引用它们。这两个 specifier 是任何 house 包唯一�
 ```text
 ~/.config/TianGong/          设置                $TIANGONG_CONFIG_DIR, $XDG_CONFIG_HOME
 ~/.local/share/TianGong/     机器状态            $TIANGONG_DATA_DIR,   $XDG_DATA_HOME
-├── auth.json                provider 凭证，由 `tg-ai login` 写入
+├── auth.json                provider 凭证，由 `tg-sec login` 写入
 ├── session.sqlite           默认会话数据库
 ├── sessions/                `tg-sec-agent` 的会话文件
 └── tg-debug.log             `tg-sec-agent` 调试日志（启用时）

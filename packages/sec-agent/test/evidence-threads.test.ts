@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { evidenceDir, evidenceIndexPath } from "../src/evidence/config.ts";
 import {
@@ -44,7 +45,7 @@ describe("evidence index separation", () => {
 		const store = await openIn(dir);
 		await store.record(BODY, BODY, INPUT);
 		expect(fs.existsSync(evidenceIndexPath(dir))).toBe(true);
-		expect(evidenceIndexPath(dir)).toBe(`${dir}/evidence.sqlite`);
+		expect(evidenceIndexPath(dir)).toBe(join(dir, "evidence.sqlite"));
 	});
 
 	it("is scoped per project and never shares a file with another project", async () => {

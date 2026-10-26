@@ -12,7 +12,7 @@
  */
 
 import type { ChildProcess } from "child_process";
-import { execSync, spawn } from "child_process";
+import { execSync, spawn, spawnSync } from "child_process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { complete, getModel, getModels } from "../src/compat.ts";
 import type { AssistantMessage, Context, Model, Usage } from "../src/types.ts";
@@ -228,9 +228,9 @@ describe("Context overflow error handling", () => {
 
 	describe("OpenAI Codex (OAuth)", () => {
 		it.skipIf(!openaiCodexToken)(
-			"gpt-5.5 - should detect overflow via isContextOverflow",
+			"gpt-5.6-sol - should detect overflow via isContextOverflow",
 			async () => {
-				const model = getModel("openai-codex", "gpt-5.5");
+				const model = getModel("openai-codex", "gpt-5.6-sol");
 				const result = await testContextOverflow(model, openaiCodexToken!);
 				logResult(result);
 
@@ -599,35 +599,21 @@ describe("Context overflow error handling", () => {
 	// Ollama (local)
 	// =============================================================================
 
-	// Check if ollama is installed and local LLM tests are enabled
-	let ollamaInstalled = false;
-	if (!process.env.TG_NO_LOCAL_LLM) {
-		try {
-			execSync("which ollama", { stdio: "ignore" });
-			ollamaInstalled = true;
-		} catch {
-			ollamaInstalled = false;
-		}
-	}
+	// A local model is opt-in: probe the CLI without a shell, and skip when the model is not
+	// already pulled rather than downloading gigabytes during a test run.
+	const ollamaReady =
+		!process.env.TG_NO_LOCAL_LLM &&
+		(() => {
+			if (spawnSync("ollama", ["--version"], { stdio: "ignore" }).status !== 0) return false;
+			const listed = spawnSync("ollama", ["list"], { encoding: "utf8" });
+			return listed.status === 0 && /\bgpt-oss:20b\b/.test(listed.stdout);
+		})();
 
-	describe.skipIf(!ollamaInstalled)("Ollama (local)", () => {
+	describe.skipIf(!ollamaReady)("Ollama (local)", () => {
 		let ollamaProcess: ChildProcess | null = null;
 		let model: Model<"openai-completions">;
 
 		beforeAll(async () => {
-			// Check if model is available, if not pull it
-			try {
-				execSync("ollama list | grep -q 'gpt-oss:20b'", { stdio: "ignore" });
-			} catch {
-				console.log("Pulling gpt-oss:20b model for Ollama overflow tests...");
-				try {
-					execSync("ollama pull gpt-oss:20b", { stdio: "inherit" });
-				} catch (_e) {
-					console.warn("Failed to pull gpt-oss:20b model, tests will be skipped");
-					return;
-				}
-			}
-
 			// Start ollama server
 			ollamaProcess = spawn("ollama", ["serve"], {
 				detached: false,

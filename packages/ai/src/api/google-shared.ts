@@ -471,6 +471,20 @@ export function mapStopReason(reason: FinishReason): StopReason {
 }
 
 /**
+ * Map string finish reason to our StopReason (for raw API responses).
+ */
+export function mapStopReasonString(reason: string): StopReason {
+	switch (reason) {
+		case "STOP":
+			return "stop";
+		case "MAX_TOKENS":
+			return "length";
+		default:
+			return "error";
+	}
+}
+
+/**
  * Run a Google GenAI SDK request with the shared provider retry policy
  * (408/409/429/5xx with backoff, honoring retry-after), mirroring how the
  * Anthropic and OpenAI adapters wrap their initial request in
@@ -481,7 +495,7 @@ export function mapStopReason(reason: FinishReason): StopReason {
  */
 export function retryGoogleRequest<T>(
 	request: () => Promise<T>,
-	options?: Pick<StreamOptions, "maxRetries" | "maxRetryDelayMs" | "signal" | "onRetry">,
+	options?: Pick<StreamOptions, "maxRetries" | "maxRetryDelayMs" | "signal">,
 ): Promise<T> {
 	return retryProviderRequest(
 		async () => {
@@ -498,7 +512,6 @@ export function retryGoogleRequest<T>(
 			maxRetries: options?.maxRetries,
 			maxRetryDelayMs: options?.maxRetryDelayMs,
 			signal: options?.signal,
-			onRetry: options?.onRetry,
 		},
 	);
 }

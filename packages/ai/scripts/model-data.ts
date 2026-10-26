@@ -311,6 +311,14 @@ export interface ModelCatalogEntry {
 	api: string;
 }
 
+/** Upstream calls the Radius Messages API `pi-messages`; house data and types use `tg-messages`. */
+const HOUSE_API_IDS: Readonly<Record<string, string>> = { "pi-messages": "tg-messages" };
+
+function withHouseApiId<T extends ModelCatalogEntry>(model: T): T {
+	const api = HOUSE_API_IDS[model.api];
+	return api === undefined ? model : ({ ...model, api } as T);
+}
+
 /**
  * Group one provider's typed catalog entries by API and key them by `type:id`,
  * the layout of `src/providers/data/<provider>.json`.
@@ -319,11 +327,12 @@ export function groupProviderModelData<T extends ModelCatalogEntry>(
 	providerId: string,
 	models: readonly T[],
 ): { groups: Record<string, Record<string, T>>; structure: Record<string, string> } {
+	const entries = models.map(withHouseApiId);
 	const groups: Record<string, Record<string, T>> = {};
 	const structure: Record<string, string> = {};
-	for (const api of Array.from(new Set(models.map((model) => model.api))).sort()) {
+	for (const api of Array.from(new Set(entries.map((model) => model.api))).sort()) {
 		const group: Record<string, T> = {};
-		for (const model of models) {
+		for (const model of entries) {
 			if (model.api !== api) continue;
 			const identity = `${model.type}:${model.id}`;
 			if (group[identity]) throw new Error(`${providerId}/${identity} has duplicate ${api} catalog entries`);

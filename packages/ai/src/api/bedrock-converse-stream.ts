@@ -53,6 +53,7 @@ import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
 import { normalizeProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { providerHeadersToRecord } from "../utils/headers.ts";
+import { type ClientIdentity, getClientVersion } from "../utils/identity.ts";
 import { parseStreamingJsonThrottled, parseToolCallArguments } from "../utils/json-parse.ts";
 import { resolveHttpProxyUrlForTarget } from "../utils/node-http-proxy.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
@@ -134,7 +135,6 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 	const normalizedContext = collapseSystemMessages(context);
 
 	(async () => {
-		const startedAt = performance.now();
 		const output: AssistantMessage = {
 			role: "assistant",
 			content: [],
@@ -163,6 +163,7 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 		const optionsProfile = options.profile || options.env?.AWS_PROFILE;
 		const config: BedrockRuntimeClientConfig = {
 			profile: optionsProfile || getProviderEnvValue("AWS_PROFILE", options.env),
+			customUserAgent: bedrockUserAgent(options.identity),
 		};
 		const configuredRegion = getConfiguredBedrockRegion(options);
 		const hasAmbientConfiguredProfile = Boolean(getProviderEnvValue("AWS_PROFILE"));
@@ -344,7 +345,6 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 
 			// A stream can settle without stopping every block, so finalize here too.
 			for (const block of output.content) finalizeStreamingBlock(block as Block);
-			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -356,7 +356,6 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 			if (output.stopReason === "error") {
 				appendBedrockFailureDiagnostic(output, error, responseRequestId);
 			}
-			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -471,6 +470,16 @@ const RESERVED_HEADER_EXACT = new Set(["authorization", "host"]);
 function isReservedHeader(key: string): boolean {
 	const lower = key.toLowerCase();
 	return lower.startsWith("x-amz-") || RESERVED_HEADER_EXACT.has(lower);
+}
+
+/**
+ * The client identity as AWS SDK user agent pairs. The SDK appends them to its own `User-Agent` and escapes characters
+ * that are not valid in a user agent token, so the detailed form is reduced to name and version.
+ */
+function bedrockUserAgent(identity: ClientIdentity | undefined): string | [string, string?][] {
+	const mode = identity?.userAgent ?? "detailed";
+	if (typeof mode === "object") return mode.custom;
+	return mode === "short" ? [["tg"]] : [["tg", getClientVersion(identity)]];
 }
 
 /**
@@ -776,6 +785,7 @@ function supportsAdaptiveThinking(modelId: string, modelName?: string): boolean 
 			s.includes("opus-5") ||
 			s.includes("sonnet-4-6") ||
 			s.includes("sonnet-5") ||
+			s.includes("haiku-5") ||
 			s.includes("fable-5"),
 	);
 }
@@ -788,6 +798,7 @@ function supportsNativeXhighEffort(model: Model<"bedrock-converse-stream">): boo
 			s.includes("opus-4-8") ||
 			s.includes("opus-5") ||
 			s.includes("sonnet-5") ||
+			s.includes("haiku-5") ||
 			s.includes("fable-5"),
 	);
 }
@@ -804,6 +815,7 @@ function supportsThinkingBlockBinding(model: Model<"bedrock-converse-stream">): 
 			s.includes("opus-4-8") ||
 			s.includes("opus-5") ||
 			s.includes("sonnet-5") ||
+			s.includes("haiku-5") ||
 			s.includes("fable-5"),
 	);
 }
@@ -883,8 +895,13 @@ function supportsPromptCaching(model: Model<"bedrock-converse-stream">, env?: Pr
 		if (getProviderEnvValue("AWS_BEDROCK_FORCE_CACHE", env) === "1") return true;
 		return false;
 	}
-	// Claude 5 models (fable-5, opus-5, sonnet-5)
-	if (candidates.some((s) => s.includes("fable-5") || s.includes("opus-5") || s.includes("sonnet-5"))) return true;
+	// Claude 5 models (fable-5, opus-5, sonnet-5, haiku-5)
+	if (
+		candidates.some(
+			(s) => s.includes("fable-5") || s.includes("opus-5") || s.includes("sonnet-5") || s.includes("haiku-5"),
+		)
+	)
+		return true;
 	// Claude 4.x models (opus-4, sonnet-4, haiku-4)
 	if (candidates.some((s) => s.includes("-4-"))) return true;
 	// Claude 3.7 Sonnet
@@ -1310,8 +1327,44 @@ function buildAdditionalModelRequestFields(
 		return result;
 	}
 
+	const candidates = getModelMatchCandidates(model.id, model.name);
+
+	if (candidates.some((s) => s.includes("gpt-oss"))) {
+		return { reasoning_effort: OPENAI_GPT_OSS_EFFORT[options.reasoning] };
+	}
+
+	if (candidates.some((s) => s.includes("gpt-"))) {
+		const mapped = model.thinkingLevelMap?.[options.reasoning];
+		return {
+			reasoning: { effort: typeof mapped === "string" ? mapped : OPENAI_GPT_EFFORT[options.reasoning] },
+		};
+	}
+
 	return undefined;
 }
+
+type OpenAIGptEffort = "low" | "medium" | "high" | "xhigh" | "max";
+type OpenAIGptOssEffort = "low" | "medium" | "high";
+
+/** OpenAI GPT models (GPT-5.x, GPT-6) take a nested `reasoning.effort` and reject `minimal`. */
+const OPENAI_GPT_EFFORT: Record<ThinkingLevel, OpenAIGptEffort> = {
+	minimal: "low",
+	low: "low",
+	medium: "medium",
+	high: "high",
+	xhigh: "xhigh",
+	max: "max",
+};
+
+/** gpt-oss takes a flat `reasoning_effort` and only accepts low, medium and high. */
+const OPENAI_GPT_OSS_EFFORT: Record<ThinkingLevel, OpenAIGptOssEffort> = {
+	minimal: "low",
+	low: "low",
+	medium: "medium",
+	high: "high",
+	xhigh: "high",
+	max: "high",
+};
 
 function createImageBlock(mimeType: string, data: string) {
 	let format: ImageFormat;

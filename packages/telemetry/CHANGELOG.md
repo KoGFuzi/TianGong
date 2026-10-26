@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- Metrics: `TelemetryContext.metrics` exposes `counter`/`upDownCounter`/`histogram`;
+  `createTypedMetrics()` binds instrument names and exact measurement attributes to one or more
+  schemas, and `NOOP_TELEMETRY_METRICS` is the inert implementation. `InMemoryTelemetryContext`
+  records measurements (`getMetrics()`) next to spans; recorded spans and measurements share a
+  `context` carrier, so a histogram can be tied back to the span that produced it.
+  `TelemetrySchemaDefinition` accepts an optional `metrics` block.
+- `tg.span.ai.request` and `tg.span.ai.poll`: one logical model request (or deferred-response poll)
+  observed inside a tg-ai adapter, registered here so house consumers can validate the same spans
+  the ai package emits through its own `AI_TELEMETRY_SCHEMA` (pi-ai 1.4.0 parity; metric names stay
+  in the ai-local schema).
+
 ### Changed
 
 - Rebranded from `@earendil-works/pi-telemetry` to `@OnePanda-TgSec/tg-telemetry`. The package was

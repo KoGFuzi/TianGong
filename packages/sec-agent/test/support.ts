@@ -13,6 +13,16 @@ import { join } from "node:path";
 export const context = BACKGROUND_CONTEXT;
 
 const directories: string[] = [];
+const closers: Array<() => Promise<void>> = [];
+
+/**
+ * Register an evidence store (or anything with a `close()`) so `cleanupTempDirs` closes it before
+ * removing its directory. Windows refuses to unlink a SQLite file while its handle is open, so a
+ * store that survives the test body must be closed explicitly before the sweep.
+ */
+export function trackStore(store: { close(): Promise<void> }): void {
+	closers.push(() => store.close());
+}
 
 /** A temp directory whose SQLite files outlive the test body and die with the suite. */
 export async function tempDir(prefix = "tg-sec-agent-"): Promise<string> {
@@ -22,9 +32,11 @@ export async function tempDir(prefix = "tg-sec-agent-"): Promise<string> {
 }
 
 export async function cleanupTempDirs(): Promise<void> {
+	for (const close of closers.splice(0)) await close().catch(() => {});
 	while (directories.length > 0) {
 		const dir = directories.pop();
-		if (dir !== undefined) await rm(dir, { recursive: true, force: true });
+		// maxRetries rides out Windows EBUSY/EPERM while a just-closed handle drains.
+		if (dir !== undefined) await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	}
 }
 

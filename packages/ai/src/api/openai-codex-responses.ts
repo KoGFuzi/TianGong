@@ -29,9 +29,9 @@ import {
 import { formatProviderError, normalizeProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
+import { getIdentityHeaders } from "../utils/identity.ts";
 import { resolveHttpProxyUrlForTarget } from "../utils/node-http-proxy.ts";
 import { getSystemMessageText } from "../utils/text.ts";
-import { getTgUserAgent } from "../utils/tg-user-agent.ts";
 import {
 	getDeclaredTools,
 	getInitialSystemMessage,
@@ -42,7 +42,12 @@ import {
 import { uuidv7 } from "../utils/uuid.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
-import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.ts";
+import {
+	convertResponsesMessages,
+	convertResponsesTools,
+	getResponsesToolSupport,
+	processResponsesStream,
+} from "./openai-responses-shared.ts";
 import { buildBaseOptions } from "./simple-options.ts";
 
 // ============================================================================
@@ -133,9 +138,7 @@ function isRetryableError(status: number, errorText: string): boolean {
 	if (status === 429 || status === 500 || status === 502 || status === 503 || status === 504) {
 		return true;
 	}
-	return /rate.?limit|overloaded|server.?busy|service.?unavailable|upstream.?connect|connection.?refused/i.test(
-		errorText,
-	);
+	return /rate.?limit|overloaded|service.?unavailable|upstream.?connect|connection.?refused/i.test(errorText);
 }
 
 function getRetryAfterDelayMs(headers: Headers): number | undefined {
@@ -183,15 +186,11 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 			reject(new Error("Request was aborted"));
 			return;
 		}
-		const onAbort = () => {
+		const timeout = setTimeout(resolve, ms);
+		signal?.addEventListener("abort", () => {
 			clearTimeout(timeout);
 			reject(new Error("Request was aborted"));
-		};
-		const timeout = setTimeout(() => {
-			signal?.removeEventListener("abort", onAbort);
-			resolve();
-		}, ms);
-		signal?.addEventListener("abort", onAbort, { once: true });
+		});
 	});
 }
 
@@ -221,7 +220,7 @@ function loadNodeZlib(): typeof NodeZlib | null {
 // Returns the zstd-compressed body bytes, or null when compression is
 // unavailable (browser/Vite builds). Callers fall back to sending the
 // uncompressed JSON when this returns null.
-function compressRequestBodyZstd(bodyJson: string): Uint8Array | null {
+function compressRequestBodyZstd(bodyJson: string): Uint8Array<ArrayBuffer> | null {
 	const zlib = loadNodeZlib();
 	if (!zlib || typeof zlib.zstdCompressSync !== "function") {
 		return null;
@@ -230,7 +229,8 @@ function compressRequestBodyZstd(bodyJson: string): Uint8Array | null {
 		const compressed = zlib.zstdCompressSync(bodyJson, {
 			params: { [zlib.constants.ZSTD_c_compressionLevel]: REQUEST_COMPRESSION_ZSTD_LEVEL },
 		});
-		return new Uint8Array(compressed.buffer, compressed.byteOffset, compressed.byteLength);
+		// A copy owns a plain ArrayBuffer, which fetch accepts as a body under every lib.
+		return new Uint8Array(compressed);
 	} catch {
 		return null;
 	}
@@ -249,7 +249,6 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 	const normalizedContext = resolveTranscript(context, model.compat?.supportsMidConvoSystemMessages);
 
 	(async () => {
-		const startedAt = performance.now();
 		const output: AssistantMessage = {
 			role: "assistant",
 			content: [],
@@ -287,8 +286,18 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 				body = nextBody as RequestBody;
 			}
 			const websocketRequestId = codexSessionId || uuidv7();
-			const sseHeaders = buildSSEHeaders(model.headers, options?.headers, accountId, apiKey, codexSessionId);
+			// Codex expects an originator on every request; it is not attribution.
+			const identityHeaders = { originator: "tg", ...getIdentityHeaders(model, options?.identity) };
+			const sseHeaders = buildSSEHeaders(
+				identityHeaders,
+				model.headers,
+				options?.headers,
+				accountId,
+				apiKey,
+				codexSessionId,
+			);
 			const websocketHeaders = buildWebSocketHeaders(
+				identityHeaders,
 				model.headers,
 				options?.headers,
 				accountId,
@@ -387,7 +396,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 			if (compressedBody) {
 				sseHeaders.set("content-encoding", "zstd");
 			}
-			const sseBody: Uint8Array | string = compressedBody ?? bodyJson;
+			const sseBody: Uint8Array<ArrayBuffer> | string = compressedBody ?? bodyJson;
 
 			// Fetch with retry logic for rate limits and transient errors
 			let response: Response | undefined;
@@ -486,7 +495,6 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 			}
 
 			assertSuccessfulOutput(output);
-			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -497,7 +505,6 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatProviderError(normalizeProviderError(error));
-			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -547,7 +554,14 @@ function buildRequestBody(
 	const supportsOpenAIGrammarTools = model.compat?.supportsOpenAIGrammarTools ?? false;
 	const supportsAdditionalTools = model.compat?.supportsAdditionalTools ?? false;
 	const supportsToolSearch = model.compat?.supportsToolSearch ?? false;
-	const transcriptTools = resolveTranscriptTools(context.messages, supportsAdditionalTools || supportsToolSearch);
+	const transcriptTools = resolveTranscriptTools(
+		context.messages,
+		getResponsesToolSupport({
+			supportsMidConvoSystemMessages: model.compat?.supportsMidConvoSystemMessages ?? false,
+			supportsAdditionalTools,
+			supportsToolSearch,
+		}),
+	);
 	const messages = convertResponsesMessages(model, context, CODEX_TOOL_CALL_PROVIDERS, {
 		includeSystemPrompt: false,
 		grammarToolInputProperties,
@@ -960,21 +974,15 @@ export function closeOpenAICodexWebSocketSessions(sessionId?: string): void {
 		if (entry.idleTimer) clearTimeout(entry.idleTimer);
 		closeWebSocketSilently(entry.socket, 1000, "debug_close");
 	};
-	// Closing a session is its lifecycle end: its per-session debug stats and fallback flag go
-	// with it, otherwise the maps grow with every session id the process ever served.
 	if (sessionId) {
 		for (const entry of websocketSessionCache.get(sessionId)?.values() ?? []) closeEntry(entry);
 		websocketSessionCache.delete(sessionId);
-		websocketDebugStats.delete(sessionId);
-		websocketSseFallbackSessions.delete(sessionId);
 		return;
 	}
 	for (const accountEntries of websocketSessionCache.values()) {
 		for (const entry of accountEntries.values()) closeEntry(entry);
 	}
 	websocketSessionCache.clear();
-	websocketDebugStats.clear();
-	websocketSseFallbackSessions.clear();
 }
 
 registerSessionResourceCleanup(closeOpenAICodexWebSocketSessions);
@@ -1653,12 +1661,17 @@ function extractAccountId(token: string): string {
 }
 
 function buildBaseCodexHeaders(
+	defaultHeaders: Record<string, string>,
 	initHeaders: Record<string, string> | undefined,
 	additionalHeaders: ProviderHeaders | undefined,
 	accountId: string,
 	token: string,
 ): Headers {
-	const headers = new Headers(initHeaders);
+	// Defaults first so model and caller headers can override them, matching the other providers.
+	const headers = new Headers(defaultHeaders);
+	for (const [key, value] of Object.entries(initHeaders || {})) {
+		headers.set(key, value);
+	}
 	for (const [key, value] of Object.entries(additionalHeaders || {})) {
 		if (value === null) {
 			headers.delete(key);
@@ -1668,19 +1681,18 @@ function buildBaseCodexHeaders(
 	}
 	headers.set("Authorization", `Bearer ${token}`);
 	headers.set("chatgpt-account-id", accountId);
-	headers.set("originator", "TianGong");
-	headers.set("User-Agent", getTgUserAgent());
 	return headers;
 }
 
 function buildSSEHeaders(
+	defaultHeaders: Record<string, string>,
 	initHeaders: Record<string, string> | undefined,
 	additionalHeaders: ProviderHeaders | undefined,
 	accountId: string,
 	token: string,
 	sessionId?: string,
 ): Headers {
-	const headers = buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token);
+	const headers = buildBaseCodexHeaders(defaultHeaders, initHeaders, additionalHeaders, accountId, token);
 	headers.set("OpenAI-Beta", "responses=experimental");
 	headers.set("accept", "text/event-stream");
 	headers.set("content-type", "application/json");
@@ -1694,13 +1706,14 @@ function buildSSEHeaders(
 }
 
 function buildWebSocketHeaders(
+	defaultHeaders: Record<string, string>,
 	initHeaders: Record<string, string> | undefined,
 	additionalHeaders: ProviderHeaders | undefined,
 	accountId: string,
 	token: string,
 	requestId: string,
 ): Headers {
-	const headers = buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token);
+	const headers = buildBaseCodexHeaders(defaultHeaders, initHeaders, additionalHeaders, accountId, token);
 	headers.delete("accept");
 	headers.delete("content-type");
 	headers.delete("OpenAI-Beta");

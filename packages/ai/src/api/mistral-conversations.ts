@@ -17,10 +17,10 @@ import { combineAbortSignals } from "../utils/abort-signals.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
+import { getIdentityHeaders } from "../utils/identity.ts";
 import { parseStreamingJsonThrottled, parseToolCallArguments } from "../utils/json-parse.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { getSystemMessageText, renderSystemMessageUpdate } from "../utils/text.ts";
-import { getTgUserAgent } from "../utils/tg-user-agent.ts";
 import { getCurrentTools, resolveTranscript } from "../utils/transcript.ts";
 import { getJsonSchemaToolParameters, resolveJsonSchemaStrictSampling } from "./constrained-sampling.ts";
 import { buildBaseOptions } from "./simple-options.ts";
@@ -131,7 +131,6 @@ export const stream: StreamFunction<"mistral-conversations", MistralOptions> = (
 	const normalizedContext = resolveTranscript(context, model.compat?.supportsMidConvoSystemMessages);
 
 	(async () => {
-		const startedAt = performance.now();
 		const output = createOutput(model);
 
 		try {
@@ -165,7 +164,6 @@ export const stream: StreamFunction<"mistral-conversations", MistralOptions> = (
 				throw new Error(output.errorMessage || "An unknown error occurred");
 			}
 
-			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -175,7 +173,6 @@ export const stream: StreamFunction<"mistral-conversations", MistralOptions> = (
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatMistralError(error);
-			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -357,7 +354,7 @@ class MistralHttpError extends Error {
 
 function buildMistralHeaders(model: Model<"mistral-conversations">, apiKey: string, options?: MistralOptions): Headers {
 	const headers = new Headers({
-		"User-Agent": getTgUserAgent(),
+		...getIdentityHeaders(model, options?.identity),
 		accept: "text/event-stream",
 		authorization: `Bearer ${apiKey}`,
 		"content-type": "application/json",
@@ -947,7 +944,8 @@ function mapChatStopReason(reason: string | null): { stopReason: StopReason; err
 		case "tool_calls":
 			return { stopReason: "toolUse" };
 		case "error":
-			return { stopReason: "error", errorMessage: "Provider stopped with: error" };
+			// Mistral reports transient server failures this way; "server error" makes the message retryable.
+			return { stopReason: "error", errorMessage: "Provider stopped with: error (server error)" };
 		default:
 			return { stopReason: "error", errorMessage: `Provider stopped with: ${reason}` };
 	}

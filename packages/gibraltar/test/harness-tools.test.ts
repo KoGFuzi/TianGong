@@ -609,7 +609,8 @@ describe("tool results", () => {
 		addTool(
 			setup.registry,
 			tool("boom", async () => {
-				await new Promise((resolve) => setTimeout(resolve, 10));
+				// Timers may fire a millisecond early; leave slack against the asserted lower bound.
+				await new Promise((resolve) => setTimeout(resolve, 20));
 				throw new Error("boom");
 			}),
 		);

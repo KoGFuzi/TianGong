@@ -197,7 +197,7 @@ async function exchangeAuthorizationCode(
 		}),
 		signal,
 	);
-	// Pi does not use the ID token to identify the user or read profile data.
+	// TianGong does not use the ID token to identify the user or read profile data.
 	// Keep the presence check as part of the token-response contract.
 	if (typeof token.id_token !== "string" || token.id_token.trim().length === 0) {
 		throw new Error("OpenAI OAuth token response did not contain an ID token");

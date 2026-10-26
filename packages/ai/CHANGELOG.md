@@ -2,8 +2,62 @@
 
 ## [Unreleased]
 
+### Aligned with upstream pi-ai 1.4.0 (2026-10-25)
+
+Ported the 1.4.0 functional surface over the house rebrand layer, keeping every recorded
+TianGong-local optimization (`repairJson` chunk rebuild, `parseStreamingJsonThrottled`,
+`complete()`/`completeSimple()`/`fetchDeferred()` stream draining, `validateToolArguments():
+JsonObject`, the provider concurrency gate, the house `tg.span.provider.*` spans, the
+per-thinking-level sampling overrides — `samplingParamsByThinkingLevel` stays off the direct
+`stream()` path — and the two-attempt default provider retry budget).
+
+- Breaking, inherited from upstream: request options carry `telemetry?: TelemetrySpan` and
+  `identity?: ClientIdentity` instead of `telemetryContext`; `resolveTranscriptTools()` takes
+  `TranscriptToolSupport` (`"none"|"additions"|"changes"`) and returns `foldedSystemMessages`
+  instead of `anchorsAdditions`; `getTgUserAgent()` is gone — `formatUserAgent()` /
+  `getIdentityHeaders()` / `withClientIdentity()` from `./utils/identity.ts` replace it;
+  `TG_ATTRIBUTION` replaces the upstream attribution constant and points at the TianGong
+  repository; `TG_AI_VERSION` (package version, currently "2.0.1") drives the detailed
+  User-Agent `tg/<version> (<platform>; <runtime>; <arch>)`.
+- Added from upstream: `thinking_end` events carry the final `content` string (the type now matches
+  what every adapters already emitted), client identity configuration end to end
+  (`createModels({ identity })`, request-level `identity`, attribution headers for
+  OpenRouter/NVIDIA NIM/OpenCode, `x-opencode-session`), classifier image input
+  (`ClassifierContext.images`, `SystemOneCompat` detection), `AI_TELEMETRY_SCHEMA` rebranded to
+  `tg.span.ai.request`/`tg.span.ai.poll` spans with
+  `tg.ai.*` events and USD cost metrics (registered in tg-telemetry's `TG_SPAN_SCHEMA` as well),
+  and the regenerated 1.4.0 provider catalogs (16 data files: MiniMax M3.1-Flash, grok `xhigh`
+  maps, openai-codex `gpt-5.5`/`gpt-5.3-codex-spark` removals, cloudflare classifier pricing).
+- Fixed from upstream: retry for gateway `upstream_error`/`upstream_stream_read_error` and
+  Codex-proxy `stream disconnected before completion`; status-code retry patterns now
+  word-bounded so digits in request ids are not misread (#11057); ChatGPT Business
+  `subscription_sharing_workplace_individual_usage_limit_exceeded` is not retried; HTTP 413 is
+  context overflow for every provider (Copilot request-size overflow); Google Vertex OAuth
+  token-refresh network errors retry; OpenAI Responses deferred tool loads preserve the prompt
+  cache; whitespace-only tool output placeholders for OpenAI/Google.
+- House features re-wired onto the new option shapes: the per-provider admission gate
+  (`createModels({ providerConcurrency })`, default 16) now emits `tg.span.provider.acquire`
+  through the request's `telemetry` span and holds a streaming slot until the stream settles;
+  `tg.span.provider.request` wrapping reads the same `telemetry` option. The span's `retried`
+  attribute is no longer recorded: 1.4.0 adapters own their retry loops and no longer expose a
+  per-call retry hook, and a hardcoded `false` would be a lie.
+- TianGong-local behaviors dropped for upstream parity (recorded so the loss is visible):
+  `durationMs`/`startedAt` stamping in adapters (1.4.0 times streams in
+  `AssistantMessageEventStream` itself), `onRetry` forwarding in provider options, the codex
+  WebSocket debug-session cleanup helper, and the bedrock `sessionToken` type workaround. The
+  codex `originator` default is `"tg"` (product token), where it previously read `"TianGong"`.
+- Not ported: `src/legacy-api-aliases.ts` — no house consumer ever imported the upstream
+  pi-era names.
+- Windows test compatibility: the cross-process credential worker embeds a `file://` URL as its
+  import specifier (a bare drive-letter path is an invalid ESM specifier on Windows), and the
+  POSIX 0600/0700 permission assertions skip on win32 where chmod maps only to the read-only
+  attribute.
+
 ### Breaking Changes
 
+- The `tg-ai` bin was removed. OAuth credential commands moved to the product CLI: use
+  `tg-sec login [provider]` and `tg-sec list`. The credential file (`auth.json` under the data root)
+  and its format are unchanged.
 - The Azure provider is now named `azure`, not `azure-openai-responses`, because it serves Chat
   Completions as well as the Responses API. `getModel("azure", ...)` replaces the old provider id, and
   the provider factory is `azureProvider` (with `AZURE_MODELS`, `AZURE_IMAGE_MODELS`, and

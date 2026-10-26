@@ -1,7 +1,9 @@
+import { clampThinkingLevel } from "../models.ts";
 import type {
 	Api,
 	Model,
 	ModelThinkingLevel,
+	SamplingParams,
 	SimpleStreamOptions,
 	StreamOptions,
 	ThinkingBudgets,
@@ -19,23 +21,19 @@ export function clampMaxTokensToContext(model: Model<Api>, context: TranscriptCo
 	return Math.min(maxTokens, Math.max(MIN_MAX_TOKENS, available));
 }
 
-/**
- * Resolve the sampling parameters a request body starts from.
- *
- * Precedence, lowest to highest: `Model.samplingParams`, the entry selected by the request's
- * clamped thinking level in `Model.samplingParamsByThinkingLevel`, then `requestParams`. Passing an
- * undefined level means the caller does not know the thinking level, and the request parameters are
- * returned untouched; only the adapters that go through `streamSimple()` resolve a level.
- */
 export function resolveSamplingParams(
 	model: Model<Api>,
-	level: ModelThinkingLevel | undefined,
-	requestParams?: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-	if (level === undefined) return requestParams;
-	const levelParams = model.samplingParamsByThinkingLevel?.[level];
-	if (!model.samplingParams && !levelParams && !requestParams) return undefined;
-	return { ...model.samplingParams, ...levelParams, ...requestParams };
+	thinkingLevel: ModelThinkingLevel | undefined,
+	requestParams?: SamplingParams,
+): SamplingParams | undefined {
+	if (thinkingLevel === undefined) {
+		return model.samplingParams || requestParams ? { ...model.samplingParams, ...requestParams } : undefined;
+	}
+	const effectiveThinkingLevel = clampThinkingLevel(model, thinkingLevel);
+	const thinkingLevelParams = model.samplingParamsByThinkingLevel?.[effectiveThinkingLevel];
+	return model.samplingParams || thinkingLevelParams || requestParams
+		? { ...model.samplingParams, ...thinkingLevelParams, ...requestParams }
+		: undefined;
 }
 
 export function buildBaseOptions(
@@ -45,18 +43,20 @@ export function buildBaseOptions(
 	apiKey?: string,
 	thinkingLevel?: ModelThinkingLevel,
 ): StreamOptions {
+	const samplingParams = resolveSamplingParams(model, thinkingLevel, options?.samplingParams);
 	return {
 		temperature: options?.temperature,
-		samplingParams: resolveSamplingParams(model, thinkingLevel, options?.samplingParams),
+		samplingParams,
 		maxTokens: clampMaxTokensToContext(model, context, options?.maxTokens ?? model.maxTokens),
 		signal: options?.signal,
-		telemetryContext: options?.telemetryContext,
+		telemetry: options?.telemetry,
 		apiKey: apiKey || options?.apiKey,
 		fetch: options?.fetch,
 		transport: options?.transport,
 		cacheRetention: options?.cacheRetention,
 		sessionId: options?.sessionId,
 		headers: options?.headers,
+		identity: options?.identity,
 		onPayload: options?.onPayload,
 		onResponse: options?.onResponse,
 		onProviderStreamEvent: options?.onProviderStreamEvent,

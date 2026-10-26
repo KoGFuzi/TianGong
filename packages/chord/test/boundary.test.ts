@@ -1,5 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
@@ -17,6 +17,7 @@ describe("package boundary", () => {
 		);
 
 		const paths = (await readdir(sourceDirectory, { recursive: true })).filter((path) => path.endsWith(".ts")).sort();
+		const sourcePrefix = sourceDirectory.endsWith(sep) ? sourceDirectory : `${sourceDirectory}${sep}`;
 		const violations: string[] = [];
 		for (const path of paths) {
 			const file = resolve(sourceDirectory, path);
@@ -24,7 +25,7 @@ describe("package boundary", () => {
 			for (const match of source.matchAll(IMPORT_SPECIFIER)) {
 				const specifier = match[1]!;
 				if (specifier.startsWith("@OnePanda-TgSec/")) violations.push(`${path}: ${specifier}`);
-				if (specifier.startsWith(".") && !resolve(dirname(file), specifier).startsWith(`${sourceDirectory}/`)) {
+				if (specifier.startsWith(".") && !resolve(dirname(file), specifier).startsWith(sourcePrefix)) {
 					violations.push(`${path}: ${specifier}`);
 				}
 			}

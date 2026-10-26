@@ -29,7 +29,7 @@ export const HOUSE_NAMES = [
 export const VENDORED_PACKAGES = {
 	"@earendil-works/pi-codemode": {
 		directory: "packages/codemode",
-		version: "1.3.0",
+		version: "1.4.0",
 		upstreamProject: "pi agent",
 		upstreamPackage: "@earendil-works/pi-codemode",
 		upstreamRepository: "https://github.com/earendil-works/pi",
@@ -40,7 +40,7 @@ export const VENDORED_PACKAGES = {
 	},
 	"@earendil-works/pi-mcp": {
 		directory: "packages/mcp",
-		version: "1.3.0",
+		version: "1.4.0",
 		upstreamProject: "pi agent",
 		upstreamPackage: "@earendil-works/pi-mcp",
 		upstreamRepository: "https://github.com/earendil-works/pi",

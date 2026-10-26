@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { openTgSecEvidenceStore } from "../src/evidence/store.ts";
 import { openSecAgent } from "../src/index.ts";
 import { createHttpRequestTool } from "../src/tools/http-tool.ts";
-import { cleanupTempDirs, context, fauxModel, fauxSetup, tempDir } from "./support.ts";
+import { cleanupTempDirs, context, fauxModel, fauxSetup, tempDir, trackStore } from "./support.ts";
 
 afterEach(cleanupTempDirs);
 
@@ -49,6 +49,7 @@ function createRunnerTool(): ToolRegistration<typeof runnerSchema> {
 
 async function openAgentWithHttpTool(dir: string, evidenceDir: string) {
 	const store = await openTgSecEvidenceStore({ dir: evidenceDir });
+	trackStore(store);
 	const httpTool = createHttpRequestTool({ store, executor: fauxExecutor });
 	const { faux, models } = fauxSetup();
 	const call = fauxToolCall(

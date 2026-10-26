@@ -60,7 +60,7 @@ describe("probe 1: restricted env", () => {
 			error.code = "ENOENT";
 			throw error;
 		});
-		await expect(probe.run()).rejects.toThrow(/expected an EACCES refusal/);
+		await expect(probe.run()).rejects.toThrow(/expected an EACCES\/EPERM refusal/);
 	});
 });
 

@@ -59,9 +59,6 @@
 			"import": "./dist/bun-oauth.js"
 		}
 	},
-	"bin": {
-		"tg-ai": "dist/cli.js"
-	},
 	"files": [
 		"dist",
 		"README.md"

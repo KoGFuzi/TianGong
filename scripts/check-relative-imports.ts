@@ -7,7 +7,7 @@
  * gives one error message instead of a wall of module-resolution noise from `tsc`.
  */
 import { readdir, readFile } from "node:fs/promises";
-import { join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { listPackages, repoRoot } from "./lib/packages.ts";
 
 const root = repoRoot();
@@ -46,7 +46,7 @@ async function scan(directory: string): Promise<void> {
 }
 
 await scan(resolve(root, "scripts"));
-await scan(resolve(root, "vitest.base.ts").replace(/\/[^/]+$/, ""));
+await scan(dirname(resolve(root, "vitest.base.ts")));
 for (const pkg of packages) await scan(pkg.path);
 
 if (violations.length > 0) {

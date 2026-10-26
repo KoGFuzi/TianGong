@@ -1,5 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
@@ -120,7 +120,8 @@ describe("sec-agent package boundary", () => {
 	test("stores no JSON in the evidence layer — the snapshot preimage is byte-encoded", async () => {
 		const offenders: string[] = [];
 		for (const path of await sourceFiles()) {
-			if (!path.startsWith("evidence/")) continue;
+			// `readdir` joins recursive results with the platform separator; normalize before matching.
+			if (!path.split(sep).join("/").startsWith("evidence/")) continue;
 			const source = await readFile(resolve(sourceDirectory, path), "utf8");
 			if (source.includes("JSON.stringify")) offenders.push(`${path}: JSON.stringify`);
 			if (source.includes("JSON.parse")) offenders.push(`${path}: JSON.parse`);
@@ -139,7 +140,7 @@ describe("sec-agent package boundary", () => {
 			"node:worker_threads",
 		];
 		for (const { file, specifier } of await specifiers()) {
-			if (!file.startsWith("tools/")) continue;
+			if (!file.split(sep).join("/").startsWith("tools/")) continue;
 			for (const banned of forbiddenBuiltins)
 				expect(specifier, `${file} must not import ${banned}`).not.toContain(banned);
 			if (specifier.startsWith("node:"))
@@ -152,7 +153,7 @@ describe("sec-agent package boundary", () => {
 		for (const { file, specifier } of await specifiers()) {
 			if (!specifier.startsWith(".")) continue;
 			const target = resolve(dirname(resolve(sourceDirectory, file)), specifier);
-			if (!target.startsWith(`${sourceDirectory}/`)) offenders.push(`${file}: ${specifier} escapes src`);
+			if (!target.startsWith(sourceDirectory + sep)) offenders.push(`${file}: ${specifier} escapes src`);
 		}
 		expect(offenders).toEqual([]);
 	});

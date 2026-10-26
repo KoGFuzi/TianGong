@@ -35,13 +35,13 @@ data 目录下的两个关键文件：
 
 ```text
 ~/.local/share/TianGong/
-├── auth.json        tg-ai login 写入的 provider 凭据
+├── auth.json        tg-sec login 写入的 provider 凭据
 ├── session.sqlite   默认会话数据库
 ├── sessions/        tg-sec-agent 的会话文件
 └── tg-debug.log     tg-sec-agent 的调试日志（启用时）
 ```
 
-**凭据为什么在 data 而不在 config**：`auth.json` 是程序运行时生成的状态，不是用户手写的配置。`opencode` 把自己的 `auth.json` 放在 data 根，TianGong 与其一致。排查权限问题时请检查 data 目录，而不是 config。
+**凭据为什么在 data 而不在 config**：`auth.json` 是程序运行时生成的状态，不是用户手写的配置。`opencode` 把自己的 `auth.json` 放在 data 根，TianGong 与其一致。排查权限问题时请检查 data 目录，而不是 config。凭据由 `tg-sec login [provider]` 写入；`tg-sec list` 列出支持 OAuth 的 provider。
 
 ### 2.1 路径解析规则
 

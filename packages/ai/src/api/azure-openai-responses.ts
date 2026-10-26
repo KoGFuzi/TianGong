@@ -5,14 +5,19 @@ import type { Api, AssistantMessage, Model, SimpleStreamOptions, StreamFunction,
 import { formatProviderError, normalizeProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
+import { getIdentityHeaders } from "../utils/identity.ts";
 import { retryProviderRequest } from "../utils/provider-retry.ts";
-import { getTgUserAgent } from "../utils/tg-user-agent.ts";
 import { getDeclaredTools, resolveTranscript, resolveTranscriptTools } from "../utils/transcript.ts";
 import { type AzureEndpointOptions, resolveAzureConfig, resolveDeploymentName } from "./azure-openai-config.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
-import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.ts";
-import { buildBaseOptions } from "./simple-options.ts";
+import {
+	convertResponsesMessages,
+	convertResponsesTools,
+	getResponsesToolSupport,
+	processResponsesStream,
+} from "./openai-responses-shared.ts";
+import { buildBaseOptions, resolveSamplingParams } from "./simple-options.ts";
 
 const AZURE_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode", "azure"]);
 // OpenAI Responses rejects max_output_tokens below 16: https://github.com/earendil-works/pi/issues/6265
@@ -44,7 +49,6 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 	(async () => {
 		const deploymentName = resolveDeploymentName(model, options);
 
-		const startedAt = performance.now();
 		const output: AssistantMessage = {
 			role: "assistant",
 			content: [],
@@ -90,7 +94,6 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 					maxRetries: options?.maxRetries,
 					maxRetryDelayMs: options?.maxRetryDelayMs,
 					signal: options?.signal,
-					onRetry: options?.onRetry,
 				},
 			);
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
@@ -112,7 +115,6 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 				throw new Error(output.errorMessage || "An unknown error occurred");
 			}
 
-			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -124,7 +126,6 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatAzureOpenAIError(error);
-			output.durationMs = performance.now() - startedAt;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -157,7 +158,7 @@ export const streamSimple: StreamFunction<"azure-openai-responses", SimpleStream
 };
 
 function createClient(model: Model<"azure-openai-responses">, apiKey: string, options?: AzureOpenAIResponsesOptions) {
-	const headers = { "User-Agent": getTgUserAgent(), ...model.headers };
+	const headers = { ...getIdentityHeaders(model, options?.identity), ...model.headers };
 
 	if (options?.headers) {
 		Object.assign(headers, options.headers);
@@ -187,7 +188,14 @@ function buildParams(
 ) {
 	const supportsAdditionalTools = model.compat?.supportsAdditionalTools ?? false;
 	const supportsToolSearch = model.compat?.supportsToolSearch ?? false;
-	const transcriptTools = resolveTranscriptTools(context.messages, supportsAdditionalTools || supportsToolSearch);
+	const transcriptTools = resolveTranscriptTools(
+		context.messages,
+		getResponsesToolSupport({
+			supportsMidConvoSystemMessages: model.compat?.supportsMidConvoSystemMessages ?? false,
+			supportsAdditionalTools,
+			supportsToolSearch,
+		}),
+	);
 	const messages = convertResponsesMessages(model, context, AZURE_TOOL_CALL_PROVIDERS, {
 		grammarToolInputProperties,
 		supportsMidConvoSystemMessages: model.compat?.supportsMidConvoSystemMessages ?? false,
@@ -225,11 +233,12 @@ function buildParams(
 		params.tool_choice = options.toolChoice;
 	}
 
+	const reasoningEffort = options?.reasoningEffort ?? (options?.reasoningSummary ? "medium" : undefined);
 	if (model.reasoning) {
-		if (options?.reasoningEffort || options?.reasoningSummary) {
+		if (reasoningEffort) {
 			const effort = options?.reasoningEffort
 				? (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
-				: "medium";
+				: reasoningEffort;
 			params.reasoning = {
 				effort: effort as NonNullable<typeof params.reasoning>["effort"],
 				summary: options?.reasoningSummary || "auto",
@@ -242,8 +251,11 @@ function buildParams(
 		}
 	}
 
-	// Last so custom keys override the named request fields. Per-request keys override model defaults.
-	Object.assign(params, model.samplingParams, options?.samplingParams);
+	// Last so model and request sampling parameters override named request fields.
+	const samplingParams = resolveSamplingParams(model, reasoningEffort ?? "off", options?.samplingParams);
+	if (samplingParams) {
+		Object.assign(params, samplingParams);
+	}
 
 	return params;
 }

@@ -17,8 +17,10 @@ import { openSecAgent } from "@OnePanda-TgSec/tg-sec-agent";
 const agent = await openSecAgent({ project: "campaign-2026-10", models, askChannel });
 ```
 
-A minimal smoke CLI (`tg-sec`) opens a campaign, runs one turn through the guard, and prints the
-event stream.
+The `tg-sec` CLI owns provider credential bootstrap: `tg-sec login [provider]` runs the provider's
+OAuth flow and writes `auth.json` through `FileCredentialStore`, and `tg-sec list` lists the
+OAuth-capable providers. The smoke command opens a campaign, runs one turn through the guard, and
+prints the event stream; see `tg-sec --help` for its flags.
 
 Design and batch acceptance live in `docs/sec-agent-design.md`; the permission model lives in
 `docs/sec-guard-design.md`.

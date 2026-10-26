@@ -30,6 +30,7 @@
 				"./packages/gibraltar/src/*"
 			],
 			"@OnePanda-TgSec/tg-sec-guard": ["./packages/sec-guard/src/index.ts"],
+			"@OnePanda-TgSec/tg-sec-server": ["./packages/sec-server/src/index.ts"],
 			"@OnePanda-TgSec/tg-sec-agent": ["./packages/sec-agent/src/index.ts"],
 			"@OnePanda-TgSec/tg-tui": ["./packages/tui/src/index.ts"],
 			"@OnePanda-TgSec/tg-tui/*": ["./packages/tui/src/*"],

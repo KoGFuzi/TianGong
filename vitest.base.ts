@@ -31,6 +31,7 @@ export const workspaceSourcePaths = {
 	gibraltarRoot: fileURLToPath(new URL("./packages/gibraltar/src", import.meta.url)),
 	envIndex: fileURLToPath(new URL("./packages/env/src/index.ts", import.meta.url)),
 	secGuardIndex: fileURLToPath(new URL("./packages/sec-guard/src/index.ts", import.meta.url)),
+	secServerIndex: fileURLToPath(new URL("./packages/sec-server/src/index.ts", import.meta.url)),
 	tuiIndex: fileURLToPath(new URL("./packages/tui/src/index.ts", import.meta.url)),
 	tuiRoot: fileURLToPath(new URL("./packages/tui/src", import.meta.url)),
 	codemodeIndex: fileURLToPath(new URL("./packages/codemode/src/index.ts", import.meta.url)),
@@ -104,6 +105,7 @@ export default defineConfig({
 			},
 			{ find: /^@OnePanda-TgSec\/tg-env$/, replacement: workspaceSourcePaths.envIndex },
 			{ find: /^@OnePanda-TgSec\/tg-sec-guard$/, replacement: workspaceSourcePaths.secGuardIndex },
+			{ find: /^@OnePanda-TgSec\/tg-sec-server$/, replacement: workspaceSourcePaths.secServerIndex },
 			{ find: /^@OnePanda-TgSec\/tg-tui$/, replacement: workspaceSourcePaths.tuiIndex },
 			{
 				find: /^@OnePanda-TgSec\/tg-tui\/(.+)$/,

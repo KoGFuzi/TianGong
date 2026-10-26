@@ -13,7 +13,7 @@ suites already are.
 ```bash
 bun install          # workspace install, hoisted node_modules, exact versions
 bun run check        # house standard + formatting + types + relative imports
-bun run build        # builds all 10 packages in dependency order
+bun run build        # builds all 11 packages in dependency order
 bun run test         # runs every package suite in dependency order
 bun run clean        # removes dist/ and generated model data
 ```
@@ -30,7 +30,7 @@ Never hand-run `tsc`, `biome`, or `vitest` from a package root when a root scrip
 | Concern | Value |
 | --- | --- |
 | Scope | `@OnePanda-TgSec` |
-| Packages | `@OnePanda-TgSec/tg-ai`, `tg-env`, `tg-gibraltar`, `tg-sec-guard`, `tg-sec-agent`, `tg-telemetry`, `tg-tui`, and `chord` |
+| Packages | `@OnePanda-TgSec/tg-ai`, `tg-env`, `tg-gibraltar`, `tg-sec-guard`, `tg-sec-agent`, `tg-telemetry`, `tg-tui`, `tg-sec-server`, and `chord` |
 | Root repo name | `tiangong` |
 | Upstream repo | `https://github.com/KoGFuzi/TianGong` |
 | Author field | `KoGFuzi` |
@@ -257,8 +257,12 @@ chord ──┐
 ai ─────┤
 gibraltar ─┼──▶ sec-agent   (the campaign runtime sits on the harness, the guard, telemetry and tui)
 sec-guard ─┤
+sec-server ─┤
 telemetry ─┤
 tui ───────┘
+
+chord ──┐
+gibraltar ┘──▶ sec-server   (the WebUI sidecar sits on the harness)
 
 codemode   mcp           (vendored; house packages import them by their upstream names)
 ```
@@ -266,13 +270,16 @@ codemode   mcp           (vendored; house packages import them by their upstream
 Arrows point from a package toward the packages that depend on it.
 `tg-gibraltar` depends on `chord` and `tg-ai`, `tg-env` depends on `chord` and `tg-gibraltar`,
 `tg-sec-guard` depends on `chord`, `tg-ai`, `tg-gibraltar`, and `tg-telemetry`, and `tg-sec-agent`
-depends on `chord`, `tg-ai`, `tg-gibraltar`, `tg-sec-guard`, `tg-telemetry`, and `tg-tui` (plus the
-vendored `@earendil-works/pi-codemode` for the sandbox gibraltar's `./codemode` extension runs on).
-`tg-tui` is what the `tgsec` bin renders through; it does not depend on sec-agent in return. Sec-agent
-does **not** depend on `tg-env`: the env resolver is typed by gibraltar (`env/node`, `EnvTarget`), so
-a host-built remote env costs the campaign runtime no edge on the env package.
-`chord`, `telemetry`, `sec-agent`, `codemode`, and `mcp` are leaves: nothing in this workspace
-depends on them. That is what keeps `chord` publishable on its own.
+depends on `chord`, `tg-ai`, `tg-gibraltar`, `tg-sec-guard`, `tg-sec-server`, `tg-telemetry`, and
+`tg-tui` (plus the vendored `@earendil-works/pi-codemode` for the sandbox gibraltar's `./codemode`
+extension runs on). `tg-sec-server` depends on `chord` and `tg-gibraltar` only: the campaign host
+injects the projection and the steering entry point, so the sidecar never imports sec-agent and no
+cycle exists. `tg-tui` is what the `tgsec` bin renders through; it does not depend on sec-agent in
+return. Sec-agent does **not** depend on `tg-env`: the env resolver is typed by gibraltar
+(`env/node`, `EnvTarget`), so a host-built remote env costs the campaign runtime no edge on the env
+package. `chord`, `telemetry`, `sec-agent`, `codemode`, and `mcp` are leaves: nothing in this
+workspace depends on them. That is what keeps `chord` publishable on its own. `sec-server` is not a
+leaf because `sec-agent` hosts its `tg-sec serve` command, but the edge is one-way.
 
 Do not call `bun test`. Bun reserves that name for its own runner, which would silently bypass
 every per-package Vitest and `node:test` configuration. Use `bun run test`.

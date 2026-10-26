@@ -14,7 +14,7 @@
 ```bash
 bun install              # 安装工作区
 bun run generate:models  # 生成 packages/ai/src/providers/data（gitignore，需联网）
-bun run build            # 按依赖顺序构建全部 10 个包
+bun run build            # 按依赖顺序构建全部 11 个包
 bun run test             # 按依赖顺序运行每个包的测试套件
 bun run check            # house standard、格式、类型、相对导入
 ```

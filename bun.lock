@@ -112,6 +112,7 @@
         "@OnePanda-TgSec/tg-ai": "^2.0.1",
         "@OnePanda-TgSec/tg-gibraltar": "^2.0.1",
         "@OnePanda-TgSec/tg-sec-guard": "^2.0.1",
+        "@OnePanda-TgSec/tg-sec-server": "^2.0.1",
         "@OnePanda-TgSec/tg-telemetry": "^2.0.1",
         "@OnePanda-TgSec/tg-tui": "^2.0.1",
         "@earendil-works/pi-codemode": "^1.4.0",
@@ -132,6 +133,19 @@
         "@OnePanda-TgSec/tg-telemetry": "^2.0.1",
       },
       "devDependencies": {
+        "shx": "0.4.0",
+        "vitest": "4.1.11",
+      },
+    },
+    "packages/sec-server": {
+      "name": "@OnePanda-TgSec/tg-sec-server",
+      "version": "2.0.1",
+      "dependencies": {
+        "@OnePanda-TgSec/chord": "^2.0.1",
+        "@OnePanda-TgSec/tg-gibraltar": "^2.0.1",
+      },
+      "devDependencies": {
+        "@OnePanda-TgSec/tg-ai": "^2.0.1",
         "shx": "0.4.0",
         "vitest": "4.1.11",
       },
@@ -169,6 +183,8 @@
     "@OnePanda-TgSec/tg-sec-agent": ["@OnePanda-TgSec/tg-sec-agent@workspace:packages/sec-agent"],
 
     "@OnePanda-TgSec/tg-sec-guard": ["@OnePanda-TgSec/tg-sec-guard@workspace:packages/sec-guard"],
+
+    "@OnePanda-TgSec/tg-sec-server": ["@OnePanda-TgSec/tg-sec-server@workspace:packages/sec-server"],
 
     "@OnePanda-TgSec/tg-telemetry": ["@OnePanda-TgSec/tg-telemetry@workspace:packages/telemetry"],
 

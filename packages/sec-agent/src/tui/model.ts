@@ -1,7 +1,8 @@
-import type { Api, Model, Models, MutableModels } from "@OnePanda-TgSec/tg-ai";
+import type { Context } from "@OnePanda-TgSec/chord";
+import type { Api, Message, Model, Models, MutableModels } from "@OnePanda-TgSec/tg-ai";
 import { FileCredentialStore } from "@OnePanda-TgSec/tg-ai/auth/node";
 import { builtinModels } from "@OnePanda-TgSec/tg-ai/providers/all";
-import type { ModelRef } from "@OnePanda-TgSec/tg-gibraltar";
+import type { Conversation, ModelRef } from "@OnePanda-TgSec/tg-gibraltar";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -17,6 +18,36 @@ export function isUnconfiguredModel(ref: ModelRef | undefined): boolean {
 	return (
 		ref !== undefined && ref.provider === UNCONFIGURED_MODEL.provider && ref.modelId === UNCONFIGURED_MODEL.modelId
 	);
+}
+
+/** The local echo provider. Its turns are test data and must never steer a real model. */
+export const FAUX_PROVIDER_ID = "faux";
+
+export function isFauxModelRef(ref: ModelRef | undefined): boolean {
+	return ref?.provider === FAUX_PROVIDER_ID;
+}
+
+/** True when the active model context still carries an assistant turn produced by faux. */
+export function hasFauxTurns(messages: readonly Message[]): boolean {
+	return messages.some((message) => message.role === "assistant" && message.provider === FAUX_PROVIDER_ID);
+}
+
+/**
+ * Start a clean context when a real model is chosen over a conversation that still carries faux
+ * test turns. A real model continues the persona it finds in the transcript, so leaving those
+ * turns in context makes a correctly configured provider look like it is still the local echo.
+ * Returns true when a reset was written.
+ */
+export async function resetFauxContext(
+	conversation: Pick<Conversation, "context" | "reset">,
+	next: ModelRef | undefined,
+	context: Context,
+): Promise<boolean> {
+	if (next === undefined || isFauxModelRef(next)) return false;
+	const { messages } = await conversation.context(context);
+	if (!hasFauxTurns(messages)) return false;
+	await conversation.reset(undefined, context);
+	return true;
 }
 
 /** A stable machine identity for provider logins; the auth flows may key tokens to it. */

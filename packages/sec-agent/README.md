@@ -47,9 +47,26 @@ tgsec --faux                            # local echo model, no credentials or eg
 
 `--faux` answers from the last user message and treats a message beginning with `run ` as a real
 `bash` tool call through the guard, which makes the shell (and the ask prompt under `strict`) usable
-without an account. Connection targets are scoped by `--scope <file>` or the per-project
+without an account. A faux session writes to its own `<data>/faux/projects/<project>/session.sqlite`,
+never to the campaign database; choosing a real model over a context that still carries faux turns
+starts a clean context, because a real model would otherwise continue the echo persona it finds in
+the transcript. Connection targets are scoped by `--scope <file>` or the per-project
 `<data>/projects/<project>/scope.json`; a missing file leaves the registry empty, so every target
 is a forced ask.
+
+`tg-sec serve` starts the campaign WebUI sidecar on the same runtime:
+
+```bash
+tg-sec serve --project demo --lane redteam
+tg-sec serve --faux --project demo
+```
+
+It prints a `webui` URL and a single-use `login` URL. The login ticket expires after five minutes;
+redeeming it sets an `HttpOnly; SameSite=Strict` cookie scoped to a persisted random entry path
+(`<data>/sec-server/sec-server-entry`, mode 0600). The page is a self-written SVG graph of the
+campaign with findings, intents and the event feed, and the composer steers the running conversation
+over the same event stream the TUI consumes. The server binds `127.0.0.1` by default, validates the
+Host and Origin headers, and never sends evidence bodies to the browser.
 
 Design and batch acceptance live in `docs/sec-agent-design.md`; the permission model lives in
 `docs/sec-guard-design.md`.

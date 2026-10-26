@@ -249,6 +249,21 @@ export class TgSecEvidenceStore {
 	}
 
 	/**
+	 * Every subject the store has ever locked, in id order. The projection needs the enumeration to
+	 * turn evidence into findings; a subject whose bindings were all removed still has a version row
+	 * and is reported with an empty set.
+	 */
+	listSubjects(): Promise<string[]> {
+		return this.emitEvidence("list", undefined, async () => {
+			const rows = await this.db.transaction((tx) =>
+				tx.all<{ subject_id: string }>("SELECT subject_id FROM tg_sec_evidence_versions ORDER BY subject_id"),
+			);
+			const subjects = rows.map((row) => row.subject_id);
+			return { value: subjects, changed: false, count: subjects.length };
+		});
+	}
+
+	/**
 	 * Read one snapshot's metadata by id, verifying its stored hash against the id before returning.
 	 * `undefined` when the snapshot is absent; the bodies are separate and come from `readBody`. A
 	 * read-only view over the same row `readBody` resolves, so a traffic query can show what was

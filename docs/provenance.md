@@ -20,6 +20,7 @@ check:house-standard` asserts against that record, so the two cannot drift apart
 | `packages/sec-guard` | `@OnePanda-TgSec/tg-sec-guard` | **TianGong-authored**, from `docs/sec-guard-design.md` | House, added 2026-10-22 |
 | `packages/agent` | `@OnePanda-TgSec/tg-agent-core` | pi agent, adopted and rebranded | **Removed 2026-10-22** (snapshot in `scripts/legacy/agent-core`) |
 | `packages/sec-agent` | `@OnePanda-TgSec/tg-sec-agent` | **TianGong-authored**, from `docs/sec-agent-design.md`; rebuilds the adopted-and-removed `tg-sec-agent` (snapshot in `scripts/legacy/sec-agent`) | House, added 2026-10-23 (batch 3) |
+| `packages/sec-server` | `@OnePanda-TgSec/tg-sec-server` | **TianGong-authored**, from `docs/sec-agent-design.md` 批6; the contract literals are aligned with StrikeAgent, the projection and WebUI are written here | House, added 2026-10-26 (batch 6) |
 | `packages/codemode` | `@earendil-works/pi-codemode` | **pi agent 1.4.0, migrated verbatim** | **Vendored, frozen** |
 | `packages/mcp` | `@earendil-works/pi-mcp` | **pi agent 1.4.0, migrated verbatim** | **Vendored, frozen** |
 

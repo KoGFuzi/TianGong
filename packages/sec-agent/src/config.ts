@@ -42,6 +42,15 @@ export function projectDatabasePath(project: string, dataDir: string = tgSecData
 	return join(dataDir, "projects", safeProjectSegment(project), "session.sqlite");
 }
 
+/**
+ * The database a `--faux` shell writes to. A local echo run is a test of the screen and the guard,
+ * not campaign work: keeping it in its own file means its turns can never become context for a real
+ * model in the campaign conversation.
+ */
+export function fauxDatabasePath(project: string, dataDir: string = tgSecDataDir()): string {
+	return join(dataDir, "faux", "projects", safeProjectSegment(project), "session.sqlite");
+}
+
 /** Create the parent directory of a database path; opening SQLite does not mkdir for us. */
 export async function ensureDatabaseDirectory(path: string): Promise<void> {
 	await mkdir(dirname(path), { recursive: true });

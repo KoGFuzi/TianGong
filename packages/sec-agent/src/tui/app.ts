@@ -43,7 +43,7 @@ import {
 import { join } from "node:path";
 import type { SecAgent, SecAgentLane } from "../bootstrap.ts";
 import { openSecAgent } from "../bootstrap.ts";
-import { safeProjectSegment, tgSecDataDir } from "../config.ts";
+import { fauxDatabasePath, safeProjectSegment, tgSecDataDir } from "../config.ts";
 import { createSecCoreExtension } from "../core-extension.ts";
 import { evidenceDir } from "../evidence/config.ts";
 import type { TgSecEvidenceStore } from "../evidence/store.ts";
@@ -57,11 +57,14 @@ import { createTgSecAskController, type TgSecAskController } from "./ask.ts";
 import { buildConnectOptions, type ConnectOption, connectOptionLabel, LoginDialog } from "./connect.ts";
 import {
 	createTgSecModels,
+	FAUX_PROVIDER_ID,
 	findAvailableModel,
 	formatModelRef,
+	isFauxModelRef,
 	isUnconfiguredModel,
 	parseModelSpec,
 	readOrCreateDeviceId,
+	resetFauxContext,
 	tryResolveTgSecModel,
 	UNCONFIGURED_MODEL,
 	writeTgSecModelConfig,
@@ -196,6 +199,8 @@ type TgSecTuiDeps = {
 	readonly mode: TgSecPermissionMode;
 	readonly scopePath: string;
 	readonly faux: boolean;
+	/** True when startup found faux test turns and started a clean context for the real model. */
+	readonly fauxReset: boolean;
 };
 
 /** Best-effort cleanup: shutdown continues through a failing stage so the terminal is always restored. */
@@ -223,6 +228,7 @@ export class TgSecTuiApp {
 	private readonly asks: TgSecAskController;
 	private readonly scopePath: string;
 	private readonly faux: boolean;
+	private readonly fauxReset: boolean;
 	private readonly judgeRef: { ref: ModelRef };
 
 	private readonly terminal = new ProcessTerminal();
@@ -260,6 +266,7 @@ export class TgSecTuiApp {
 		this.asks = deps.asks;
 		this.scopePath = deps.scopePath;
 		this.faux = deps.faux;
+		this.fauxReset = deps.fauxReset;
 		this.judgeRef = deps.judgeRef;
 		this.modelRef = deps.modelRef;
 		this.modelName = deps.modelName;
@@ -445,6 +452,11 @@ export class TgSecTuiApp {
 		if (!this.modelSelected) {
 			lines.push("no model yet: /connect signs in to a provider, then /models picks one");
 		}
+		if (this.fauxReset) {
+			lines.push(
+				"the saved conversation contained local faux test turns; started a fresh context (the transcript above is history, not model context) so a real model does not continue them",
+			);
+		}
 		if (this.faux) {
 			lines.push(
 				'faux mode: local echo model, no credentials and no egress; prefix a message with "run " to call bash',
@@ -563,6 +575,7 @@ export class TgSecTuiApp {
 
 	/** The one place a model becomes the session model: root conversation, judge, status and preference. */
 	private async applyModel(ref: ModelRef, name: string, note: string): Promise<void> {
+		const fauxReset = await resetFauxContext(this.agent.root, ref, this.context);
 		await this.agent.root.configure({ model: ref }, this.context);
 		this.judgeRef.ref = ref;
 		this.modelRef = ref;
@@ -570,7 +583,7 @@ export class TgSecTuiApp {
 		this.modelSelected = true;
 		await writeTgSecModelConfig(ref);
 		this.refreshStatus();
-		this.note(note, "success");
+		this.note(fauxReset ? `${note}; faux test turns removed from the context` : note, "success");
 	}
 
 	private async choosePickedModel(ref: ModelRef, name: string): Promise<void> {
@@ -749,9 +762,10 @@ export class TgSecTuiApp {
 		if (refreshed !== undefined && refreshed.errors.size > 0) {
 			this.note(`provider refresh reported ${refreshed.errors.size} error(s); using the last known catalog`, "dim");
 		}
-		if (this.modelSelected) return;
+		if (this.modelSelected && !isFauxModelRef(this.modelRef)) return;
 		const fromProvider = await this.models.getAvailable(option.providerId);
-		const first = fromProvider[0] ?? (await this.models.getAvailable())[0];
+		const first =
+			fromProvider[0] ?? (await this.models.getAvailable()).find((model) => model.provider !== FAUX_PROVIDER_ID);
 		if (first === undefined) {
 			this.note("connected, but no chat model is available yet; use /models once the catalog refreshes", "warn");
 			return;
@@ -1037,6 +1051,7 @@ export async function openTgSecTui(options: TgSecTuiOptions): Promise<TgSecTuiAp
 	const modelName = resolved?.model.name ?? "no model";
 	const judgeRef: { ref: ModelRef } = { ref: modelRef };
 	const dataDir = tgSecDataDir();
+	const databasePath = options.db ?? (options.faux === true ? fauxDatabasePath(options.project, dataDir) : undefined);
 	const store = await openTgSecEvidenceStore({ dir: options.evidence ?? evidenceDir(options.project), telemetry });
 	const scopePath = options.scope ?? join(dataDir, "projects", safeProjectSegment(options.project), "scope.json");
 	const asks = createTgSecAskController();
@@ -1074,7 +1089,7 @@ export async function openTgSecTui(options: TgSecTuiOptions): Promise<TgSecTuiAp
 			models,
 			model: modelRef,
 			cwd: options.cwd,
-			...(options.db === undefined ? {} : { path: options.db }),
+			...(databasePath === undefined ? {} : { path: databasePath }),
 			extensions: [core, secTools],
 		});
 		session.attach(agent.harness);
@@ -1092,6 +1107,7 @@ export async function openTgSecTui(options: TgSecTuiOptions): Promise<TgSecTuiAp
 		} else if (stored !== undefined && !isUnconfiguredModel(stored)) {
 			await agent.root.configure({ model: null }, context);
 		}
+		const fauxReset = await resetFauxContext(agent.root, resolved?.ref, context);
 		registeredTools = agent.registry
 			.snapshot()
 			.tools()
@@ -1115,6 +1131,7 @@ export async function openTgSecTui(options: TgSecTuiOptions): Promise<TgSecTuiAp
 			mode: options.mode ?? persisted,
 			scopePath,
 			faux: options.faux === true,
+			fauxReset,
 		});
 	} catch (error) {
 		asks.close();

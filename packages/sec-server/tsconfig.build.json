@@ -1,0 +1,14 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"outDir": "./dist",
+		"paths": {
+			"@OnePanda-TgSec/chord": ["../chord/dist/index.d.ts"],
+			"@OnePanda-TgSec/chord/context": ["../chord/dist/context/index.d.ts"],
+			"@OnePanda-TgSec/tg-gibraltar": ["../gibraltar/dist/index.d.ts"]
+		},
+		"rootDir": "./src"
+	},
+	"include": ["src/**/*.ts"],
+	"exclude": ["node_modules", "dist", "**/*.d.ts", "src/**/*.d.ts"]
+}

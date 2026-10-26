@@ -22,6 +22,7 @@ import type { TaskChildPolicy } from "../task-tool.ts";
 import { createSecToolsExtension } from "../tools/extension.ts";
 import type { HttpRequest, HttpResponse, RequestExecutor } from "../tools/transport.ts";
 import { oauthProviderNames, runAuthCommand } from "./auth.ts";
+import { isServeLane, isServeMode, runServeCommand, type ServeOptions } from "./serve.ts";
 
 /** The session port the CLI hands the guard before the harness exists; attached once it does. */
 function createDeferredSessionPort(): TgSecSessionPort & { attach(session: TgSecSessionPort): void } {
@@ -82,7 +83,23 @@ function usage(): string {
 	return `usage:
   tg-sec login [provider]   Login to an OAuth provider
   tg-sec list               List OAuth providers
+  tg-sec serve [options]    Open the campaign WebUI sidecar
   tg-sec [options]          Run the smoke turn
+
+serve options:
+  --project <name>          Campaign project (default: main)
+  --lane redteam|ctf|src    Campaign lane (default: redteam)
+  --mode strict|judge-auto|auto|yolo
+                            Permission mode (default: the persisted tg.sec.mode, else auto)
+  --model <provider/model>  Model to run (default: TG_SEC_MODEL, the remembered model,
+                            then the first authenticated model)
+  --faux                    Local echo model: no credentials, no egress
+  --host <address>          Bind address (default: 127.0.0.1)
+  --port <number>           Port (default: 0, the OS picks a free one)
+  --target <name>           Display name of the campaign target (default: the project)
+  --db <file>               SQLite file (default: per-project XDG path)
+  --evidence <dir>          Evidence directory (default: per-project XDG path)
+  --scope <file>            Scope config (default: <data>/projects/<project>/scope.json)
 
 smoke options:
   --project <name>          Campaign project (default: smoke)
@@ -134,6 +151,92 @@ function parseArgs(argv: readonly string[]): CliOptions {
 	};
 }
 
+function parseServeArgs(argv: readonly string[]): ServeOptions | undefined {
+	let project = "main";
+	let lane: SecAgentLane = "redteam";
+	let mode: TgSecPermissionMode | undefined;
+	let model: string | undefined;
+	let faux = false;
+	let db: string | undefined;
+	let evidence: string | undefined;
+	let scope: string | undefined;
+	let host: string | undefined;
+	let port: number | undefined;
+	let target: string | undefined;
+
+	for (let index = 0; index < argv.length; index += 1) {
+		const flag = argv[index];
+		if (flag === "--help" || flag === "-h") {
+			process.stdout.write(usage());
+			return undefined;
+		}
+		if (flag === "--faux") {
+			faux = true;
+			continue;
+		}
+		const value = argv[index + 1];
+		if (flag === undefined || value === undefined)
+			throw new TypeError(`tg-sec serve: ${flag ?? "positional"} needs a value`);
+		index += 1;
+		switch (flag) {
+			case "--project":
+				project = value;
+				break;
+			case "--lane":
+				if (!isServeLane(value)) throw new TypeError(`tg-sec serve: unknown lane ${JSON.stringify(value)}`);
+				lane = value;
+				break;
+			case "--mode":
+				if (!isServeMode(value)) throw new TypeError(`tg-sec serve: unknown mode ${JSON.stringify(value)}`);
+				mode = value;
+				break;
+			case "--model":
+				model = value;
+				break;
+			case "--db":
+				db = value;
+				break;
+			case "--evidence":
+				evidence = value;
+				break;
+			case "--scope":
+				scope = value;
+				break;
+			case "--host":
+				host = value;
+				break;
+			case "--port": {
+				const parsed = Number(value);
+				if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
+					throw new TypeError(`tg-sec serve: --port must be an integer in 0..65535, got ${JSON.stringify(value)}`);
+				}
+				port = parsed;
+				break;
+			}
+			case "--target":
+				target = value;
+				break;
+			default:
+				throw new TypeError(`tg-sec serve: unknown argument ${flag}`);
+		}
+	}
+	if (faux && model !== undefined) throw new TypeError("tg-sec serve: --faux cannot be combined with --model");
+	return {
+		project,
+		lane,
+		...(mode === undefined ? {} : { mode }),
+		...(model === undefined ? {} : { model }),
+		...(faux ? { faux: true } : {}),
+		...(db === undefined ? {} : { db }),
+		...(evidence === undefined ? {} : { evidence }),
+		...(scope === undefined ? {} : { scope }),
+		...(host === undefined ? {} : { host }),
+		...(port === undefined ? {} : { port }),
+		...(target === undefined ? {} : { target }),
+		cwd: process.cwd(),
+	};
+}
+
 /**
  * Batch-3 smoke entry (`tg-sec`): open the campaign for real — SQLite storage, guard wiring, the
  * core extension — and run one scripted faux turn that calls `bash`, so the first `beforeTool`
@@ -147,6 +250,12 @@ async function main(): Promise<void> {
 	const command = argv[0];
 	if (command === "login" || command === "list") {
 		await runAuthCommand(command, argv.slice(1));
+		return;
+	}
+	if (command === "serve") {
+		const serveOptions = parseServeArgs(argv.slice(1));
+		if (serveOptions === undefined) return;
+		await runServeCommand(serveOptions);
 		return;
 	}
 	if (command === "help" || command === "--help" || command === "-h") {

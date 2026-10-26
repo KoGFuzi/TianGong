@@ -1,0 +1,55 @@
+{
+	"name": "@OnePanda-TgSec/tg-sec-server",
+	"version": "2.0.1",
+	"description": "TianGong security campaign sidecar: harness event projection, StrikeAgent-isomorphic graph contract, and the self-written campaign WebUI",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"source": "./src/index.ts",
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js",
+			"default": "./dist/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"sideEffects": false,
+	"files": [
+		"dist",
+		"web",
+		"README.md",
+		"CHANGELOG.md"
+	],
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"build": "tsc -p tsconfig.build.json",
+		"test": "vitest --run",
+		"prepublishOnly": "bun run clean && bun run build"
+	},
+	"keywords": [
+		"security",
+		"redteam",
+		"webui",
+		"gibraltar"
+	],
+	"author": "KoGFuzi",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/KoGFuzi/TianGong.git",
+		"directory": "packages/sec-server"
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"dependencies": {
+		"@OnePanda-TgSec/chord": "^2.0.1",
+		"@OnePanda-TgSec/tg-gibraltar": "^2.0.1"
+	},
+	"devDependencies": {
+		"@OnePanda-TgSec/tg-ai": "^2.0.1",
+		"shx": "0.4.0",
+		"vitest": "4.1.11"
+	}
+}

@@ -1,19 +1,26 @@
-import { createModels } from "@OnePanda-TgSec/tg-ai";
+import { createModels, fauxAssistantMessage, type Message } from "@OnePanda-TgSec/tg-ai";
 import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { fauxDatabasePath } from "../src/config.ts";
+import { openSecAgent } from "../src/index.ts";
 import {
+	FAUX_PROVIDER_ID,
 	formatModelRef,
+	hasFauxTurns,
+	isFauxModelRef,
 	isUnconfiguredModel,
 	parseModelSpec,
 	readOrCreateDeviceId,
 	readTgSecModelConfig,
+	resetFauxContext,
 	resolveTgSecModel,
 	tgSecModelConfigPath,
 	tryResolveTgSecModel,
 	UNCONFIGURED_MODEL,
 	writeTgSecModelConfig,
 } from "../src/tui/model.ts";
-import { cleanupTempDirs, fauxModel, fauxSetup, tempDir } from "./support.ts";
+import { cleanupTempDirs, context, fauxModel, fauxSetup, tempDir } from "./support.ts";
 
 afterEach(cleanupTempDirs);
 
@@ -123,6 +130,85 @@ describe("unconfigured model sentinel", () => {
 		expect(isUnconfiguredModel({ provider: "unconfigured", modelId: "other" })).toBe(false);
 		expect(isUnconfiguredModel(undefined)).toBe(false);
 	});
+});
+
+describe("faux context", () => {
+	const realModel = { provider: "deepseek", modelId: "deepseek-flash" } as const;
+	const fauxTurn = fauxAssistantMessage("hi");
+	const realTurn = { ...fauxAssistantMessage("hi"), provider: "deepseek" } satisfies Message;
+	const userTurn = { role: "user", content: "hi", timestamp: 0 } satisfies Message;
+
+	function fakeConversation(messages: readonly Message[]) {
+		const resets: Array<string | undefined> = [];
+		const conversation: Parameters<typeof resetFauxContext>[0] = {
+			context: async () => ({ head: undefined, entries: [], contributions: [], messages }),
+			reset: async (handoff) => {
+				resets.push(handoff);
+			},
+		};
+		return { conversation, resets };
+	}
+
+	it("recognises the echo provider only", () => {
+		expect(FAUX_PROVIDER_ID).toBe("faux");
+		expect(isFauxModelRef(fauxModel)).toBe(true);
+		expect(isFauxModelRef(realModel)).toBe(false);
+		expect(isFauxModelRef(undefined)).toBe(false);
+	});
+
+	it("finds a faux assistant turn in the active context", () => {
+		expect(hasFauxTurns([userTurn, fauxTurn])).toBe(true);
+		expect(hasFauxTurns([userTurn, realTurn])).toBe(false);
+		expect(hasFauxTurns([])).toBe(false);
+	});
+
+	it("clears a context that still carries faux turns when a real model is chosen", async () => {
+		const { conversation, resets } = fakeConversation([userTurn, fauxTurn]);
+		expect(await resetFauxContext(conversation, realModel, context)).toBe(true);
+		expect(resets).toEqual([undefined]);
+	});
+
+	it("keeps a clean context and never resets for the echo model or with no model", async () => {
+		const clean = fakeConversation([userTurn, realTurn]);
+		expect(await resetFauxContext(clean.conversation, realModel, context)).toBe(false);
+		expect(clean.resets).toEqual([]);
+
+		const faux = fakeConversation([userTurn, fauxTurn]);
+		expect(await resetFauxContext(faux.conversation, fauxModel, context)).toBe(false);
+		expect(await resetFauxContext(faux.conversation, undefined, context)).toBe(false);
+		expect(faux.resets).toEqual([]);
+	});
+
+	it("keeps faux runs out of the campaign database", () => {
+		expect(fauxDatabasePath("campaign", "/data")).toBe(
+			join("/data", "faux", "projects", "campaign", "session.sqlite"),
+		);
+	});
+
+	it("removes faux turns from a real conversation context", async () => {
+		const dir = await tempDir();
+		const { faux, models } = fauxSetup();
+		faux.setResponses([fauxAssistantMessage("local echo")]);
+		const agent = await openSecAgent({
+			context,
+			project: "faux-reset",
+			lane: "redteam",
+			models,
+			model: fauxModel,
+			cwd: dir,
+			path: join(dir, "session.sqlite"),
+		});
+		try {
+			const submission = await agent.root.submit({ type: "input", content: "hi" }, context);
+			expect((await submission.wait(context)).status).toBe("done");
+			expect(hasFauxTurns((await agent.root.context(context)).messages)).toBe(true);
+
+			expect(await resetFauxContext(agent.root, realModel, context)).toBe(true);
+			expect(hasFauxTurns((await agent.root.context(context)).messages)).toBe(false);
+		} finally {
+			await agent.close(context);
+		}
+	}, 30_000);
 });
 
 describe("readOrCreateDeviceId", () => {

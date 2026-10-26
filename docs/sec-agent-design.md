@@ -324,3 +324,49 @@ durable 改为批3 的 day-one 构造要求（上节六条）；原批0 的"接�
 - 测试纪律：probe before assert；faux provider；批1 探针先红后绿。
 - `scripts/legacy/**` 不受房规管辖（三处工具链排除），新增同类留存须同步排除清单；新包不得
   import 其中任何文件。
+
+## 批6 落地勘误与验收记录（2026-10-26）
+
+**依赖方向**：原图把 sec-server 画成与产品壳平级的独立 sidecar，落地时 `tg-sec serve` 由
+sec-agent 启动，因此边为 `sec-server ──▶ sec-agent`（sec-agent 依赖 sec-server），而 sec-server
+只依赖 `chord` 与 `tg-gibraltar`。sidecar 不 import sec-agent：宿主通过
+`SecServerHost` 注入 `readProjection()`、`steer()`、harness 与 conversation id；投影输入
+（`SecProjectionAction` / `SecProjectionEvidenceSubject`）是 sec-server 自己的纯数据类型。
+`packages/sec-server/test/boundary.test.ts` 同时断言三条事实：manifest 只有这两个房包、源码
+不出现 `tg-sec-agent`、`tsconfig.build.json` 为两者显式列出 paths。
+
+**契约**：`src/contract.ts` 固定 9 类节点、5 种关系、5 级严重度、5 种 intent 状态、4 种验证
+状态，字段名照 StrikeAgent 契约（`on_rce_path`、`est_success`、`risk_score` 等），实现与
+样式自写。首帧为 `snapshot`（整图 + `running`/`queued`），之后按 `node`/`edge`/`finding`/
+`intent`/`rce_path` 增量帧；`ping` 回 `pong`，`refresh` 强制重读投影并回整图。
+
+**投影**：行动树 → 节点/`CONTAINS` 边/intent；intent 前缀决定节点类型（`goal:` 落为
+`danger` 并带 `goal-intent` 标签，因为契约里 goal 是赛道终点而非一次委派）；证据 subject →
+`vuln` 节点 + 根 `LEADS_TO` 边 + `pending` finding。证据节点只带 snapshot 元数据
+（method/url/status/note/capturedAt），报文正文从不进入投影。RCE 路径按 sink 优先级分档，
+深度 8、每源 4096 条上限的 DFS；无 sink 时进入 frontier 模式，取风险最高的 danger/vuln 作为
+临时终点。风险分以严重度基分叠加 RCE/类型修正，honeypot 封顶 15。
+
+**运行态**：`SecRunProjector` 消费 `watchEvents`，把 `run_start`/`run_end`/`turn_start`/
+`inbox_update` 折成 `status` 帧，工具事件折成 `tool`/`tool_result`，助手消息折成 `thought`，
+`sec.steer` entry 折成 `steer`，retry/task/compaction 折成 `log`。工具参数经 `summarizeJson`
+截断，`requestBase64`/`responseBase64`/`body`/`bytes` 等键替换为字节数占位。
+
+**登录与传输**：入口为 12 字符随机路径，持久化在 `<data>/sec-server/sec-server-entry`（0600）；
+一次性 ticket TTL 5 分钟，兑换后 303 到 `/<entry>/` 并种 `HttpOnly; SameSite=Strict;
+Path=/<entry>/` 会话 cookie；会话 12 小时。所有路由先过严格 Host 白名单（防 DNS
+rebinding），再要求 cookie。`POST api/steer` 额外要求 `Origin` 与 Host 完全一致及
+`x-tg-sec-steer: 1`；WS 升级要求同一 Origin、cookie 与精确的 `/<entry>/ws` 路径，拒绝
+`Sec-Fetch-Site: cross-site`。WS 为自写 RFC 6455 实现：客户端帧必须掩码、仅文本、1 MiB 上限、
+ping/pong、1002/1003/1007/1009 关闭码；没有第三方依赖。CSP 为 `default-src 'none'`，脚本与
+样式同源，`connect-src` 只放行本机 `ws://`。
+
+**WebUI**：`web/` 三文件（无构建步骤、无 CDN、无内联脚本）：SVG 行动图（分层布局、平移缩放、
+节点详情）、findings/intents/events 三个侧栏、steering 输入框。所有文本用 `textContent`
+写入，事件流上限截断，断线按指数退避重连并以 `api/graph` 兜底；404 视为会话过期并停止重试。
+
+**验收**：`bun run build` 构建 11 个包（sec-server 在 sec-agent 之前）；`bun run test
+packages/sec-server` 覆盖契约投影（确定性、等级/权重、RCE 与 frontier）、投影差帧与丢失 id
+重同步、ticket/cookie 生命周期、WS 掩码/分片/关闭码，以及真实 `Harness` + faux provider 上的
+登录 → 快照 → WS ping → WS steer → thought 端到端；`bun run test packages/sec-agent` 保持全绿。
+参考源码只用于行为与契约对齐，没有复制 AGPL 代码。

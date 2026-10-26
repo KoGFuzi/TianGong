@@ -41,7 +41,7 @@ data 目录下的两个关键文件：
 └── tg-debug.log     tg-sec-agent 的调试日志（启用时）
 ```
 
-**凭据为什么在 data 而不在 config**：`auth.json` 是程序运行时生成的状态，不是用户手写的配置。`opencode` 把自己的 `auth.json` 放在 data 根，TianGong 与其一致。排查权限问题时请检查 data 目录，而不是 config。凭据由 `tg-sec login [provider]` 写入；`tg-sec list` 列出支持 OAuth 的 provider。交互式外壳 `tgsec` 复用同一份 `auth.json`，不另建登录体系：启动时**不要求**任何 provider 已配置，没有可用模型时状态栏显示 `no model` 并拒绝发送消息；`/connect` 在壳内运行 OAuth 或 API key 登录流程（密钥输入以 `*` 遮蔽），登录成功后刷新模型目录并在尚无模型时自动选中该 provider 的第一个聊天模型；`/models`（或空参数的 `/model`）打开模糊搜索选择器，`/models <query>` 预填搜索词。`tgsec login [provider]` 转调 `tg-sec login`，`tgsec models` 列出当前已认证、可直接启动的模型；壳内选择会写入 `tui-model.json` 供下次启动使用。
+**凭据为什么在 data 而不在 config**：`auth.json` 是程序运行时生成的状态，不是用户手写的配置。`opencode` 把自己的 `auth.json` 放在 data 根，TianGong 与其一致。排查权限问题时请检查 data 目录，而不是 config。凭据由 `tg-sec login [provider]` 写入；`tg-sec list` 列出支持 OAuth 的 provider。交互式外壳 `tgsec` 复用同一份 `auth.json`，不另建登录体系：启动时**不要求**任何 provider 已配置，没有可用模型时状态栏显示 `no model` 并拒绝发送消息；`/connect` 在壳内运行 OAuth 或 API key 登录流程（密钥输入以 `*` 遮蔽），登录成功后刷新模型目录并在尚无模型或当前仍是 faux 时自动选中该 provider 的第一个聊天模型；`/models`（或空参数的 `/model`）打开模糊搜索选择器，`/models <query>` 预填搜索词。`tgsec login [provider]` 转调 `tg-sec login`，`tgsec models` 列出当前已认证、可直接启动的模型；壳内选择会写入 `tui-model.json` 供下次启动使用。`--faux` 的本地回显会话写在 `sec-agent/faux/projects/<project>/session.sqlite`，不会进入 campaign 会话；真实模型启动或从 faux 切换时若上下文里仍有 faux 回合，会先开启新上下文，避免真实模型续写测试人格。
 
 ### 2.1 路径解析规则
 
@@ -78,6 +78,37 @@ tiangongConfigPath("settings.json");
 ```
 
 `TG_CODING_AGENT_DIR` 是单目录覆盖：设置后，两个根都指向该目录。它供测试和嵌入式进程使用，不能用相对路径。上游服务（版本检查、远端模型目录、managed 安装、`/share` 查看器）默认关闭，分别由 `TG_VERSION_CHECK_URL`、`TG_MODEL_CATALOG_URL`、`TG_INSTALLER_API_BASE`、`TG_SHARE_VIEWER_URL` 显式开启。
+
+### 2.5 WebUI sidecar（`tg-sec serve`）
+
+`tg-sec serve` 在同一个 campaign 运行时上启动只读 WebUI sidecar（`@OnePanda-TgSec/tg-sec-server`）：
+订阅 harness 的 `watchEvents`，把行动树与证据投影成 StrikeAgent 同构图，通过 WebSocket 推送
+增量帧，并接受浏览器 steering。它使用与 CLI/TUI 相同的 campaign 数据库；不另建状态。
+
+```bash
+tg-sec serve --project demo --lane redteam
+tg-sec serve --faux --project demo          # 本地回显模型，无凭据、无外联
+```
+
+可选项：`--host <地址>`（默认 `127.0.0.1`）、`--port <端口>`（默认 `0`，由系统分配）、
+`--target <标签>`（图上根节点标题）、`--mode <模式>`（启动时切换 guard 模式）、`--db`/
+`--evidence`/`--scope`/`--cwd` 与其它 `tg-sec` 命令一致。未解析到模型时命令直接失败并提示
+`tg-sec login` 或 `--faux`。
+
+启动后终端打印两个 URL：
+
+- `webui`：已认证的 UI 地址（`http://<host>:<port>/<entry>/`）；
+- `login`：一次性登录地址（`…/<entry>/login?ticket=…`），ticket 5 分钟内有效且只能兑换一次。
+
+入口路径是 12 字符随机串，持久化在 `<data>/sec-server/sec-server-entry`（目录与文件权限
+0600），重启保持不变；删除该文件即可轮换入口。兑换 ticket 后服务端设置
+`HttpOnly; SameSite=Strict; Path=/<entry>/` 会话 cookie，有效期 12 小时。所有请求先校验严格
+Host 白名单；steering 还要求同源 `Origin` 与 `x-tg-sec-steer: 1` 头。默认只绑定环回地址；
+绑定非环回地址时必须显式给出 `--host`，且访问者需使用同名 Host。证据报文正文不会进入
+WebUI 或 WS 帧，只显示 snapshot 元数据。
+
+按 Ctrl+C 或发送 SIGTERM 停止：服务端先向 WebSocket 客户端发 1001 关闭帧，再停止事件流、
+关闭 agent 与证据库。sidecar 不提供写路径，图谱与 steering 之外没有 HTTP 接口。
 
 ---
 

@@ -52,6 +52,7 @@
 		"@OnePanda-TgSec/tg-ai": "^2.0.1",
 		"@OnePanda-TgSec/tg-gibraltar": "^2.0.1",
 		"@OnePanda-TgSec/tg-sec-guard": "^2.0.1",
+		"@OnePanda-TgSec/tg-sec-server": "^2.0.1",
 		"@OnePanda-TgSec/tg-telemetry": "^2.0.1",
 		"@OnePanda-TgSec/tg-tui": "^2.0.1",
 		"typebox": "1.3.27"

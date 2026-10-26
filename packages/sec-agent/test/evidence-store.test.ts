@@ -157,6 +157,31 @@ describe("evidence list and edit", () => {
 	});
 });
 
+describe("evidence subject index", () => {
+	it("lists no subjects for an empty store", async () => {
+		expect(await store.listSubjects()).toEqual([]);
+	});
+
+	it("reports each locked subject once, in id order, however often its version bumps", async () => {
+		const snap = await store.record(REQUEST, RESPONSE, INPUT);
+		const first = await store.bind("subject-b", null, [{ snapshotId: snap.id }]);
+		const edited = await store.edit("subject-b", first.version, {
+			bindingId: first.bindings[0].bindingId,
+			note: "x",
+		});
+		await store.bind("subject-a", null, [{ snapshotId: snap.id }]);
+		await store.edit("subject-b", edited.version, { bindingId: first.bindings[0].bindingId, note: "y" });
+		expect(await store.listSubjects()).toEqual(["subject-a", "subject-b"]);
+	});
+
+	it("still lists a subject whose bindings were all removed", async () => {
+		const snap = await store.record(REQUEST, RESPONSE, INPUT);
+		const set = await store.bind("subject-a", null, [{ snapshotId: snap.id }]);
+		await store.edit("subject-a", set.version, { bindingId: set.bindings[0].bindingId, remove: true });
+		expect(await store.listSubjects()).toEqual(["subject-a"]);
+	});
+});
+
 async function unreferencedOf(reader: NodeSqliteDatabase, id: string): Promise<number | null> {
 	const row = await reader.get<{ u: number | null }>(
 		"SELECT unreferenced_at AS u FROM tg_sec_evidence_snapshots WHERE id = ?",

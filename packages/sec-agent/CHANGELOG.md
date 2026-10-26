@@ -23,6 +23,16 @@
 - The `judge-auto` judge reads its model ref at judgement time, so a model switched inside the
   shell also becomes the judge model.
 
+### Fixed
+
+- A `--faux` shell no longer writes its echo turns into the campaign conversation, and choosing an
+  authenticated model over a context that still carries faux assistant turns starts a clean
+  context. Previously the test turns survived in `projects/<project>/session.sqlite`, so a correctly
+  configured real provider continued the faux persona from the transcript and looked as if the
+  TUI configuration had not taken effect. Faux runs now use
+  `<data>/faux/projects/<project>/session.sqlite`; `/connect` from a faux session also selects the
+  provider's first chat model instead of keeping the echo model selected.
+
 ### Added
 
 - `tg-sec login [provider]` and `tg-sec list` now own the OAuth credential bootstrap that used to be
@@ -124,6 +134,16 @@
   model marked; `/models <query>` prefills the search.
 - The `Input` component in `tg-tui` gained `secret: true`, rendering one `*` per character while
   `getValue()` still returns the real text; the login dialog uses it for API keys and codes.
+- `tg-sec serve`: the batch-6 WebUI sidecar (`@OnePanda-TgSec/tg-sec-server`) hosted on the same
+  campaign runtime. It subscribes to `watchEvents`, projects the action tree and evidence subjects
+  onto the StrikeAgent-isomorphic graph contract (9 node kinds, 5 relations with `weight` and
+  `on_rce_path`, intents/findings/steering/memory/events), serves a self-written SVG UI, and accepts
+  steering over HTTP or WebSocket. The one-time ticket URL is printed at startup; the entry path is
+  persisted at `<data>/sec-server/sec-server-entry` (0600), tickets expire in five minutes and are
+  single-use, and the session cookie is scoped to the entry path. `TgSecEvidenceStore.listSubjects()`
+  enumerates finding subjects for the projection without reading blob bodies. The sidecar depends
+  only on chord and gibraltar; sec-agent injects the projection and steer functions, so there is no
+  reverse import.
 
 ### Changed
 

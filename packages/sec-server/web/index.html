@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="referrer" content="no-referrer" />
+		<title>TianGong campaign</title>
+		<link rel="stylesheet" href="./style.css" />
+	</head>
+	<body>
+		<header id="topbar">
+			<div class="brand">TIANGONG <span>campaign</span></div>
+			<div id="status" class="status" data-state="connecting">
+				<span class="dot"></span><span id="status-text">connecting</span>
+			</div>
+			<div id="stats" class="stats"></div>
+		</header>
+		<main>
+			<section id="graph-pane">
+				<div id="graph-toolbar">
+					<button id="fit" type="button">fit</button>
+					<span id="graph-hint">drag to pan, wheel to zoom, click a node for detail</span>
+				</div>
+				<svg id="graph" role="img" aria-label="campaign graph"></svg>
+				<div id="empty" class="empty" hidden>no campaign nodes yet</div>
+			</section>
+			<aside id="side">
+				<nav id="tabs">
+					<button data-tab="findings" class="active" type="button">findings <span id="count-findings">0</span></button>
+					<button data-tab="intents" type="button">intents <span id="count-intents">0</span></button>
+					<button data-tab="events" type="button">events <span id="count-events">0</span></button>
+				</nav>
+				<div id="panel-findings" class="panel active"></div>
+				<div id="panel-intents" class="panel"></div>
+				<div id="panel-events" class="panel"></div>
+				<div id="detail" hidden>
+					<button id="detail-close" type="button">close</button>
+					<h3 id="detail-title"></h3>
+					<div id="detail-meta" class="kv"></div>
+					<pre id="detail-json"></pre>
+				</div>
+			</aside>
+		</main>
+		<footer id="composer">
+			<input
+				id="steer-input"
+				type="text"
+				maxlength="4000"
+				autocomplete="off"
+				spellcheck="false"
+				placeholder="steer the campaign (sent to the running agent)"
+			/>
+			<button id="steer-send" type="button">send</button>
+		</footer>
+		<div id="notice" hidden></div>
+		<script src="./app.js" type="module"></script>
+	</body>
+</html>

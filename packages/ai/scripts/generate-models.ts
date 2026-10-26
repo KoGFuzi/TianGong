@@ -2695,8 +2695,9 @@ const OPENCODE_CLASSIFIER_MODELS: ClassifierModel<"typesafe-system-one">[] = [
 ];
 
 const CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS: ClassifierModel<"cloudflare-workers-ai-system-one">[] = [
-	// Cloudflare-hosted Clef decision models. They accept images, but classifier
-	// contexts carry text or JSON state only, so the catalog advertises text.
+	// Cloudflare-hosted Clef decision models and TypeSafe's Jev on Workers AI. All of them accept
+	// images: Clef takes a list of data URLs, Jev a TypeSafe assets map, so `compat.imageInput`
+	// records the wire form instead of leaving the transport to guess from the model ID.
 	// Pricing: https://developers.cloudflare.com/workers-ai/models/clef/
 	// and https://developers.cloudflare.com/workers-ai/models/clef-flash/
 	{
@@ -2706,7 +2707,8 @@ const CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS: ClassifierModel<"cloudflare-worke
 		api: "cloudflare-workers-ai-system-one",
 		provider: "cloudflare-workers-ai",
 		baseUrl: CLOUDFLARE_WORKERS_AI_REST_BASE_URL,
-		input: ["text"],
+		input: ["text", "image"],
+		compat: { imageInput: "images" },
 		cost: { input: 0.24, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 65536,
 	},
@@ -2717,8 +2719,21 @@ const CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS: ClassifierModel<"cloudflare-worke
 		api: "cloudflare-workers-ai-system-one",
 		provider: "cloudflare-workers-ai",
 		baseUrl: CLOUDFLARE_WORKERS_AI_REST_BASE_URL,
-		input: ["text"],
-		cost: { input: 0.09, output: 0, cacheRead: 0, cacheWrite: 0 },
+		input: ["text", "image"],
+		compat: { imageInput: "images" },
+		cost: { input: 0.038, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 65536,
+	},
+	{
+		type: "classifier",
+		id: "@cf/cloudflare/clef-omni",
+		name: "Clef Omni",
+		api: "cloudflare-workers-ai-system-one",
+		provider: "cloudflare-workers-ai",
+		baseUrl: CLOUDFLARE_WORKERS_AI_REST_BASE_URL,
+		input: ["text", "image"],
+		compat: { imageInput: "images" },
+		cost: { input: 0.15, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 65536,
 	},
 	{
@@ -2728,7 +2743,20 @@ const CLOUDFLARE_WORKERS_AI_CLASSIFIER_MODELS: ClassifierModel<"cloudflare-worke
 		api: "cloudflare-workers-ai-system-one",
 		provider: "cloudflare-workers-ai",
 		baseUrl: CLOUDFLARE_WORKERS_AI_REST_BASE_URL,
-		input: ["text"],
+		input: ["text", "image"],
+		compat: { imageInput: "assets" },
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 32000,
+	},
+	{
+		type: "classifier",
+		id: "typesafe/jev-1.14.0",
+		name: "Jev 1.14.0",
+		api: "cloudflare-workers-ai-system-one",
+		provider: "cloudflare-workers-ai",
+		baseUrl: CLOUDFLARE_WORKERS_AI_REST_BASE_URL,
+		input: ["text", "image"],
+		compat: { imageInput: "assets" },
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 32000,
 	},

@@ -277,6 +277,12 @@ per-thinking-level sampling overrides — `samplingParamsByThinkingLevel` stays 
 - `closeOpenAICodexWebSocketSessions()` now also drops the per-session WebSocket debug stats and
   the SSE-fallback flags. Only the socket cache was dropped before, and the two maps grew with
   every session id the process ever served.
+- The Cloudflare Workers AI classifier catalog lists Clef, Clef Flash, Clef Omni, `typesafe/jev`,
+  and `typesafe/jev-1.14.0` with image input: the Clef models declare
+  `compat.imageInput: "images"` and the Jev models `"assets"`, which is the wire form the transport
+  already sends. Clef Flash input pricing is corrected to $0.038 per million tokens. The source is
+  `scripts/generate-models.ts`; `test/cloudflare-workers-ai-system-one.test.ts` covers the catalog,
+  the four-image cap, and both image envelopes.
 
 ### Removed
 

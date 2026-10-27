@@ -6,6 +6,7 @@ import type {
 	ConversationDeletion,
 	ConversationId,
 	ConversationMeta,
+	ConversationMetaUpdate,
 	ConversationQuery,
 	ConversationRecord,
 	Cursor,
@@ -737,6 +738,34 @@ export class MemoryStorage implements Storage {
 		};
 		this.state.deletions.push(freeze(clone(deletion)));
 		return deletion;
+	}
+
+	/**
+	 * Replace the mutable metadata of one conversation: its title and archived stamp. Absent fields keep
+	 * their current value; `updatedAt` is restamped from the storage clock on every accepted call. Returns
+	 * undefined when the conversation is absent, and writes nothing. This is an explicit lifecycle call
+	 * outside the commit write path, like deleteConversation: conversation rows are INSERT-only, so no
+	 * transaction can change them. The caller owns liveness.
+	 */
+	async updateConversationMeta(
+		id: ConversationId,
+		update: ConversationMetaUpdate,
+		_context: Context,
+	): Promise<ConversationMeta | undefined> {
+		this.assertOpen();
+		const current = this.state.conversationMeta.get(id);
+		if (current === undefined) return undefined;
+		const archivedAt = update.archived === undefined ? current.archivedAt : update.archived ? Date.now() : undefined;
+		const next: ConversationMeta = {
+			title: update.title ?? current.title,
+			cwd: current.cwd,
+			lane: current.lane,
+			createdAt: current.createdAt,
+			updatedAt: Date.now(),
+			...(archivedAt === undefined ? {} : { archivedAt }),
+		};
+		this.state.conversationMeta.set(id, freeze(clone(next)));
+		return next;
 	}
 
 	/**

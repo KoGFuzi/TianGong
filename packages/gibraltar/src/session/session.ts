@@ -18,6 +18,8 @@ import type {
 	ConversationDocFamilyToken,
 	ConversationDocToken,
 	ConversationId,
+	ConversationMeta,
+	ConversationMetaUpdate,
 	ConversationQuery,
 	ConversationRecord,
 	Cursor,
@@ -949,6 +951,14 @@ class GuardedStorage implements Storage {
 		context: Context,
 	): Promise<Page<ConversationRecord, Cursor>> {
 		return this.#call(context, () => this.#storage.scanConversations(query, limit, cursor, context));
+	}
+
+	updateConversationMeta(
+		id: ConversationId,
+		update: ConversationMetaUpdate,
+		context: Context,
+	): Promise<ConversationMeta | undefined> {
+		return this.#call(context, () => this.#storage.updateConversationMeta(id, update, context));
 	}
 
 	deleteConversation(id: ConversationId, context: Context): Promise<ConversationDeletion | undefined> {

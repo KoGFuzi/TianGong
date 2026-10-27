@@ -5,6 +5,8 @@ import { idFromNumber, seqFromNumber } from "../../ids.ts";
 import type {
 	ConversationDeletion,
 	ConversationId,
+	ConversationMeta,
+	ConversationMetaUpdate,
 	ConversationQuery,
 	ConversationRecord,
 	Cursor,
@@ -44,6 +46,14 @@ type StoredTask = TaskRecord<JsonValue, JsonValue, JsonValue>;
 type TableName = "conversation" | "entry" | "task" | "submission" | "document";
 type RecordIdRow = { readonly record_type: TableName };
 type JsonRow = { readonly record: string };
+type ConversationMetaRow = {
+	readonly title: string;
+	readonly cwd: string;
+	readonly lane: string;
+	readonly created_at: number;
+	readonly updated_at: number;
+	readonly archived_at: number | null;
+};
 type EntryJsonRow = { readonly record: string; readonly commit_seq: number };
 type RevisionRow = {
 	readonly seq: number;
@@ -747,6 +757,49 @@ export class SqliteStorage implements Storage {
 				)
 			)?.count ?? 0
 		);
+	}
+
+	/**
+	 * Replace the mutable metadata of one conversation: its title and archived stamp. Absent fields keep
+	 * their current value; `updatedAt` is restamped from the storage clock on every accepted call. Returns
+	 * undefined when the conversation is absent, and writes nothing. This is an explicit lifecycle call
+	 * outside the commit write path, like deleteConversation: conversation rows are INSERT-only, so no
+	 * transaction can change them. The caller owns liveness.
+	 */
+	async updateConversationMeta(
+		id: ConversationId,
+		update: ConversationMetaUpdate,
+		_context: Context,
+	): Promise<ConversationMeta | undefined> {
+		this.assertOpen();
+		return this.db.transaction(async (transaction) => {
+			const row = await transaction.get<ConversationMetaRow>(
+				`SELECT title, cwd, lane, created_at, updated_at, archived_at
+				FROM ${this.schema.tables.conversations} WHERE id = ? AND project_id = ?`,
+				id,
+				this.project,
+			);
+			if (row === undefined) return undefined;
+			const archivedAt = update.archived === undefined ? row.archived_at : update.archived ? Date.now() : null;
+			const next: ConversationMeta = {
+				title: update.title ?? parseJson<string>(row.title),
+				cwd: parseJson<string>(row.cwd),
+				lane: parseJson<string>(row.lane),
+				createdAt: row.created_at,
+				updatedAt: Date.now(),
+				...(archivedAt === null ? {} : { archivedAt }),
+			};
+			await transaction.run(
+				`UPDATE ${this.schema.tables.conversations} SET title = ?, updated_at = ?, archived_at = ?
+				WHERE project_id = ? AND id = ?`,
+				encodeIndexedString(next.title),
+				next.updatedAt,
+				archivedAt,
+				this.project,
+				id,
+			);
+			return next;
+		});
 	}
 
 	/**

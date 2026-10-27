@@ -1140,6 +1140,19 @@ export interface Storage {
 		context: Context,
 	): Promise<Page<ConversationRecord, Cursor>>;
 
+	/**
+	 * Replace the mutable metadata of one conversation: its title and archived stamp. Absent fields keep
+	 * their current value; `updatedAt` is restamped from the storage clock on every accepted call. Returns
+	 * undefined when the conversation is absent, and writes nothing. This is an explicit lifecycle call
+	 * outside the commit write path, like deleteConversation: conversation rows are INSERT-only, so no
+	 * transaction can change them. The caller owns liveness.
+	 */
+	updateConversationMeta(
+		id: ConversationId,
+		update: ConversationMetaUpdate,
+		context: Context,
+	): Promise<ConversationMeta | undefined>;
+
 	/** Look up one global entry and the sequence of the commit that persisted it. */
 	entry(id: EntryId, context: Context): Promise<{ readonly entry: EntryRecord; readonly commitSeq: Seq } | undefined>;
 	/** Look up one entry only when it is visible through the requested conversation's ancestry. */

@@ -1897,6 +1897,40 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 			});
 		}),
 
+		createCase(
+			options,
+			"replaces conversation metadata explicitly and reports absent conversations",
+			async (storage) => {
+				const rootId = await createRoot(storage);
+				const childId = await storage.mintId<ConversationId>();
+				const meta = conversationMeta("child");
+				await storage.commit([{ type: "conversation", value: { id: childId }, meta }], context);
+
+				const renamed = await storage.updateConversationMeta(childId, { title: "renamed" }, context);
+				expect(renamed).toEqual({
+					title: "renamed",
+					cwd: meta.cwd,
+					lane: meta.lane,
+					createdAt: meta.createdAt,
+					updatedAt: renamed!.updatedAt,
+				});
+				expect(renamed?.updatedAt).toBeGreaterThan(meta.updatedAt);
+				expect(renamed?.archivedAt).toBeUndefined();
+
+				// An absent conversation reports undefined and writes nothing.
+				expect(
+					await storage.updateConversationMeta(idFromNumber<ConversationId>(999_999), { title: "x" }, context),
+				).toBeUndefined();
+				expect(await storage.conversation(idFromNumber<ConversationId>(999_999), context)).toBeUndefined();
+
+				// Archiving the reserved root is legitimate; only its deletion is rejected.
+				const archived = await storage.updateConversationMeta(rootId, { archived: true }, context);
+				expect(archived?.archivedAt).toBeGreaterThan(0);
+				const unarchived = await storage.updateConversationMeta(rootId, { archived: false }, context);
+				expect(unarchived?.archivedAt).toBeUndefined();
+			},
+		),
+
 		createCase(options, "keeps the metadata columns and the immutable record apart", async (storage) => {
 			const rootId = await createRoot(storage);
 			const ownerTaskId = await storage.mintId<TaskId<JsonValue>>();

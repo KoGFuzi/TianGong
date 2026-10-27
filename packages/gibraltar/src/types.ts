@@ -1153,6 +1153,18 @@ export interface Storage {
 		context: Context,
 	): Promise<ConversationMeta | undefined>;
 
+	/**
+	 * Scan conversation identity and metadata in `query.order` (default descending) by ID, filtered by
+	 * project like every other read. The cursor continues in the order it was created with, as in
+	 * scanConversations. Reads no entry, task, submission, or document row.
+	 */
+	scanConversationSummaries(
+		query: ConversationSummaryQuery,
+		limit: number,
+		cursor: Cursor | undefined,
+		context: Context,
+	): Promise<Page<ConversationSummary, Cursor>>;
+
 	/** Look up one global entry and the sequence of the commit that persisted it. */
 	entry(id: EntryId, context: Context): Promise<{ readonly entry: EntryRecord; readonly commitSeq: Seq } | undefined>;
 	/** Look up one entry only when it is visible through the requested conversation's ancestry. */

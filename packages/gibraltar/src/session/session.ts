@@ -22,6 +22,8 @@ import type {
 	ConversationMetaUpdate,
 	ConversationQuery,
 	ConversationRecord,
+	ConversationSummary,
+	ConversationSummaryQuery,
 	Cursor,
 	DocumentAddress,
 	DocumentCommitChange,
@@ -959,6 +961,15 @@ class GuardedStorage implements Storage {
 		context: Context,
 	): Promise<ConversationMeta | undefined> {
 		return this.#call(context, () => this.#storage.updateConversationMeta(id, update, context));
+	}
+
+	scanConversationSummaries(
+		query: ConversationSummaryQuery,
+		limit: number,
+		cursor: Cursor | undefined,
+		context: Context,
+	): Promise<Page<ConversationSummary, Cursor>> {
+		return this.#call(context, () => this.#storage.scanConversationSummaries(query, limit, cursor, context));
 	}
 
 	deleteConversation(id: ConversationId, context: Context): Promise<ConversationDeletion | undefined> {

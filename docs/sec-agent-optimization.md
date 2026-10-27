@@ -4,7 +4,8 @@
 先读真实签名核对引用的 API 形状，出入以代码为准并回本文档勘误（房规：probe before assert）。
 
 配套文档：`docs/sec-agent-design.md`（批0-6 落地记录）、`docs/sec-guard-design.md`（权限链，
-已定案不动）、`docs/permission-model.md`（图纸语义）。
+已定案不动）、`docs/permission-model.md`（图纸语义）、`docs/sec-agent-optimization-tasks.md`
+（任务拆解与进度）、`docs/sec-agent-optimization-errata.md`（批7-11 实现对照勘误）。
 
 ## 背景与定位
 

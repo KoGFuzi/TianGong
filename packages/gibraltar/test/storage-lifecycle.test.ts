@@ -386,4 +386,48 @@ describe("storage lifecycle", () => {
 		expect(indexes).toContain("tg_conversations_by_updated");
 		expect(indexes).toContain("tg_conversations_by_lane");
 	});
+
+	it("serves the newest-first history scan through an index without a sort step", async () => {
+		const { storage, path } = await createSqliteStorage();
+		expect((await storage.health()).schemaVersion).toBe(4);
+		const indexes = readIndexNames(path, "conversations");
+		expect(indexes).toContain("conversations_by_updated");
+		expect(indexes).toContain("conversations_by_lane");
+
+		// Behavioral direction: the first page of the default query is strictly descending by ID.
+		await storage.commit(
+			[{ type: "conversation", value: { id: ROOT_CONVERSATION_ID }, meta: conversationMeta("root") }],
+			context,
+		);
+		const ids: ConversationId[] = [];
+		for (let index = 0; index < 3; index++) {
+			const id = await storage.mintId<ConversationId>();
+			ids.push(id);
+			await storage.commit(
+				[{ type: "conversation", value: { id }, meta: conversationMeta(`fixture ${index}`) }],
+				context,
+			);
+		}
+		const first = await storage.scanConversationSummaries({}, 2, undefined, context);
+		expect(first.items.map(({ id }) => id)).toEqual([ids[2], ids[1]]);
+		const second = await storage.scanConversationSummaries({}, 2, first.next, context);
+		expect(second.items.map(({ id }) => id)).toEqual([ids[0], ROOT_CONVERSATION_ID]);
+
+		// The real --history query shape must pick an index and must not sort. Which of the two usable
+		// indexes the planner chooses is a statistics decision, so the plan is not pinned to one.
+		const database = new DatabaseSync(path, { readOnly: true });
+		try {
+			const plan = database
+				.prepare(
+					`EXPLAIN QUERY PLAN SELECT id, record, title, cwd, lane, created_at, updated_at, archived_at
+					FROM conversations WHERE project_id = ? AND archived_at IS NULL ORDER BY id DESC LIMIT 21`,
+				)
+				.all("default") as unknown as readonly { readonly detail: string }[];
+			const details = plan.map((row) => row.detail).join("\n");
+			expect(details).toMatch(/USING (COVERING )?INDEX/);
+			expect(details).not.toContain("TEMP B-TREE");
+		} finally {
+			database.close();
+		}
+	});
 });

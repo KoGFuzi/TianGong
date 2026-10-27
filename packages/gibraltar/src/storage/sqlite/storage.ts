@@ -9,6 +9,8 @@ import type {
 	ConversationMetaUpdate,
 	ConversationQuery,
 	ConversationRecord,
+	ConversationSummary,
+	ConversationSummaryQuery,
 	Cursor,
 	DocumentAddress,
 	DocumentContent,
@@ -301,6 +303,56 @@ export class SqliteStorage implements Storage {
 		);
 	}
 
+	/**
+	 * Scan conversation identity and metadata in `query.order` (default descending) by ID, filtered by
+	 * project like every other read. The cursor continues in the order it was created with, as in
+	 * scanConversations. Reads no entry, task, submission, or document row.
+	 */
+	async scanConversationSummaries(
+		query: ConversationSummaryQuery,
+		limit: number,
+		cursor: Cursor | undefined,
+		_context: Context,
+	): Promise<Page<ConversationSummary, Cursor>> {
+		this.assertOpen();
+		const start = scanStart(query.order, cursor, "descending");
+		const scan = scanSql(start);
+		const clauses = ["project_id = ?", scan.clause];
+		const params: SqliteValue[] = [this.project, scan.param];
+		if (query.archived === "only") clauses.push("archived_at IS NOT NULL");
+		else if (query.archived !== "include") clauses.push("archived_at IS NULL");
+		if (query.lane !== undefined) {
+			clauses.push("lane = ?");
+			params.push(encodeIndexedString(query.lane));
+		}
+		if (query.roots === true) clauses.push("parent_conversation_id IS NULL");
+		params.push(limit + 1);
+		const rows = await this.db.all<ConversationMetaRow & { readonly id: number; readonly record: string }>(
+			`SELECT id, record, title, cwd, lane, created_at, updated_at, archived_at
+			FROM ${this.schema.tables.conversations} WHERE ${clauses.join(" AND ")} ORDER BY id ${scan.direction} LIMIT ?`,
+			...params,
+		);
+		return page(
+			rows.map((row) => {
+				const record = parseJson<ConversationRecord>(row.record);
+				return {
+					id: idFromNumber<ConversationId>(row.id),
+					...(record.parent === undefined ? {} : { parent: record.parent }),
+					...(record.owner === undefined ? {} : { owner: record.owner }),
+					meta: {
+						title: parseJson<string>(row.title),
+						cwd: parseJson<string>(row.cwd),
+						lane: parseJson<string>(row.lane),
+						createdAt: row.created_at,
+						updatedAt: row.updated_at,
+						...(row.archived_at === null ? {} : { archivedAt: row.archived_at }),
+					},
+				};
+			}),
+			limit,
+			start.order,
+		);
+	}
 	entry(id: EntryId, context: Context): Promise<{ readonly entry: EntryRecord; readonly commitSeq: Seq } | undefined>;
 	entry(
 		conversationId: ConversationId,

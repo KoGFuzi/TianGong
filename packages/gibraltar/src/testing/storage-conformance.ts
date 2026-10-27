@@ -1899,6 +1899,121 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 
 		createCase(
 			options,
+			"writes conversation metadata at creation and reads it back in summaries",
+			async (storage) => {
+				const rootId = await createRoot(storage);
+				const firstId = await storage.mintId<ConversationId>();
+				const secondId = await storage.mintId<ConversationId>();
+				const firstMeta: ConversationMeta = {
+					title: "first",
+					cwd: "/tmp/first",
+					lane: "ctf",
+					createdAt: 100,
+					updatedAt: 100,
+				};
+				const secondMeta: ConversationMeta = {
+					title: "second",
+					cwd: "/tmp/second",
+					lane: "redteam",
+					createdAt: 200,
+					updatedAt: 200,
+				};
+				await storage.commit(
+					[
+						{ type: "conversation", value: { id: secondId }, meta: secondMeta },
+						{ type: "conversation", value: { id: firstId }, meta: firstMeta },
+					],
+					context,
+				);
+				const summaries = await storage.scanConversationSummaries({}, 10, undefined, context);
+				expect(summaries.items.map(({ id }) => id)).toEqual([secondId, firstId, rootId]);
+				expect(summaries.items[1]!.meta).toEqual(firstMeta);
+				expect(summaries.items[0]!.meta).toEqual(secondMeta);
+				expect(summaries.items[2]!.meta).toEqual({ ...conversationMeta("root"), title: "root" });
+				expect(summaries.next).toBeUndefined();
+			},
+		),
+
+		createCase(options, "pages summary scans newest-first and continues in the cursor's order", async (storage) => {
+			await createRoot(storage);
+			const firstId = await storage.mintId<ConversationId>();
+			const secondId = await storage.mintId<ConversationId>();
+			const thirdId = await storage.mintId<ConversationId>();
+			const meta = conversationMeta("paged");
+			await storage.commit(
+				[
+					{ type: "conversation", value: { id: firstId }, meta },
+					{ type: "conversation", value: { id: secondId }, meta },
+					{ type: "conversation", value: { id: thirdId }, meta },
+				],
+				context,
+			);
+
+			const newestFirst = await storage.scanConversationSummaries({}, 2, undefined, context);
+			expect(newestFirst.items.map(({ id }) => id)).toEqual([thirdId, secondId]);
+			const rest = await storage.scanConversationSummaries({}, 2, newestFirst.next, context);
+			expect(rest.items.map(({ id }) => id)).toEqual([firstId, ROOT_CONVERSATION_ID]);
+			expect(rest.next).toBeUndefined();
+			await expect(
+				storage.scanConversationSummaries({ order: "ascending" }, 2, newestFirst.next, context),
+			).rejects.toThrow("cursor");
+		}),
+
+		createCase(options, "filters summaries by roots, lane, and archived state", async (storage) => {
+			const rootId = await createRoot(storage);
+			const rootEntryId = await storage.mintId<EntryId>();
+			await storage.commit([{ type: "entry", value: entry(rootEntryId, rootId) }], context);
+			const childId = await storage.mintId<ConversationId>();
+			const otherLaneId = await storage.mintId<ConversationId>();
+			await storage.commit(
+				[
+					{
+						type: "conversation",
+						value: { id: childId, parent: { conversationId: rootId, at: rootEntryId } },
+						meta: conversationMeta("forked child"),
+					},
+					{
+						type: "conversation",
+						value: { id: otherLaneId },
+						meta: { ...conversationMeta("other lane"), lane: "ctf" },
+					},
+				],
+				context,
+			);
+
+			expect(
+				(await storage.scanConversationSummaries({ roots: true }, 10, undefined, context)).items.map(
+					({ id }) => id,
+				),
+			).toEqual([otherLaneId, rootId]);
+			expect(
+				(await storage.scanConversationSummaries({ lane: "ctf" }, 10, undefined, context)).items.map(
+					({ id }) => id,
+				),
+			).toEqual([otherLaneId]);
+			expect(
+				(await storage.scanConversationSummaries({}, 10, undefined, context)).items.map(({ id }) => id),
+			).toEqual([otherLaneId, childId, rootId]);
+
+			const archived = await storage.updateConversationMeta(rootId, { archived: true }, context);
+			expect(archived?.updatedAt).toBeGreaterThan(archived?.createdAt ?? 0);
+			expect(
+				(await storage.scanConversationSummaries({}, 10, undefined, context)).items.map(({ id }) => id),
+			).toEqual([otherLaneId, childId]);
+			expect(
+				(await storage.scanConversationSummaries({ archived: "only" }, 10, undefined, context)).items.map(
+					({ id }) => id,
+				),
+			).toEqual([rootId]);
+			expect(
+				(await storage.scanConversationSummaries({ archived: "include" }, 10, undefined, context)).items.map(
+					({ id }) => id,
+				),
+			).toEqual([otherLaneId, childId, rootId]);
+		}),
+
+		createCase(
+			options,
 			"replaces conversation metadata explicitly and reports absent conversations",
 			async (storage) => {
 				const rootId = await createRoot(storage);

@@ -9,6 +9,8 @@ import type {
 	ConversationMetaUpdate,
 	ConversationQuery,
 	ConversationRecord,
+	ConversationSummary,
+	ConversationSummaryQuery,
 	Cursor,
 	DocumentAddress,
 	DocumentContent,
@@ -469,6 +471,40 @@ export class MemoryStorage implements Storage {
 				continue;
 			}
 			values.push(value);
+		}
+		return page(values, limit, start.order);
+	}
+
+	/**
+	 * Scan conversation identity and metadata in `query.order` (default descending) by ID, filtered by
+	 * project like every other read. The cursor continues in the order it was created with, as in
+	 * scanConversations. Reads no entry, task, submission, or document row.
+	 */
+	async scanConversationSummaries(
+		query: ConversationSummaryQuery,
+		limit: number,
+		cursor: Cursor | undefined,
+		_context: Context,
+	): Promise<Page<ConversationSummary, Cursor>> {
+		this.assertOpen();
+		const start = scanStart(query.order, cursor, "descending");
+		const values: ConversationSummary[] = [];
+		for (const index of scanIndexes(this.state.conversationIds, start)) {
+			if (values.length > limit) break;
+			const id = this.state.conversationIds[index]!;
+			const record = this.state.conversations.get(id)!;
+			const meta = this.state.conversationMeta.get(id);
+			if (meta === undefined) continue;
+			if (query.roots === true && record.parent !== undefined) continue;
+			if (query.lane !== undefined && meta.lane !== query.lane) continue;
+			if (query.archived === "only" && meta.archivedAt === undefined) continue;
+			if (query.archived !== "include" && query.archived !== "only" && meta.archivedAt !== undefined) continue;
+			values.push({
+				id,
+				...(record.parent === undefined ? {} : { parent: record.parent }),
+				...(record.owner === undefined ? {} : { owner: record.owner }),
+				meta: clone(meta),
+			});
 		}
 		return page(values, limit, start.order);
 	}

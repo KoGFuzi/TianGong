@@ -83,6 +83,8 @@ class ReopeningStorage implements Storage {
 		this.current.scanConversations(query, limit, cursor, readContext);
 	updateConversationMeta: Storage["updateConversationMeta"] = (id, update, writeContext) =>
 		this.current.updateConversationMeta(id, update, writeContext);
+	scanConversationSummaries: Storage["scanConversationSummaries"] = (query, limit, cursor, readContext) =>
+		this.current.scanConversationSummaries(query, limit, cursor, readContext);
 	entry(id: EntryId, readContext: Context): ReturnType<Storage["entry"]>;
 	entry(conversationId: ConversationId, id: EntryId, readContext: Context): ReturnType<Storage["entry"]>;
 	entry(idOrConversationId: EntryId | ConversationId, idOrContext: EntryId | Context, readContext?: Context) {

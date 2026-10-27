@@ -13,7 +13,7 @@ import { describe, expect, test } from "vitest";
  * deliberately absent: the env resolver is typed by gibraltar (`env/node`, `EnvTarget`), so
  * accepting a host-built remote env costs sec-agent no edge on the env package. `tg-tui` is the
  * interactive shell the `tgsec` bin renders; it is a leaf dependency, never the reverse.
- * `tg-sec-server` is the WebUI sidecar the `tg-sec serve` command starts; it depends on chord and
+ * `tg-sec-server` is the WebUI sidecar the `tgsec --webui` command starts; it depends on chord and
  * gibraltar only, so the edge points this way and no cycle exists.
  */
 

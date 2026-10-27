@@ -182,7 +182,7 @@ async function refreshOverHttp() {
 		if (response.status === 404) {
 			state.expired = true;
 			renderStatus();
-			notice("session expired: reopen the ticket URL printed by tg-sec serve", "error");
+			notice("session expired: reopen the ticket URL printed by tgsec --webui", "error");
 		}
 	} catch {
 		// The next reconnect attempt retries.
@@ -711,7 +711,7 @@ async function sendSteer() {
 		else if (response.status === 404) {
 			state.expired = true;
 			renderStatus();
-			notice("session expired: reopen the ticket URL printed by tg-sec serve", "error");
+			notice("session expired: reopen the ticket URL printed by tgsec --webui", "error");
 		} else notice(`steer failed (${response.status})`, "error");
 	} catch (error) {
 		notice(`steer failed: ${error instanceof Error ? error.message : String(error)}`, "error");

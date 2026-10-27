@@ -3,7 +3,6 @@ import { createModels, fauxAssistantMessage, fauxText, fauxToolCall, Type } from
 import {
 	type Conversation,
 	type ConversationId,
-	type ConversationMeta,
 	createRegistry,
 	defineDoc,
 	defineTask,

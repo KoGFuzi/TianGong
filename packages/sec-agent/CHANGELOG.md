@@ -2,15 +2,26 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- The `tg-sec serve` subcommand is removed; the WebUI sidecar is reached through `tgsec --webui`
+  with the same options (`--host`, `--port`, `--target`, `--mode`, `--model`, `--faux`, `--db`,
+  `--evidence`, `--scope`, and the history flags). `tg-sec serve` fails with a message naming the
+  replacement.
+
 ### Added
 
+- Entry convergence on `tgsec`: flagless it opens the interactive campaign shell, `--webui` opens
+  the WebUI sidecar on the same runtime, and `--help` documents the full flag surface. The history
+  flags work on both frontends: the shell restores by forking through `openSecAgent`'s resume path,
+  and `--history` prints the table and exits before any frontend, so it needs no terminal.
 - Campaign history recovery. `openSecAgent` takes `resume: { source: ConversationId | "latest" }`: the chosen
   history conversation stays read-only and the run continues in a fresh fork of it whose metadata derives from
   the source (a `↳ `-prefixed title, this run's cwd and lane, no archive state). `latest` picks the newest
   non-archived root and falls back to opening the root conversation when the project has no history yet;
   restoring across lanes warns on stderr that guard policy follows this run's lane.
-- `tg-sec` and `tg-sec serve` flags: `--history` prints the project's conversation table (id, lane, created,
-  title, with an `[archived] ` prefix) and exits without opening a model or the WebUI; `--session <id>` and
+- `tg-sec` and `tgsec` flags: `--history` prints the project's conversation table (id, lane, created,
+  title, with an `[archived] ` prefix) and exits without opening a model or a frontend; `--session <id>` and
   `--continue` restore by forking, with the documented mutual exclusions.
 - The `task` tool's delegation fork writes the child's display metadata: the delegation intent as title,
   the role policy's cwd, the campaign lane.

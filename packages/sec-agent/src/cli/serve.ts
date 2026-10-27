@@ -9,7 +9,6 @@ import {
 } from "@OnePanda-TgSec/tg-ai";
 import type { ConversationId, JsonObject, ModelRef, SessionDocToken, Tx } from "@OnePanda-TgSec/tg-gibraltar";
 import {
-	isTgSecMode,
 	loadTgSecScopeRegistry,
 	readTgSecMode,
 	type TgSecPermissionMode,
@@ -40,7 +39,7 @@ import { createSecToolsExtension } from "../tools/extension.ts";
 import { nodeRequestExecutor } from "../tools/transport.ts";
 import { createTgSecModels, resetFauxContext, tryResolveTgSecModel } from "../tui/model.ts";
 
-/** Everything `tg-sec serve` accepts on the command line. */
+/** Everything `tgsec --webui` accepts on the command line. */
 export type ServeOptions = {
 	readonly project: string;
 	readonly lane: SecAgentLane;
@@ -74,7 +73,7 @@ function createDeferredSessionPort(): TgSecSessionPort & { attach(session: TgSec
 			return port.snapshot(token, context);
 		},
 		commit: async <T>(change: (tx: Tx) => T | Promise<T>, context: Context) => {
-			if (port === undefined) throw new Error("tg-sec serve: the session is not open yet");
+			if (port === undefined) throw new Error("tgsec --webui: the session is not open yet");
 			return port.commit(change, context);
 		},
 	};
@@ -94,7 +93,7 @@ function scriptFauxEcho(faux: FauxProviderHandle): void {
 }
 
 /**
- * `tg-sec serve`: open the campaign runtime and the WebUI sidecar on the same harness. The server
+ * `tgsec --webui`: open the campaign runtime and the WebUI sidecar on the same harness. The server
  * projects the action tree and evidence store onto the StrikeAgent graph contract, streams agent
  * events over WebSocket, and accepts steering back into the conversation. Guard escalations travel
  * the other way: the host parks them on the shared approval queue, the browser shows them and
@@ -117,7 +116,7 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
 				: { explicit: options.model }),
 	});
 	if (resolved === undefined) {
-		throw new Error('tg-sec serve: no authenticated model; run "tg-sec login <provider>" or pass --faux');
+		throw new Error('tgsec --webui: no authenticated model; run "tgsec login <provider>" or pass --faux');
 	}
 	const modelRef: ModelRef = resolved.ref;
 	const dataDir = tgSecDataDir();
@@ -202,7 +201,7 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
 			.map((entry) => entry.tool.name);
 		const persisted = await readTgSecMode(agent.harness, context);
 		if (options.mode !== undefined && persisted !== options.mode) {
-			await wiring.guard.switchMode(options.mode, "tg-sec serve", context);
+			await wiring.guard.switchMode(options.mode, "tgsec --webui", context);
 		}
 
 		const campaign = agent;
@@ -237,7 +236,7 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
 		const ticket = server.issueTicket();
 		process.stdout.write(
 			[
-				`tg-sec serve: project=${options.project} lane=${options.lane} mode=${options.mode ?? persisted} model=${resolved === undefined ? "none" : `${modelRef.provider}/${modelRef.modelId}`}`,
+				`tgsec --webui: project=${options.project} lane=${options.lane} mode=${options.mode ?? persisted} model=${resolved === undefined ? "none" : `${modelRef.provider}/${modelRef.modelId}`}`,
 				`  webui  ${server.url}`,
 				`  login  ${server.ticketUrl(ticket.ticket)}`,
 				"  the login URL is one-time and expires in 5 minutes; it sets the session cookie",
@@ -337,14 +336,4 @@ function waitForSignal(): Promise<void> {
 		process.on("SIGINT", stop);
 		process.on("SIGTERM", stop);
 	});
-}
-
-/** The lane values the CLI accepts. */
-export function isServeLane(value: string): value is SecAgentLane {
-	return value === "redteam" || value === "ctf" || value === "src";
-}
-
-/** The mode values the CLI accepts. */
-export function isServeMode(value: string): value is TgSecPermissionMode {
-	return isTgSecMode(value);
 }

@@ -332,7 +332,8 @@ durable 改为批3 的 day-one 构造要求（上节六条）；原批0 的"接�
 
 ## 批6 落地勘误与验收记录（2026-10-26）
 
-**依赖方向**：原图把 sec-server 画成与产品壳平级的独立 sidecar，落地时 `tg-sec serve` 由
+**依赖方向**：原图把 sec-server 画成与产品壳平级的独立 sidecar，落地时 `tgsec --webui`（原
+`tg-sec serve`，入口已收敛）由
 sec-agent 启动，因此边为 `sec-server ──▶ sec-agent`（sec-agent 依赖 sec-server），而 sec-server
 只依赖 `chord` 与 `tg-gibraltar`。sidecar 不 import sec-agent：宿主通过
 `SecServerHost` 注入 `readProjection()`、`steer()`、harness 与 conversation id；投影输入

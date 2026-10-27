@@ -11,6 +11,7 @@ import type {
 import { contentText, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@OnePanda-TgSec/tg-ai";
 import type {
 	AgentEvent,
+	ConversationId,
 	EntryRecord,
 	JsonObject,
 	MessageChange,
@@ -115,6 +116,8 @@ export type TgSecTuiOptions = {
 	readonly evidence?: string;
 	/** Scope config file; absent means `<dataDir>/projects/<project>/scope.json`. */
 	readonly scope?: string;
+	/** Restore from one history conversation instead of the reserved root; the source stays read-only. */
+	readonly resume?: { readonly source: ConversationId | "latest" };
 	readonly cwd: string;
 };
 
@@ -1096,6 +1099,7 @@ export async function openTgSecTui(options: TgSecTuiOptions): Promise<TgSecTuiAp
 			model: modelRef,
 			cwd: options.cwd,
 			...(databasePath === undefined ? {} : { path: databasePath }),
+			...(options.resume === undefined ? {} : { resume: options.resume }),
 			extensions: [core, secTools, ...mcpHost.extensions],
 			onClose: async () => {
 				for (const error of await mcpHost.close()) process.stderr.write(`tg-sec mcp: ${error}\n`);

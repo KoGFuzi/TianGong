@@ -3,15 +3,7 @@
 import type { Context } from "@OnePanda-TgSec/chord";
 import { BACKGROUND_CONTEXT } from "@OnePanda-TgSec/chord/context";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@OnePanda-TgSec/tg-ai";
-import type {
-	ConversationId,
-	ConversationSummary,
-	Cursor,
-	JsonObject,
-	SessionDocToken,
-	Tx,
-} from "@OnePanda-TgSec/tg-gibraltar";
-import { openNodeSqliteStorage } from "@OnePanda-TgSec/tg-gibraltar/storage/sqlite/node";
+import type { ConversationId, JsonObject, SessionDocToken, Tx } from "@OnePanda-TgSec/tg-gibraltar";
 import {
 	createTgSecScopeRegistry,
 	readTgSecMode,
@@ -22,7 +14,6 @@ import { InMemoryTelemetryContext } from "@OnePanda-TgSec/tg-telemetry";
 import { createStdinAskChannel } from "../ask.ts";
 import type { SecAgent } from "../bootstrap.ts";
 import { openSecAgent, type SecAgentLane } from "../bootstrap.ts";
-import { projectDatabasePath } from "../config.ts";
 import { createSecCoreExtension } from "../core-extension.ts";
 import { openTgSecEvidenceStore } from "../evidence/store.ts";
 import { buildSecGuard, secAttestForbiddenRead, secDeclaredTools } from "../guard-wiring.ts";
@@ -31,7 +22,7 @@ import { watchSecEvents } from "../observation.ts";
 import { createSecToolsExtension } from "../tools/extension.ts";
 import type { HttpRequest, HttpResponse, RequestExecutor } from "../tools/transport.ts";
 import { oauthProviderNames, runAuthCommand } from "./auth.ts";
-import { isServeLane, isServeMode, runServeCommand, type ServeOptions } from "./serve.ts";
+import { printHistory } from "./history.ts";
 
 /** The session port the CLI hands the guard before the harness exists; attached once it does. */
 function createDeferredSessionPort(): TgSecSessionPort & { attach(session: TgSecSessionPort): void } {
@@ -91,76 +82,14 @@ type CliOptions = {
 	resume?: { readonly source: ConversationId | "latest" };
 };
 
-/** The local time the history table shows, `YYYY-MM-DD HH:MM`. */
-function formatCreatedAt(at: number): string {
-	const date = new Date(at);
-	const pad = (value: number): string => String(value).padStart(2, "0");
-	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-/**
- * Print one row per conversation, newest first: ID, lane, local creation time, and the title, with an
- * `[archived] ` prefix on archived rows. Ancestry shows through the fork's `↳ ` title mark only, so
- * the lane column keeps a stable width.
- */
-async function printHistory(project: string, db: string | undefined): Promise<void> {
-	const path = db ?? projectDatabasePath(project);
-	const storage = await openNodeSqliteStorage(path, { project });
-	try {
-		const summaries: ConversationSummary[] = [];
-		let cursor: Cursor | undefined;
-		do {
-			const page = await storage.scanConversationSummaries({ archived: "include" }, 100, cursor, BACKGROUND_CONTEXT);
-			summaries.push(...page.items);
-			cursor = page.next;
-		} while (cursor !== undefined);
-		if (summaries.length === 0) {
-			process.stdout.write(`no history in project "${project}" (${path})\n`);
-			return;
-		}
-		const idWidth = Math.max("id".length, ...summaries.map((summary) => String(summary.id).length));
-		const laneWidth = Math.max("lane".length, ...summaries.map((summary) => summary.meta.lane.length));
-		const createdWidth = "created".length;
-		const rows = summaries.map((summary) => ({
-			id: String(summary.id),
-			lane: summary.meta.lane,
-			created: formatCreatedAt(summary.meta.createdAt),
-			title: `${summary.meta.archivedAt === undefined ? "" : "[archived] "}${summary.meta.title}`,
-		}));
-		const line = (columns: readonly string[]): string =>
-			`${columns[0]!.padEnd(idWidth)}  ${columns[1]!.padEnd(laneWidth)}  ${columns[2]!.padEnd(createdWidth)}  ${columns[3]}`;
-		process.stdout.write(`${line(["id", "lane", "created", "title"])}\n`);
-		for (const row of rows) process.stdout.write(`${line([row.id, row.lane, row.created, row.title])}\n`);
-	} finally {
-		await storage.close(BACKGROUND_CONTEXT);
-	}
-}
-
 function usage(): string {
 	const providers = oauthProviderNames().join("\n");
 	return `usage:
   tg-sec login [provider]   Login to an OAuth provider
   tg-sec list               List OAuth providers
-  tg-sec serve [options]    Open the campaign WebUI sidecar
   tg-sec [options]          Run the smoke turn
 
-serve options:
-  --project <name>          Campaign project (default: main)
-  --lane redteam|ctf|src    Campaign lane (default: redteam)
-  --mode strict|judge-auto|auto|yolo
-                            Permission mode (default: the persisted tg.sec.mode, else auto)
-  --model <provider/model>  Model to run (default: TG_SEC_MODEL, the remembered model,
-                            then the first authenticated model)
-  --faux                    Local echo model: no credentials, no egress
-  --history                 Print this project's history conversations and exit
-  --session <id>            Restore by forking this history conversation; it stays read-only
-  --continue                Restore by forking the newest non-archived root conversation
-  --host <address>          Bind address (default: 127.0.0.1)
-  --port <number>           Port (default: 0, the OS picks a free one)
-  --target <name>           Display name of the campaign target (default: the project)
-  --db <file>               SQLite file (default: per-project XDG path)
-  --evidence <dir>          Evidence directory (default: per-project XDG path)
-  --scope <file>            Scope config (default: <data>/projects/<project>/scope.json)
+the WebUI sidecar moved to "tgsec --webui"
 
 smoke options:
   --project <name>          Campaign project (default: smoke)
@@ -238,120 +167,6 @@ function parseArgs(argv: readonly string[]): CliOptions {
 	};
 }
 
-function parseServeArgs(argv: readonly string[]): ServeOptions | undefined {
-	let project = "main";
-	let lane: SecAgentLane = "redteam";
-	let mode: TgSecPermissionMode | undefined;
-	let model: string | undefined;
-	let faux = false;
-	let db: string | undefined;
-	let evidence: string | undefined;
-	let scope: string | undefined;
-	let host: string | undefined;
-	let port: number | undefined;
-	let target: string | undefined;
-	let history = false;
-	let session: ConversationId | undefined;
-	let cont = false;
-
-	for (let index = 0; index < argv.length; index += 1) {
-		const flag = argv[index];
-		if (flag === "--help" || flag === "-h") {
-			process.stdout.write(usage());
-			return undefined;
-		}
-		if (flag === "--faux") {
-			faux = true;
-			continue;
-		}
-		if (flag === "--history") {
-			history = true;
-			continue;
-		}
-		if (flag === "--continue") {
-			cont = true;
-			continue;
-		}
-		const value = argv[index + 1];
-		if (flag === undefined || value === undefined)
-			throw new TypeError(`tg-sec serve: ${flag ?? "positional"} needs a value`);
-		index += 1;
-		switch (flag) {
-			case "--project":
-				project = value;
-				break;
-			case "--lane":
-				if (!isServeLane(value)) throw new TypeError(`tg-sec serve: unknown lane ${JSON.stringify(value)}`);
-				lane = value;
-				break;
-			case "--mode":
-				if (!isServeMode(value)) throw new TypeError(`tg-sec serve: unknown mode ${JSON.stringify(value)}`);
-				mode = value;
-				break;
-			case "--model":
-				model = value;
-				break;
-			case "--db":
-				db = value;
-				break;
-			case "--evidence":
-				evidence = value;
-				break;
-			case "--scope":
-				scope = value;
-				break;
-			case "--host":
-				host = value;
-				break;
-			case "--port": {
-				const parsed = Number(value);
-				if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
-					throw new TypeError(`tg-sec serve: --port must be an integer in 0..65535, got ${JSON.stringify(value)}`);
-				}
-				port = parsed;
-				break;
-			}
-			case "--target":
-				target = value;
-				break;
-			case "--session": {
-				const parsed = Number(value);
-				if (!Number.isSafeInteger(parsed) || parsed < 1) {
-					throw new TypeError(`tg-sec serve: --session must be a positive integer, got ${JSON.stringify(value)}`);
-				}
-				session = parsed as ConversationId;
-				break;
-			}
-			default:
-				throw new TypeError(`tg-sec serve: unknown argument ${flag}`);
-		}
-	}
-	if (history && faux) throw new TypeError("tg-sec serve: --history cannot be combined with --faux");
-	if (history && session !== undefined) {
-		throw new TypeError("tg-sec serve: --history cannot be combined with --session");
-	}
-	if (history && cont) throw new TypeError("tg-sec serve: --history cannot be combined with --continue");
-	if (session !== undefined && cont) throw new TypeError("tg-sec serve: --session cannot be combined with --continue");
-	if (faux && model !== undefined) throw new TypeError("tg-sec serve: --faux cannot be combined with --model");
-	return {
-		project,
-		lane,
-		...(mode === undefined ? {} : { mode }),
-		...(model === undefined ? {} : { model }),
-		...(faux ? { faux: true } : {}),
-		...(history ? { history: true } : {}),
-		...(session === undefined ? {} : { resume: { source: session } }),
-		...(cont ? { resume: { source: "latest" as const } } : {}),
-		...(db === undefined ? {} : { db }),
-		...(evidence === undefined ? {} : { evidence }),
-		...(scope === undefined ? {} : { scope }),
-		...(host === undefined ? {} : { host }),
-		...(port === undefined ? {} : { port }),
-		...(target === undefined ? {} : { target }),
-		cwd: process.cwd(),
-	};
-}
-
 /**
  * Batch-3 smoke entry (`tg-sec`): open the campaign for real — SQLite storage, guard wiring, the
  * core extension — and run one scripted faux turn that calls `bash`, so the first `beforeTool`
@@ -367,16 +182,7 @@ async function main(): Promise<void> {
 		await runAuthCommand(command, argv.slice(1));
 		return;
 	}
-	if (command === "serve") {
-		const serveOptions = parseServeArgs(argv.slice(1));
-		if (serveOptions === undefined) return;
-		if (serveOptions.history === true) {
-			await printHistory(serveOptions.project, serveOptions.db);
-			return;
-		}
-		await runServeCommand(serveOptions);
-		return;
-	}
+	if (command === "serve") throw new TypeError('tg-sec: serve moved to "tgsec --webui"');
 	if (command === "help" || command === "--help" || command === "-h") {
 		process.stdout.write(usage());
 		return;

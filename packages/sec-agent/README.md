@@ -54,11 +54,12 @@ the transcript. Connection targets are scoped by `--scope <file>` or the per-pro
 `<data>/projects/<project>/scope.json`; a missing file leaves the registry empty, so every target
 is a forced ask.
 
-`tg-sec serve` starts the campaign WebUI sidecar on the same runtime:
+`tgsec --webui` starts the campaign WebUI sidecar on the same runtime (the flagless `tgsec`
+opens the interactive shell instead):
 
 ```bash
-tg-sec serve --project demo --lane redteam
-tg-sec serve --faux --project demo
+tgsec --webui --project demo --lane redteam
+tgsec --webui --faux --project demo
 ```
 
 It prints a `webui` URL and a single-use `login` URL. The login ticket expires after five minutes;

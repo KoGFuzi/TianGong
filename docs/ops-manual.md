@@ -79,21 +79,22 @@ tiangongConfigPath("settings.json");
 
 `TG_CODING_AGENT_DIR` 是单目录覆盖：设置后，两个根都指向该目录。它供测试和嵌入式进程使用，不能用相对路径。上游服务（版本检查、远端模型目录、managed 安装、`/share` 查看器）默认关闭，分别由 `TG_VERSION_CHECK_URL`、`TG_MODEL_CATALOG_URL`、`TG_INSTALLER_API_BASE`、`TG_SHARE_VIEWER_URL` 显式开启。
 
-### 2.5 WebUI sidecar（`tg-sec serve`）
+### 2.5 WebUI sidecar（`tgsec --webui`）
 
-`tg-sec serve` 在同一个 campaign 运行时上启动只读 WebUI sidecar（`@OnePanda-TgSec/tg-sec-server`）：
+`tgsec --webui` 在同一个 campaign 运行时上启动只读 WebUI sidecar（`@OnePanda-TgSec/tg-sec-server`）：
 订阅 harness 的 `watchEvents`，把行动树与证据投影成 StrikeAgent 同构图，通过 WebSocket 推送
-增量帧，并接受浏览器 steering。它使用与 CLI/TUI 相同的 campaign 数据库；不另建状态。
+增量帧，并接受浏览器 steering。它使用与 CLI/TUI 相同的 campaign 数据库；不另建状态。默认（不带
+`--webui`）`tgsec` 打开的是交互壳，不是本节的服务。
 
 ```bash
-tg-sec serve --project demo --lane redteam
-tg-sec serve --faux --project demo          # 本地回显模型，无凭据、无外联
+tgsec --webui --project demo --lane redteam
+tgsec --webui --faux --project demo      # 本地回显模型，无凭据、无外联
 ```
 
 可选项：`--host <地址>`（默认 `127.0.0.1`）、`--port <端口>`（默认 `0`，由系统分配）、
 `--target <标签>`（图上根节点标题）、`--mode <模式>`（启动时切换 guard 模式）、`--db`/
-`--evidence`/`--scope`/`--cwd` 与其它 `tg-sec` 命令一致。未解析到模型时命令直接失败并提示
-`tg-sec login` 或 `--faux`。
+`--evidence`/`--scope` 与 `tgsec` 其它模式一致。未解析到模型时命令直接失败并提示
+`tgsec login` 或 `--faux`。
 
 启动后终端打印两个 URL：
 
@@ -225,11 +226,11 @@ await storage.backup("/backup/session-2026-10-09.sqlite", context);
   INSERT-only，因此与 `deleteConversation` 同类，是 commit 写路径之外的显式生命周期调用，缺省
   字段保持原值，`updatedAt` 每次接受调用都重打；会话不存在返回 `undefined` 不抛。
 
-CLI 三个标志（`tg-sec` 与 `tg-sec serve` 都接受）：
+CLI 三个标志（`tgsec` 的交互壳与 `--webui`、`tg-sec` 冒烟入口都接受）：
 
 | 标志 | 语义 |
 | --- | --- |
-| `--history` | 打印本项目的会话表（id / lane / 创建时间 / 标题，归档行带 `[archived] ` 前缀）后退出；不开模型、不开 WebUI。与 `--session`、`--continue`（serve 下还有 `--faux`）互斥 |
+| `--history` | 打印本项目的会话表（id / lane / 创建时间 / 标题，归档行带 `[archived] ` 前缀）后退出；不开模型、不开前端，无需终端。与 `--session`、`--continue`、`--faux` 互斥 |
 | `--session <id>` | 从该会话 **fork 出一条新会话**续写；源会话保持只读。会话不存在报 `Conversation <id> is not in <db 路径>`，源会话没有任何 entry 报 `Conversation <id> has no history to restore` |
 | `--continue` | 等价 `--session` 取「最近一条非归档根会话」；无历史时 stderr 提示并照常开根会话（不是错误）。与 `--session` 互斥 |
 
@@ -237,8 +238,9 @@ CLI 三个标志（`tg-sec` 与 `tg-sec serve` 都接受）：
 stderr 打一行 `tg-sec: restoring conversation <id> (lane <源 lane>) into a <本次 lane> campaign;
 guard policy follows <本次 lane>`，取证语境以本次为准。
 
-**本期限制**：WebUI（`tg-sec serve`）仍只投影当前运行的活动会话，不会话列表、不显示 fork 到了
-哪里；历史列举与恢复的唯一入口是 CLI。TUI 同样未提供历史选择器。
+**本期限制**：WebUI（`tgsec --webui`）仍只投影当前运行的活动会话，不会话列表、不显示 fork 到了
+哪里；历史列举与恢复的入口是 CLI 旗标。TUI 与 WebUI 壳内均未提供会话选择器（TUI 可用
+`--session`/`--continue` 旗标恢复，但壳内没有列表）。
 
 ---
 

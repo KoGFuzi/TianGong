@@ -282,7 +282,7 @@ on `tg-env`: the env resolver is typed by gibraltar (`env/node`, `EnvTarget`), s
 env costs the campaign runtime no edge on the env package. `sec-agent` is the top of this graph:
 nothing in this workspace depends on it, which is what keeps its runtime loose. `codemode` and `mcp`
 are vendored leaves: they depend on nothing here and are reachable only by their upstream names.
-`sec-server` is not a leaf because `sec-agent` hosts its `tg-sec serve` command, but the edge is
+`sec-server` is not a leaf because `sec-agent` hosts its `tgsec --webui` command, but the edge is
 one-way.
 
 Do not call `bun test`. Bun reserves that name for its own runner, which would silently bypass

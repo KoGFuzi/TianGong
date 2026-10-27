@@ -5,7 +5,7 @@ action tree and evidence store onto the StrikeAgent graph contract, and serves a
 dependency-free browser shell over loopback HTTP and WebSocket.
 
 The package is the read/projection side of the campaign. It owns no agent loop, no storage and no
-tool policy: the host (`tg-sec serve` in `@OnePanda-TgSec/tg-sec-agent`) hands it a harness, a
+tool policy: the host (`tgsec --webui` in `@OnePanda-TgSec/tg-sec-agent`) hands it a harness, a
 projection read, and a `steer` entry point. `sec-agent` depends on this package; this package depends
 only on `chord` and `tg-gibraltar`.
 

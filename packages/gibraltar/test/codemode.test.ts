@@ -26,7 +26,7 @@ import { NodeExecutionEnv } from "../src/env/node.ts";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { allEntries, type ChatSetup, chatSetup, openChat } from "./chat-support.ts";
 import { addHooks, addTool } from "./harness-support.ts";
-import { ControlledStorage, context } from "./session-support.ts";
+import { ControlledStorage, context, conversationMeta } from "./session-support.ts";
 import { aborted, type Deferred, deferred, eventually } from "./task-support.ts";
 
 const Parameters = Type.Object({ text: Type.Optional(Type.String()), id: Type.Optional(Type.Number()) });
@@ -872,7 +872,11 @@ describe("durable code mode", () => {
 		expect(texts).toEqual(["1", "[1]"]);
 		// A fork at the first input is from before the first script stored anything.
 		chat.setup.faux.setResponses([script(`return [load("k") ?? null]`), DONE]);
-		const fork = await root.fork(firstUser.id, { ownership: { kind: "ownerless" } }, context);
+		const fork = await root.fork(
+			firstUser.id,
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
 		await (await fork.submit({ type: "input", content: "fork" }, context)).wait(context);
 		const forkResult = (await allEntries(fork)).filter((entry) => ToolResultEntry.is(entry)).at(-1)!;
 		expect((forkResult.model![0] as { content: { text: string }[] }).content[1]!.text).toBe("[null]");

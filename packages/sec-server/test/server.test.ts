@@ -46,7 +46,7 @@ async function setup(): Promise<Setup> {
 	const models = createModels();
 	models.setProvider(faux.provider);
 	const harness = await Harness.open(new MemoryStorage(), { models, registry: createRegistry() }, context);
-	const root = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" } } });
+	const root = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" } }, meta: { title: "server", cwd: "", lane: "", createdAt: 1, updatedAt: 1 } });
 	faux.setResponses([fauxAssistantMessage("noted"), fauxAssistantMessage("noted"), fauxAssistantMessage("noted")]);
 
 	const approvals = createSecApprovalQueue();

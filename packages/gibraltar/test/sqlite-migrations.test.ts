@@ -11,7 +11,15 @@ import {
 	type SqliteMigration,
 } from "../src/storage/sqlite/index.ts";
 import { openNodeSqliteDatabase, openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
-import { type EntryId, ROOT_CONVERSATION_ID } from "../src/types.ts";
+import { type ConversationMeta, type EntryId, ROOT_CONVERSATION_ID } from "../src/types.ts";
+
+const conversationMeta = (title: string): ConversationMeta => ({
+	title,
+	cwd: "",
+	lane: "test",
+	createdAt: 1,
+	updatedAt: 1,
+});
 
 const directories = new Set<string>();
 
@@ -105,7 +113,7 @@ describe("durable SQLite migrations", () => {
 		const storage = await openNodeSqliteStorage(path);
 		await storage.commit(
 			[
-				{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } },
+				{ type: "conversation", value: { id: ROOT_CONVERSATION_ID }, meta: conversationMeta("fixture") },
 				{
 					type: "entry",
 					value: {

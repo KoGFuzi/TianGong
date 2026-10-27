@@ -12,7 +12,15 @@ import {
 } from "../src/storage/sqlite/migrations.ts";
 import { openDefaultSqliteStorage, openNodeSqliteDatabase, openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { SqliteStorage } from "../src/storage/sqlite/storage.ts";
-import { type ConversationId, type EntryId, ROOT_CONVERSATION_ID } from "../src/types.ts";
+import { type ConversationId, type ConversationMeta, type EntryId, ROOT_CONVERSATION_ID } from "../src/types.ts";
+
+const conversationMeta = (title: string): ConversationMeta => ({
+	title,
+	cwd: "",
+	lane: "test",
+	createdAt: 1,
+	updatedAt: 1,
+});
 
 const directories: string[] = [];
 afterAll(async () => {
@@ -97,7 +105,10 @@ describe("default storage location", () => {
 			const storage = await openDefaultSqliteStorage();
 			try {
 				expect(storage.project).toBe(DEFAULT_PROJECT_ID);
-				await storage.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], BACKGROUND_CONTEXT);
+				await storage.commit(
+					[{ type: "conversation", value: { id: ROOT_CONVERSATION_ID }, meta: conversationMeta("fixture") }],
+					BACKGROUND_CONTEXT,
+				);
 				expect(await storage.conversation(ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT)).toBeDefined();
 			} finally {
 				await storage.close(BACKGROUND_CONTEXT);
@@ -115,7 +126,10 @@ describe("project isolation", () => {
 
 		const alpha = await openNodeSqliteStorage(path, { project: "alpha" });
 		const id = await alpha.mintId<ConversationId>();
-		await alpha.commit([{ type: "conversation", value: { id } }], BACKGROUND_CONTEXT);
+		await alpha.commit(
+			[{ type: "conversation", value: { id }, meta: conversationMeta("fixture") }],
+			BACKGROUND_CONTEXT,
+		);
 		await alpha.close(BACKGROUND_CONTEXT);
 
 		const beta = await openNodeSqliteStorage(path, { project: "beta" });
@@ -134,7 +148,7 @@ describe("project isolation", () => {
 		const alpha = await openNodeSqliteStorage(path, { project: "alpha" });
 		await alpha.commit(
 			[
-				{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } },
+				{ type: "conversation", value: { id: ROOT_CONVERSATION_ID }, meta: conversationMeta("fixture") },
 				{
 					type: "entry",
 					value: { id: idFromNumber<EntryId>(2), conversationId: ROOT_CONVERSATION_ID, kind: "cached" },
@@ -163,7 +177,10 @@ describe("project isolation", () => {
 		const path = await tempFile("same-project.sqlite");
 		const first = await openNodeSqliteStorage(path, { project: "shared" });
 		const id = await first.mintId<ConversationId>();
-		await first.commit([{ type: "conversation", value: { id } }], BACKGROUND_CONTEXT);
+		await first.commit(
+			[{ type: "conversation", value: { id }, meta: conversationMeta("fixture") }],
+			BACKGROUND_CONTEXT,
+		);
 		await first.close(BACKGROUND_CONTEXT);
 
 		const second = await openNodeSqliteStorage(path, { project: "shared" });
@@ -193,7 +210,10 @@ describe("version 2 migration", () => {
 		const database = await openNodeSqliteDatabase(path);
 		await applySqliteMigrations(database, SQLITE_MIGRATIONS.slice(0, 1));
 		const seeded = await SqliteStorage.open(database);
-		await seeded.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], BACKGROUND_CONTEXT);
+		await seeded.commit(
+			[{ type: "conversation", value: { id: ROOT_CONVERSATION_ID }, meta: conversationMeta("fixture") }],
+			BACKGROUND_CONTEXT,
+		);
 		await seeded.close(BACKGROUND_CONTEXT);
 
 		const migrated = await openNodeSqliteStorage(path);

@@ -14,11 +14,11 @@ import {
 } from "@OnePanda-TgSec/tg-gibraltar";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { addTask, assistant, describeMessage, openHarness, system, toolResult, user } from "./harness-support.ts";
-import { context } from "./session-support.ts";
+import { context, conversationMeta } from "./session-support.ts";
 
 async function setup() {
 	const { harness } = await openHarness(new MemoryStorage());
-	const root = await harness.root(context);
+	const root = await harness.root(context, { meta: conversationMeta("root") });
 	const append = (draft: EntryDraft): Promise<EntryRecord> =>
 		root.commit((tx) => tx.appendEntry(root.id, draft), context);
 	const message = (model: Message, kind = "message"): Promise<EntryRecord> => append({ kind, model: [model] });
@@ -49,7 +49,7 @@ async function countingSetup(options: { readonly settings?: HarnessSettings; rea
 	});
 	const registry = createRegistry();
 	const harness = await Harness.open(storage, { models: createModels(), registry, ...options }, context);
-	const root = await harness.root(context);
+	const root = await harness.root(context, { meta: conversationMeta("root") });
 	const first = await root.commit(
 		(tx) => tx.appendEntry(root.id, { kind: "message", model: [user("first")] }),
 		context,
@@ -378,7 +378,11 @@ describe("conversation context", () => {
 		const tail = await message(assistant("after reset"));
 
 		for (const at of [first, call, result, edit, reset, tail]) {
-			const fork = await root.fork(at.id, { ownership: { kind: "ownerless" } }, context);
+			const fork = await root.fork(
+				at.id,
+				{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+				context,
+			);
 			expect(await root.context(context, { at: at.id })).toEqual(await fork.context(context));
 		}
 		// Stepped back before the edit and the reset: neither applies, and a cut call gets synthesized results.
@@ -391,7 +395,11 @@ describe("conversation context", () => {
 		expect(await root.context(context, { at: tail.id })).toEqual(await root.context(context));
 		expect(await root.context(context, {})).toEqual(await root.context(context));
 
-		const other = await root.fork(first.id, { ownership: { kind: "ownerless" } }, context);
+		const other = await root.fork(
+			first.id,
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
 		await expect(other.context(context, { at: tail.id })).rejects.toThrow("is not visible");
 	});
 
@@ -401,7 +409,11 @@ describe("conversation context", () => {
 		const call = await message(assistant("calling", { calls: ["x", "y"] }));
 		await message(toolResult("x"));
 		const second = await message(toolResult("y"));
-		const child = await root.fork(call.id, { ownership: { kind: "ownerless" } }, context);
+		const child = await root.fork(
+			call.id,
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
 		const childView = await child.context(context);
 		expect(childView.messages.map(describeMessage)).toEqual([
 			"user:go",
@@ -664,7 +676,7 @@ describe("conversation context", () => {
 					// A fork sees its parent's entries through the fork point and extends with its own.
 					const fork = await root.fork(
 						written[random(written.length)]!.id,
-						{ ownership: { kind: "ownerless" } },
+						{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
 						taskContext,
 					);
 					for (let step = 0; step < 20; step++) {
@@ -733,7 +745,11 @@ describe("conversation context", () => {
 					expect(read2.messages.slice(0, 3)).toEqual(["system:plan", "user:first", "assistant:old 0"]);
 
 					// A system message the cached range already has keeps a later first `tg.system` entry in place.
-					const fork = await root.fork(first.id, { ownership: { kind: "ownerless" } }, taskContext);
+					const fork = await root.fork(
+						first.id,
+						{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+						taskContext,
+					);
 					await append(fork.id, { kind: "message", model: [assistant("answer")] });
 					await append(fork.id, { kind: "host.system", model: [system({ note: "Note." })] });
 					expect((await read(fork)).messages).toEqual(["user:first", "assistant:answer", "system:note"]);
@@ -743,7 +759,11 @@ describe("conversation context", () => {
 					expect(read2.messages).toEqual(["user:first", "assistant:answer", "system:note", "system:note"]);
 
 					// An omitted system message still rules out a later baseline; the extended read keeps that.
-					const omitted = await root.fork(first.id, { ownership: { kind: "ownerless" } }, taskContext);
+					const omitted = await root.fork(
+						first.id,
+						{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+						taskContext,
+					);
 					await append(omitted.id, { kind: "message", model: [assistant("answer")] });
 					let host: EntryRecord | undefined;
 					await runtime.commit(async (tx) => {
@@ -761,7 +781,11 @@ describe("conversation context", () => {
 					expect(read2.messages).toEqual(["user:first", "assistant:answer", "system:legacy"]);
 
 					// A first `tg.system` entry without a system message leaves no baseline for a later one to take.
-					const empty = await root.fork(first.id, { ownership: { kind: "ownerless" } }, taskContext);
+					const empty = await root.fork(
+						first.id,
+						{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+						taskContext,
+					);
 					await append(empty.id, { kind: "tg.system" });
 					await append(empty.id, { kind: "message", model: [assistant("answer")] });
 					expect((await read(empty)).messages).toEqual(["user:first", "assistant:answer"]);
@@ -836,7 +860,7 @@ describe("conversation context", () => {
 		});
 		const registry = createRegistry();
 		const harness = await Harness.open(storage, { models: createModels(), registry }, context);
-		const root = await harness.root(context);
+		const root = await harness.root(context, { meta: conversationMeta("root") });
 		await root.commit((tx) => tx.appendEntry(root.id, { kind: "message", model: [user("hello")] }), context);
 		const Mutate = defineTask<Record<string, never>, { phase: "run" }, null>({
 			name: "test.context-shallow",

@@ -3,13 +3,24 @@ import { registerStorageConformance } from "@OnePanda-TgSec/tg-gibraltar/testing
 import { describe, expect, it } from "vitest";
 import { idFromNumber, seqFromNumber } from "../src/ids.ts";
 import { MemoryStorage } from "../src/storage/memory.ts";
-import { type EntryId, ROOT_CONVERSATION_ID } from "../src/types.ts";
+import { type ConversationMeta, type EntryId, ROOT_CONVERSATION_ID } from "../src/types.ts";
+
+const conversationMeta = (title: string): ConversationMeta => ({
+	title,
+	cwd: "",
+	lane: "test",
+	createdAt: 1,
+	updatedAt: 1,
+});
 
 registerStorageConformance({ describe, expect, it }, "MemoryStorage", (use) => use(new MemoryStorage()));
 
 it("does not expose retained state through a prepared commit", async () => {
 	const storage = new MemoryStorage();
-	await storage.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], BACKGROUND_CONTEXT);
+	await storage.commit(
+		[{ type: "conversation", value: { id: ROOT_CONVERSATION_ID }, meta: conversationMeta("fixture") }],
+		BACKGROUND_CONTEXT,
+	);
 	const entryId = idFromNumber<EntryId>(2);
 	const prepared = storage.prepareCommit([
 		{

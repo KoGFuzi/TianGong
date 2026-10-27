@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
-import { ControlledStorage, context, flush } from "./session-support.ts";
+import { ControlledStorage, context, conversationMeta, flush } from "./session-support.ts";
 import { aborted, completed, deferred, eventually, openTasks } from "./task-support.ts";
 
 type ParentState = { phase: "spawn" } | { phase: "join"; child: TaskId } | { phase: "finish" };
@@ -44,8 +44,8 @@ function family(gates: { readonly child: Promise<void>; readonly late: Promise<v
 				const ownership = { kind: "task", taskId: task.id } as const;
 				// Two conversations in a commit that leaves the parent's record unchanged.
 				await runtime.commit(async (tx) => {
-					await tx.createConversation({ ownership });
-					await tx.createConversation({ ownership });
+					await tx.createConversation({ ownership, meta: conversationMeta("test") });
+					await tx.createConversation({ ownership, meta: conversationMeta("test") });
 					return undefined;
 				}, ctx);
 				await runtime.commit(async (tx) => {
@@ -86,7 +86,7 @@ describe("task graph view", () => {
 		const late = deferred();
 		const { Parent, Child } = family({ child: child.promise, late: late.promise });
 		const { harness } = await openTasks(new MemoryStorage(), [Parent, Child]);
-		const root = await harness.root(context);
+		const root = await harness.root(context, { meta: conversationMeta("root") });
 		const seen: TaskGraph[] = [];
 		const observe = async () => {
 			const opened = await harness.taskGraph(context);
@@ -184,11 +184,14 @@ describe("task graph view", () => {
 			},
 		});
 		const first = await openTasks(await openNodeSqliteStorage(path), [Work]);
-		const firstRoot = await first.harness.root(context);
+		const firstRoot = await first.harness.root(context, { meta: conversationMeta("root") });
 		const [foreground, background, owned] = await firstRoot.commit(async (tx) => {
 			const foreground = await tx.createTask(Work, null, { ownership: { kind: "conversation" } });
 			const background = await tx.createTask(Work, null, { ownership: { kind: "conversation" }, background: true });
-			const owned = await tx.createConversation({ ownership: { kind: "task", taskId: foreground } });
+			const owned = await tx.createConversation({
+				ownership: { kind: "task", taskId: foreground },
+				meta: conversationMeta("test"),
+			});
 			return [foreground, background, owned.id] as const;
 		}, context);
 		first.harness.resume();
@@ -249,8 +252,11 @@ describe("task graph view", () => {
 					await runtime.commit(async (tx) => {
 						const ownership = { kind: "task", taskId: task.id } as const;
 						const [forked, fresh] = await Promise.all([
-							tx.forkConversation(runtime.conversationId, task.input.at, { ownership }),
-							tx.createConversation({ ownership }),
+							tx.forkConversation(runtime.conversationId, task.input.at, {
+								ownership,
+								meta: conversationMeta("test"),
+							}),
+							tx.createConversation({ ownership, meta: conversationMeta("test") }),
 						]);
 						created.push(forked.id, fresh.id);
 						return undefined;
@@ -262,7 +268,7 @@ describe("task graph view", () => {
 			abort: async () => {},
 		});
 		const { harness } = await openTasks(new MemoryStorage(), [Spawner]);
-		const root = await harness.root(context);
+		const root = await harness.root(context, { meta: conversationMeta("root") });
 		const graph = await harness.taskGraph(context);
 		const id = await root.commit(async (tx) => {
 			const entry = await tx.appendEntry(root.id, { kind: "note" });
@@ -284,7 +290,7 @@ describe("task graph view", () => {
 	it("registers nothing for an acquisition cancelled while it waits for the line", async () => {
 		const storage = new ControlledStorage();
 		const { harness } = await openTasks(storage, []);
-		const root = await harness.root(context);
+		const root = await harness.root(context, { meta: conversationMeta("root") });
 		await root.commit(
 			(tx) => tx.createTask(family(gatesNever()).Child, { late: false }, { ownership: { kind: "conversation" } }),
 			context,
@@ -327,7 +333,7 @@ describe("task graph view", () => {
 			abort: async () => {},
 		});
 		const { harness } = await openTasks(new MemoryStorage(), [Memo]);
-		const root = await harness.root(context);
+		const root = await harness.root(context, { meta: conversationMeta("root") });
 		const id = await root.commit((tx) => tx.createTask(Memo, null, { ownership: { kind: "conversation" } }), context);
 		const first = await harness.taskGraph(context);
 		const second = await harness.taskGraph(context);

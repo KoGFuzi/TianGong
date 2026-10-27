@@ -98,7 +98,16 @@ export async function openSecAgent(options: OpenSecAgentOptions): Promise<SecAge
 		},
 		options.context,
 	);
-	const root = await harness.root(options.context, { agent: { model: options.model, cwd: options.cwd } });
+	const root = await harness.root(options.context, {
+		agent: { model: options.model, cwd: options.cwd },
+		meta: {
+			title: options.project,
+			cwd: options.cwd,
+			lane: options.lane,
+			createdAt: now(),
+			updatedAt: now(),
+		},
+	});
 	harness.resume();
 
 	return {

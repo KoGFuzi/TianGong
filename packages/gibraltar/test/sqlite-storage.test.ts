@@ -11,6 +11,7 @@ import type { SqliteStorage } from "../src/storage/sqlite/index.ts";
 import { type NodeSqliteStorageOptions, openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import type {
 	ConversationId,
+	ConversationMeta,
 	DocumentCreate,
 	DocumentId,
 	EntryId,
@@ -23,6 +24,14 @@ import type {
 	TaskRecord,
 } from "../src/types.ts";
 import { ROOT_CONVERSATION_ID } from "../src/types.ts";
+
+const conversationMeta = (title: string): ConversationMeta => ({
+	title,
+	cwd: "",
+	lane: "test",
+	createdAt: 1,
+	updatedAt: 1,
+});
 
 const context = BACKGROUND_CONTEXT;
 const openStorages = new Set<SqliteStorage>();
@@ -138,7 +147,10 @@ function entry(id: EntryId, conversationId: ConversationId, data?: JsonValue): E
 }
 
 async function createRoot(storage: Storage): Promise<Seq> {
-	return storage.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], context);
+	return storage.commit(
+		[{ type: "conversation", value: { id: ROOT_CONVERSATION_ID }, meta: conversationMeta("fixture") }],
+		context,
+	);
 }
 
 function pendingTask(id: TaskId<JsonValue>): TaskRecord<JsonValue, JsonValue, JsonValue> {

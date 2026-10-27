@@ -17,6 +17,7 @@ import type {
 import type { ExecutionEnv, ShellOutputSkip, ShellOutputWindow } from "../env/index.ts";
 import type {
 	ConversationId,
+	ConversationMeta,
 	ConversationOwnership,
 	ConversationRecord,
 	Cursor,
@@ -471,6 +472,8 @@ export type ConversationCreateOptions = {
 	/** Applied in the creating commit after the creation hook's copy, before `init`. */
 	readonly agent?: AgentChange;
 	readonly init?: ConversationInit;
+	/** Staged through `tx.setConversationMeta` in the creating commit; absent leaves the caller's hook in charge. */
+	readonly meta?: ConversationMeta;
 };
 
 /** Curated tg-ai request options; absent fields use tg-ai defaults. */
@@ -705,7 +708,7 @@ export interface Harness extends Session {
 	/** Return the reserved root conversation, creating it with `agent` and `init` in one commit when absent. */
 	root(
 		context: Context,
-		options?: { readonly agent?: AgentChange; readonly init?: ConversationInit },
+		options?: { readonly agent?: AgentChange; readonly init?: ConversationInit; readonly meta?: ConversationMeta },
 	): Promise<Conversation>;
 	conversation(id: ConversationId, context: Context): Promise<Conversation | undefined>;
 	createConversation(options: ConversationCreateOptions, context: Context): Promise<Conversation>;

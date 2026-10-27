@@ -29,7 +29,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { allEntries, type ChatSetup, chatSetup, openChat } from "./chat-support.ts";
 import { addHooks, addTool } from "./harness-support.ts";
-import { context } from "./session-support.ts";
+import { context, conversationMeta } from "./session-support.ts";
 import { aborted, deferred, eventually } from "./task-support.ts";
 
 const Parameters = Type.Object({ text: Type.Optional(Type.String()) });
@@ -691,7 +691,10 @@ describe("nested tool calls across a restart", () => {
 			tool("spawn", async (_args, api, callContext) => {
 				// A conversation the call owns, with background work in it, as a persistent subagent has.
 				background = await api.commit(async (tx) => {
-					const child = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
+					const child = await tx.createConversation({
+						ownership: { kind: "task", taskId: api.taskId },
+						meta: conversationMeta("test"),
+					});
 					return tx.createTask(Background, null, {
 						conversationId: child.id,
 						ownership: { kind: "conversation" },

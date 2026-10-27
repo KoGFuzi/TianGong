@@ -11,6 +11,7 @@ import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@One
 import { Type } from "typebox";
 import { createRegistry, defineExtension, defineTool, Harness, ToolResultEntry } from "../src/index.ts";
 import { MemoryStorage } from "../src/storage/memory.ts";
+import { conversationMeta } from "./session-support.ts";
 
 async function run(calls: number): Promise<{ ms: number; commits: number }> {
 	const faux = fauxProvider();
@@ -46,7 +47,10 @@ async function run(calls: number): Promise<{ ms: number; commits: number }> {
 		return commit(writes, commitContext);
 	};
 	const harness = await Harness.open(storage, { models, registry }, context);
-	const root = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" } } });
+	const root = await harness.root(context, {
+		meta: conversationMeta("root"),
+		agent: { model: { provider: "faux", modelId: "faux-1" } },
+	});
 	faux.setResponses([
 		fauxAssistantMessage([fauxToolCall("fan", { count: calls }, { id: "fan" })], { stopReason: "toolUse" }),
 		fauxAssistantMessage([fauxText("done")]),

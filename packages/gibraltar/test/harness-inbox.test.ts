@@ -38,7 +38,7 @@ import { recordUsage } from "../src/harness/usage.ts";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { allEntries, type ChatSetup, chatSetup, openChat, textOf, waitFor } from "./chat-support.ts";
 import { addHooks, addTool } from "./harness-support.ts";
-import { ControlledStorage, context, documentChanges, flush } from "./session-support.ts";
+import { ControlledStorage, context, conversationMeta, documentChanges, flush } from "./session-support.ts";
 import { aborted, type Deferred, deferred } from "./task-support.ts";
 
 const directories = new Set<string>();
@@ -872,7 +872,11 @@ describe("usage", () => {
 		expect(result.usage).toEqual(spent);
 
 		// A fork starts at zero; the Session total adds every conversation once.
-		const fork = await root.fork(entries.at(-1)!.id, { ownership: { kind: "ownerless" } }, context);
+		const fork = await root.fork(
+			entries.at(-1)!.id,
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
 		expect(await harness.snapshot(UsageDoc, fork.id, context)).toEqual({ models: {}, tools: {} });
 		await (await fork.submit({ type: "input", content: "b" }, context)).wait(context);
 		const forkUsage = (await harness.snapshot(UsageDoc, fork.id, context))!.models["faux/faux-1"]!;

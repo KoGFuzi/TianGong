@@ -38,7 +38,7 @@ import { NodeExecutionEnv } from "../src/env/node.ts";
 import { createBashTool, createEditTool, createReadTool } from "../src/tools/index.ts";
 import { allEntries, type ChatSetup, chatSetup, openChat, textOf } from "./chat-support.ts";
 import { addHooks, addTask, addTool, type Installed } from "./harness-support.ts";
-import { context } from "./session-support.ts";
+import { context, conversationMeta } from "./session-support.ts";
 import { aborted, deferred } from "./task-support.ts";
 
 const EchoParameters = Type.Object({ text: Type.Optional(Type.String()) });
@@ -551,11 +551,16 @@ describe("tool results", () => {
 				{},
 				{ ownership: { kind: "conversation" }, conversationId: first.root.id },
 			);
-			return (await tx.createConversation({ ownership: { kind: "task", taskId } })).id;
+			return (await tx.createConversation({ ownership: { kind: "task", taskId }, meta: conversationMeta("test") }))
+				.id;
 		}, context);
 		const child = (await first.harness.conversation(childId, context))!;
 		const other = await first.harness.createConversation(
-			{ ownership: { kind: "ownerless" }, agent: { model: { provider: "faux", modelId: "faux-1" } } },
+			{
+				ownership: { kind: "ownerless" },
+				agent: { model: { provider: "faux", modelId: "faux-1" } },
+				meta: conversationMeta("test"),
+			},
 			context,
 		);
 		for (const conversation of [first.root, child, other]) {

@@ -54,7 +54,10 @@ async function setup(): Promise<Stand> {
 	const models = createModels();
 	models.setProvider(faux.provider);
 	const harness = await Harness.open(new MemoryStorage(), { models, registry: createRegistry() }, context);
-	const root = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" } } });
+	const root = await harness.root(context, {
+		agent: { model: { provider: "faux", modelId: "faux-1" } },
+		meta: { title: "ask", cwd: "", lane: "", createdAt: 1, updatedAt: 1 },
+	});
 	const approvals = createSecApprovalQueue();
 	const wiring = await buildSecGuard({
 		session: harness,

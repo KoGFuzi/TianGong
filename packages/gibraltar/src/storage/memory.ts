@@ -5,6 +5,7 @@ import { idFromNumber, seqFromNumber } from "../ids.ts";
 import type {
 	ConversationDeletion,
 	ConversationId,
+	ConversationMeta,
 	ConversationQuery,
 	ConversationRecord,
 	Cursor,
@@ -74,6 +75,8 @@ type DocumentAddressIndex = {
 type State = {
 	recordTypes: Map<Id<string>, TableName>;
 	conversations: Map<ConversationId, ConversationRecord>;
+	/** Display metadata of each conversation, written in its creating commit beside the record. */
+	conversationMeta: Map<ConversationId, ConversationMeta>;
 	conversationIds: ConversationId[];
 	conversationIdsByOwnerConversation: Map<ConversationId, ConversationId[]>;
 	conversationIdsByOwnerTask: Map<TaskId, ConversationId[]>;
@@ -242,6 +245,7 @@ export class MemoryStorage implements Storage {
 	private readonly state: State = {
 		recordTypes: new Map(),
 		conversations: new Map(),
+		conversationMeta: new Map(),
 		conversationIds: [],
 		conversationIdsByOwnerConversation: new Map(),
 		conversationIdsByOwnerTask: new Map(),
@@ -342,6 +346,7 @@ export class MemoryStorage implements Storage {
 				case "conversation": {
 					this.state.recordTypes.set(write.value.id, "conversation");
 					this.state.conversations.set(write.value.id, write.value);
+					this.state.conversationMeta.set(write.value.id, write.meta);
 					insertSorted(this.state.conversationIds, write.value.id);
 					const owner = write.value.owner;
 					if (owner !== undefined) {
@@ -718,6 +723,7 @@ export class MemoryStorage implements Storage {
 		}
 		removeSorted(this.state.conversationIds, id);
 		this.state.conversations.delete(id);
+		this.state.conversationMeta.delete(id);
 		this.state.conversationIdsByOwnerConversation.delete(id);
 		const deletion: ConversationDeletion = {
 			conversationId: id,

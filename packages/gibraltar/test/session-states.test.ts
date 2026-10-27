@@ -1,7 +1,14 @@
 import type { ReplicatedStateDelivery } from "@OnePanda-TgSec/chord";
 import { defineDoc, defineDocFamily } from "@OnePanda-TgSec/tg-gibraltar";
 import { describe, expect, it } from "vitest";
-import { context, createConversation, documentChanges, flush, openTestSession } from "./session-support.ts";
+import {
+	context,
+	conversationMeta,
+	createConversation,
+	documentChanges,
+	flush,
+	openTestSession,
+} from "./session-support.ts";
 
 type State = { value: number; retained: { label: string } };
 
@@ -156,7 +163,13 @@ describe("Session document states", () => {
 			return created;
 		}, context);
 		const childId = await session.commit(
-			async (tx) => (await tx.forkConversation(parentId, entry.id, { ownership: { kind: "ownerless" } })).id,
+			async (tx) =>
+				(
+					await tx.forkConversation(parentId, entry.id, {
+						ownership: { kind: "ownerless" },
+						meta: conversationMeta("test"),
+					})
+				).id,
 			context,
 		);
 		const reads = storage.documentReadCount;

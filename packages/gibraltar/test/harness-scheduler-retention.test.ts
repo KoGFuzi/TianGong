@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SCHEDULER_INDEX_SIZES } from "../src/harness/harness.ts";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
-import { context } from "./session-support.ts";
+import { context, conversationMeta } from "./session-support.ts";
 import { aborted, type Deferred, deferred, eventually, openTasks, settled } from "./task-support.ts";
 
 const gates = new Map<string, Deferred<void>>();
@@ -147,7 +147,7 @@ async function open(storage?: Storage) {
 		Spawner,
 		Rejected,
 	]);
-	const root = await opened.harness.root(context);
+	const root = await opened.harness.root(context, { meta: conversationMeta("root") });
 	opened.harness.resume();
 	return { ...opened, root };
 }
@@ -160,7 +160,10 @@ async function status(harness: Harness, id: TaskId) {
 async function subagentCycle(harness: Harness, root: Conversation, parent: TaskId, n: number) {
 	const { tool, inner, child } = await root.commit(async (tx) => {
 		const tool = await tx.createTask(Hold, { name: `tool${n}` }, { ownership: { kind: "task", taskId: parent } });
-		const child = await tx.createConversation({ ownership: { kind: "task", taskId: tool } });
+		const child = await tx.createConversation({
+			ownership: { kind: "task", taskId: tool },
+			meta: conversationMeta("test"),
+		});
 		const inner = await tx.createTask(
 			Hold,
 			{ name: `inner${n}` },
@@ -200,7 +203,10 @@ describe("scheduler retention", () => {
 			const p = await tx.createTask(Hold, { name: "p" }, { ownership: { kind: "conversation" } });
 			const b = await tx.createTask(Hold, { name: "b" }, { ownership: { kind: "task", taskId: p } });
 			const a = await tx.createTask(Hold, { name: "a" }, { ownership: { kind: "task", taskId: b } });
-			const c = await tx.createConversation({ ownership: { kind: "task", taskId: a } });
+			const c = await tx.createConversation({
+				ownership: { kind: "task", taskId: a },
+				meta: conversationMeta("test"),
+			});
 			return { p, b, a, c: c.id };
 		}, context);
 		gate("a").resolve();
@@ -230,7 +236,10 @@ describe("scheduler retention", () => {
 			const p = await tx.createTask(Spawner, { name: "p", into: 0 }, { ownership: { kind: "conversation" } });
 			const b = await tx.createTask(Hold, { name: "b" }, { ownership: { kind: "task", taskId: p } });
 			const a = await tx.createTask(Hold, { name: "a" }, { ownership: { kind: "task", taskId: b } });
-			const c = await tx.createConversation({ ownership: { kind: "task", taskId: a } });
+			const c = await tx.createConversation({
+				ownership: { kind: "task", taskId: a },
+				meta: conversationMeta("test"),
+			});
 			return { p, b, c: c.id };
 		}, context);
 		// Point the spawner at C, now that its ID is known.
@@ -258,7 +267,10 @@ describe("scheduler retention", () => {
 		const tree = await root.commit(async (tx) => {
 			const p = await tx.createTask(Hold, { name: "p" }, { ownership: { kind: "conversation" } });
 			const b = await tx.createTask(Hold, { name: "b" }, { ownership: { kind: "task", taskId: p } });
-			const c = await tx.createConversation({ ownership: { kind: "task", taskId: b } });
+			const c = await tx.createConversation({
+				ownership: { kind: "task", taskId: b },
+				meta: conversationMeta("test"),
+			});
 			// A live child keeps P holding its abort until the input is withdrawn and the child ends.
 			const keep = await tx.createTask(Hold, { name: "keep" }, { ownership: { kind: "task", taskId: p } });
 			return { p, b, c: c.id, keep };
@@ -286,7 +298,10 @@ describe("scheduler retention", () => {
 		const tree = await root.commit(async (tx) => {
 			const p = await tx.createTask(Hold, { name: "p" }, { ownership: { kind: "conversation" } });
 			const b = await tx.createTask(Hold, { name: "b" }, { ownership: { kind: "task", taskId: p } });
-			const c = await tx.createConversation({ ownership: { kind: "task", taskId: b } });
+			const c = await tx.createConversation({
+				ownership: { kind: "task", taskId: b },
+				meta: conversationMeta("test"),
+			});
 			const keep = await tx.createTask(Hold, { name: "keep" }, { ownership: { kind: "task", taskId: p } });
 			return { p, b, c: c.id, keep };
 		}, context);
@@ -314,7 +329,10 @@ describe("scheduler retention", () => {
 		const { harness, root } = await open(storage);
 		const tree = await root.commit(async (tx) => {
 			const b = await tx.createTask(Hold, { name: "b" }, { ownership: { kind: "conversation" } });
-			const c = await tx.createConversation({ ownership: { kind: "task", taskId: b } });
+			const c = await tx.createConversation({
+				ownership: { kind: "task", taskId: b },
+				meta: conversationMeta("test"),
+			});
 			return { b, c: c.id };
 		}, context);
 		gate("b").resolve();
@@ -349,7 +367,10 @@ describe("scheduler retention", () => {
 		const tree = await root.commit(async (tx) => {
 			const p = await tx.createTask(Hold, { name: "p" }, { ownership: { kind: "conversation" } });
 			const b = await tx.createTask(Hold, { name: "b" }, { ownership: { kind: "task", taskId: p } });
-			const c = await tx.createConversation({ ownership: { kind: "task", taskId: b } });
+			const c = await tx.createConversation({
+				ownership: { kind: "task", taskId: b },
+				meta: conversationMeta("test"),
+			});
 			const old = await tx.createTask(
 				Hold,
 				{ name: "old" },
@@ -389,7 +410,10 @@ describe("scheduler retention", () => {
 		const tree = await root.commit(async (tx) => {
 			const p = await tx.createTask(Rejected, { into: 0 }, { ownership: { kind: "conversation" } });
 			const b = await tx.createTask(Hold, { name: "b" }, { ownership: { kind: "task", taskId: p } });
-			const c = await tx.createConversation({ ownership: { kind: "task", taskId: b } });
+			const c = await tx.createConversation({
+				ownership: { kind: "task", taskId: b },
+				meta: conversationMeta("test"),
+			});
 			return { p, b, c: c.id };
 		}, context);
 		await root.commit(async (tx) => {
@@ -413,7 +437,10 @@ describe("scheduler retention", () => {
 		// A live task D in conversation C, owned by ended B: after reopen D's chain is not loaded.
 		const tree = await opened.root.commit(async (tx) => {
 			const b = await tx.createTask(Hold, { name: "b" }, { ownership: { kind: "conversation" } });
-			const c = await tx.createConversation({ ownership: { kind: "task", taskId: b } });
+			const c = await tx.createConversation({
+				ownership: { kind: "task", taskId: b },
+				meta: conversationMeta("test"),
+			});
 			const d = await tx.createTask(
 				Hold,
 				{ name: "d" },
@@ -444,7 +471,10 @@ describe("scheduler retention", () => {
 			const p = await tx.createTask(Hold, { name: "p" }, { ownership: { kind: "conversation" } });
 			const b = await tx.createTask(Hold, { name: "b" }, { ownership: { kind: "task", taskId: p } });
 			const a = await tx.createTask(Hold, { name: "a" }, { ownership: { kind: "task", taskId: b } });
-			const c = await tx.createConversation({ ownership: { kind: "task", taskId: a } });
+			const c = await tx.createConversation({
+				ownership: { kind: "task", taskId: a },
+				meta: conversationMeta("test"),
+			});
 			const keep = await tx.createTask(Hold, { name: "keep" }, { ownership: { kind: "task", taskId: p } });
 			return { p, b, c: c.id, keep };
 		}, context);
@@ -545,11 +575,14 @@ describe("scheduler retention", () => {
 	// scheduler forgot it: the wait resumes at once.
 	it("lets a task wait on a forgotten ended owner", async () => {
 		const opened = await openTasks(await openNodeSqliteStorage(await sqlitePath()), [Hold, Waiter]);
-		const root = await opened.harness.root(context);
+		const root = await opened.harness.root(context, { meta: conversationMeta("root") });
 		opened.harness.resume();
 		const tree = await root.commit(async (tx) => {
 			const b = await tx.createTask(Hold, { name: "b" }, { ownership: { kind: "conversation" } });
-			const c = await tx.createConversation({ ownership: { kind: "task", taskId: b } });
+			const c = await tx.createConversation({
+				ownership: { kind: "task", taskId: b },
+				meta: conversationMeta("test"),
+			});
 			return { b, c: c.id };
 		}, context);
 		gate("b").resolve();

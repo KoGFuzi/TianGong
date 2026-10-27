@@ -23,6 +23,7 @@ import {
 import type { SessionImpl } from "../src/session/session.ts";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { retainedBytes } from "./heap-retained.ts";
+import { conversationMeta } from "./session-support.ts";
 
 /** Writes `tg.usage` of its conversation once, then completes. */
 const Work = defineTask<null, { phase: "work" }, null>({
@@ -54,7 +55,10 @@ async function run(conversations: number, documentRetentionMs: number) {
 		harness.resume();
 		let first: ConversationId | undefined;
 		const cycle = async (): Promise<void> => {
-			const conversation = await harness.createConversation({ ownership: { kind: "ownerless" } }, context);
+			const conversation = await harness.createConversation(
+				{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+				context,
+			);
 			first ??= conversation.id;
 			const task = await conversation.commit(
 				(tx) => tx.createTask(Work, null, { ownership: { kind: "conversation" } }),

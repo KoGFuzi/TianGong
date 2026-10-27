@@ -34,7 +34,7 @@ import { orderToolResults } from "../src/harness/context.ts";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { allEntries, type ChatSetup, chatSetup, openChat, textOf, toolsNamed, waitFor } from "./chat-support.ts";
 import { addHooks, addSection, addTask, addTool } from "./harness-support.ts";
-import { ControlledStorage, context } from "./session-support.ts";
+import { ControlledStorage, context, conversationMeta } from "./session-support.ts";
 import { aborted, type Deferred, deferred } from "./task-support.ts";
 
 const directories = new Set<string>();
@@ -1399,7 +1399,11 @@ describe("compaction estimates and interactions", () => {
 		const chat = await open();
 		await history(chat);
 		const entries = await allEntries(chat.root);
-		const fork = await chat.root.fork(entries.at(-1)!.id, { ownership: { kind: "ownerless" } }, context);
+		const fork = await chat.root.fork(
+			entries.at(-1)!.id,
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
 		chat.faux.summaries.push(summary());
 		const outcome = await result(chat, await fork.compact(undefined, context));
 		const submissionId = outcome.status === "completed" ? outcome.result.submissionId! : undefined;
@@ -1421,7 +1425,11 @@ describe("compaction estimates and interactions", () => {
 		const chat = await open();
 		await history(chat);
 		const entries = await allEntries(chat.root);
-		const fork = await chat.root.fork(entries.at(-1)!.id, { ownership: { kind: "ownerless" } }, context);
+		const fork = await chat.root.fork(
+			entries.at(-1)!.id,
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
 		const gate = deferred();
 		const reached = deferred();
 		chat.faux.summaries.push(gated(gate, summary(), reached));

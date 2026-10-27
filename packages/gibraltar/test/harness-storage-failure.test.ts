@@ -20,7 +20,7 @@ import { describe, expect, it } from "vitest";
 import { safeNow } from "../src/harness/harness.ts";
 import { conversationViews } from "../src/harness/view.ts";
 import { contained } from "../src/session/session.ts";
-import { ControlledStorage, context } from "./session-support.ts";
+import { ControlledStorage, context, conversationMeta } from "./session-support.ts";
 import { aborted, type Deferred, deferred, failedOf, openTasks } from "./task-support.ts";
 
 /** Waits for its signal, records that it saw it, and ends `aborted` through its abort handler. */
@@ -75,7 +75,7 @@ class FailingCalls extends ControlledStorage {
 async function started(storage: MemoryStorage) {
 	signals.length = 0;
 	const opened = await openTasks(storage, [Waiting]);
-	const root = await opened.harness.root(context);
+	const root = await opened.harness.root(context, { meta: conversationMeta("root") });
 	return { ...opened, root };
 }
 
@@ -225,11 +225,11 @@ describe("a failed Storage call", () => {
 		await expect(root.commit((tx) => tx.appendEntry(root.id, { kind: "note" }), context)).rejects.toBe(failure);
 		const failed = { name: "SessionFailed", cause: failure };
 		expect(() => harness.resume()).toThrow(expect.objectContaining(failed));
-		await expect(harness.root(context)).rejects.toMatchObject(failed);
+		await expect(harness.root(context, { meta: conversationMeta("root") })).rejects.toMatchObject(failed);
 		await expect(harness.conversation(root.id, context)).rejects.toMatchObject(failed);
-		await expect(harness.createConversation({ ownership: { kind: "ownerless" } }, context)).rejects.toMatchObject(
-			failed,
-		);
+		await expect(
+			harness.createConversation({ ownership: { kind: "ownerless" }, meta: conversationMeta("test") }, context),
+		).rejects.toMatchObject(failed);
 		await harness.close(context);
 	});
 
@@ -256,7 +256,7 @@ describe("a failed Storage call", () => {
 		});
 		const storage = new ControlledStorage();
 		const opened = await openTasks(storage, [Watcher]);
-		const root = await opened.harness.root(context);
+		const root = await opened.harness.root(context, { meta: conversationMeta("root") });
 		await root.commit((tx) => tx.createTask(Watcher, null, { ownership: { kind: "conversation" } }), context);
 		opened.harness.resume();
 		await watching.promise;
@@ -390,7 +390,7 @@ describe("a failed Storage call", () => {
 			},
 			context,
 		);
-		const root = await harness.root(context);
+		const root = await harness.root(context, { meta: conversationMeta("root") });
 		const id = await root.commit(
 			(tx) => tx.createTask(Stubborn, null, { ownership: { kind: "conversation" } }),
 			context,
@@ -458,7 +458,7 @@ describe("listener and report errors", () => {
 			rejecting.subscribeCommits(() => {
 				throw new Error("sync listener");
 			});
-			const again = await rejecting.root(context);
+			const again = await rejecting.root(context, { meta: conversationMeta("root") });
 			await again.commit((tx) => tx.appendEntry(again.id, { kind: "note" }), context);
 			await rejecting.close(context);
 			await new Promise((resolve) => setTimeout(resolve, 10));
@@ -583,7 +583,7 @@ describe("listener and report errors", () => {
 			abort: async () => {},
 		});
 		const opened = await openTasks(new MemoryStorage(), [Throws]);
-		const root = await opened.harness.root(context);
+		const root = await opened.harness.root(context, { meta: conversationMeta("root") });
 		const watch = await conversationViews(opened.harness).watch(root.id, context);
 		watch.start(async () => {
 			throw unformattable;
@@ -641,7 +641,7 @@ describe("listener and report errors", () => {
 			context,
 		);
 		watches.push(failedOf(harness).catch(() => "failed"));
-		const root = await harness.root(context);
+		const root = await harness.root(context, { meta: conversationMeta("root") });
 		const id = await root.commit(
 			(tx) => tx.createTask(Waiting, null, { ownership: { kind: "conversation" } }),
 			context,

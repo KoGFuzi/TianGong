@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
-import { context } from "./session-support.ts";
+import { context, conversationMeta } from "./session-support.ts";
 import { aborted, type Deferred, deferred, eventually, openTasks, settled } from "./task-support.ts";
 
 const gates = new Map<string, Deferred<void>>();
@@ -86,7 +86,10 @@ describe("scheduler indexes", () => {
 		const path = await sqlitePath();
 		const session = createSession(await openNodeSqliteStorage(path));
 		const ids = await session.commit(async (tx) => {
-			const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
+			const conversation = await tx.createConversation({
+				ownership: { kind: "ownerless" },
+				meta: conversationMeta("test"),
+			});
 			const top = await tx.createTask(
 				Hold,
 				{ name: "top" },
@@ -138,7 +141,7 @@ describe("scheduler indexes", () => {
 		};
 		const opened = await openTasks(storage, [Hold]);
 		const harness = opened.harness;
-		const root = await harness.root(context);
+		const root = await harness.root(context, { meta: conversationMeta("root") });
 		harness.resume();
 		const { top, middle, leaf } = await root.commit(async (tx) => {
 			const top = await tx.createTask(Hold, { name: "top" }, { ownership: { kind: "conversation" } });
@@ -161,12 +164,15 @@ describe("scheduler indexes", () => {
 	it("keeps a scope busy after reopen for work below an ended task whose chain is not loaded yet", async () => {
 		const path = await sqlitePath();
 		let opened = await openTasks(await openNodeSqliteStorage(path), [Hold]);
-		let root = await opened.harness.root(context);
+		let root = await opened.harness.root(context, { meta: conversationMeta("root") });
 		opened.harness.resume();
 		// root conversation -> owner (ends) -> conversation C -> inner (created after owner ended), as a subagent call's.
 		const { owner, child } = await root.commit(async (tx) => {
 			const owner = await tx.createTask(Hold, { name: "owner" }, { ownership: { kind: "conversation" } });
-			const child = await tx.createConversation({ ownership: { kind: "task", taskId: owner } });
+			const child = await tx.createConversation({
+				ownership: { kind: "task", taskId: owner },
+				meta: conversationMeta("test"),
+			});
 			return { owner, child: child.id };
 		}, context);
 		gate("owner").resolve();
@@ -191,7 +197,7 @@ describe("scheduler indexes", () => {
 		// root handle comes after.)
 		expect(await settled(opened.harness.waitForIdle(context))).toBe(false);
 		held.resolve();
-		root = await opened.harness.root(context);
+		root = await opened.harness.root(context, { meta: conversationMeta("root") });
 		opened.harness.resume();
 		gate("inner").resolve();
 		await opened.harness.waitForTask(inner, context);
@@ -204,7 +210,7 @@ describe("TaskRuntime.ownedTasks", () => {
 	it("lists the live tasks a task owns directly, in ID order, also after a reopen", async () => {
 		const path = await sqlitePath();
 		let opened = await openTasks(await openNodeSqliteStorage(path), [Hold, Probe]);
-		const root = await opened.harness.root(context);
+		const root = await opened.harness.root(context, { meta: conversationMeta("root") });
 		opened.harness.resume();
 		// The probe owns: two held tasks, one that ends, a grandchild below the first, and a conversation with a task.
 		const ids = await root.commit(async (tx) => {
@@ -213,7 +219,10 @@ describe("TaskRuntime.ownedTasks", () => {
 			const ends = await tx.createTask(Hold, { name: "ends" }, { ownership: { kind: "task", taskId: probe } });
 			const second = await tx.createTask(Hold, { name: "second" }, { ownership: { kind: "task", taskId: probe } });
 			await tx.createTask(Hold, { name: "grandchild" }, { ownership: { kind: "task", taskId: first } });
-			const child = await tx.createConversation({ ownership: { kind: "task", taskId: probe } });
+			const child = await tx.createConversation({
+				ownership: { kind: "task", taskId: probe },
+				meta: conversationMeta("test"),
+			});
 			await tx.createTask(
 				Hold,
 				{ name: "inside" },
@@ -244,7 +253,7 @@ describe("TaskRuntime.ownedTasks", () => {
 
 	it("rejects once its invocation has ended", async () => {
 		const opened = await openTasks(await openNodeSqliteStorage(await sqlitePath()), [Hold, Probe]);
-		const root = await opened.harness.root(context);
+		const root = await opened.harness.root(context, { meta: conversationMeta("root") });
 		opened.harness.resume();
 		const probe = await root.commit(
 			(tx) => tx.createTask(Probe, { name: "probe" }, { ownership: { kind: "conversation" } }),

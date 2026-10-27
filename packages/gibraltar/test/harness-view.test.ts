@@ -14,7 +14,7 @@ import {
 } from "@OnePanda-TgSec/tg-gibraltar";
 import { describe, expect, it } from "vitest";
 import { allEntries, chatSetup, openChat, waitFor } from "./chat-support.ts";
-import { context } from "./session-support.ts";
+import { context, conversationMeta } from "./session-support.ts";
 import { aborted, deferred } from "./task-support.ts";
 
 type Frame = { value: ConversationView; ops: readonly Op[] };
@@ -133,7 +133,10 @@ describe("conversation view", () => {
 	it("shares unchanged parts between revisions and skips commits that touch nothing mounted", async () => {
 		const setup = chatSetup();
 		const { harness, root } = await openChat(new MemoryStorage(), setup);
-		const other = await harness.createConversation({ ownership: { kind: "ownerless" } }, context);
+		const other = await harness.createConversation(
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
 		const { initial, frames, stop } = await record(root);
 		await other.commit((tx) => tx.appendEntry(other.id, { kind: "note" }), context);
 		await root.configure({ thinkingLevel: "high" }, context);
@@ -185,7 +188,7 @@ describe("conversation view", () => {
 		const { harness, root } = await openChat(new MemoryStorage(), chatSetup());
 		const a = await root.commit((tx) => tx.appendEntry(root.id, { kind: "a" }), context);
 		const b = await root.commit((tx) => tx.appendEntry(root.id, { kind: "b" }), context);
-		const fork = await root.fork(b.id, { ownership: { kind: "ownerless" } }, context);
+		const fork = await root.fork(b.id, { ownership: { kind: "ownerless" }, meta: conversationMeta("test") }, context);
 		const { initial, frames, stop } = await record(fork);
 		await fork.commit((tx) => tx.appendEntry(fork.id, { kind: "summary", head: b.id }), context);
 		await drained();
@@ -199,7 +202,11 @@ describe("conversation view", () => {
 	it("shows a fork's inherited entries and follows only the fork's own commits", async () => {
 		const { harness, root } = await openChat(new MemoryStorage(), chatSetup());
 		const first = await root.commit((tx) => tx.appendEntry(root.id, { kind: "first" }), context);
-		const fork = await root.fork(first.id, { ownership: { kind: "ownerless" } }, context);
+		const fork = await root.fork(
+			first.id,
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
 		const { initial, frames, stop } = await record(fork);
 		expect(initial.entries.map((entry) => entry.kind)).toEqual(["first"]);
 		expect(initial.conversation.parent).toEqual({ conversationId: root.id, at: first.id });

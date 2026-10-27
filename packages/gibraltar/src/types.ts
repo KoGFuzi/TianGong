@@ -730,7 +730,12 @@ export type StoredDocument = {
 
 /** One record or document mutation in an atomic storage commit. */
 export type StorageWrite =
-	| { readonly type: "conversation"; readonly value: ConversationRecord }
+	| {
+			readonly type: "conversation";
+			readonly value: ConversationRecord;
+			/** Display metadata persisted beside the record in the same creating commit. */
+			readonly meta: ConversationMeta;
+	  }
 	| { readonly type: "entry"; readonly value: EntryRecord }
 	| { readonly type: "task"; readonly value: TaskRecord<JsonValue, JsonValue, JsonValue> }
 	| { readonly type: "submission"; readonly value: SubmissionRecord }
@@ -809,13 +814,23 @@ export interface Tx {
 	/** Committed submission with a conversation-scoped request ID. */
 	submissionByRequest(conversationId: ConversationId, requestId: string): Promise<SubmissionRecord | undefined>;
 
-	/** Create a conversation with explicitly selected ownership. */
-	createConversation(options: { readonly ownership: ConversationOwnership }): Promise<ConversationRecord>;
-	/** Create a history fork at one concrete visible entry with explicitly selected ownership. */
+	/** Create a conversation with explicitly selected ownership. `meta` stages through `setConversationMeta`. */
+	createConversation(options: {
+		readonly ownership: ConversationOwnership;
+		readonly meta?: ConversationMeta;
+	}): Promise<ConversationRecord>;
+	/**
+	 * Stage the metadata of a conversation this transaction creates. Runs inside the creating commit,
+	 * before it flushes, so the columns land in the same INSERT as the record. Exactly one call per
+	 * created conversation: a second call for the same ID replaces the staged value, and a call for an
+	 * ID this transaction did not create throws. Table reads throw ReadAfterWrite, as in `init`.
+	 */
+	setConversationMeta(conversationId: ConversationId, meta: ConversationMeta): void;
+	/** Create a history fork at one concrete visible entry with explicitly selected ownership. `meta` stages through `setConversationMeta`. */
 	forkConversation(
 		parentConversationId: ConversationId,
 		at: EntryId,
-		options: { readonly ownership: ConversationOwnership },
+		options: { readonly ownership: ConversationOwnership; readonly meta?: ConversationMeta },
 	): Promise<ConversationRecord>;
 	/** Returned records are Session-owned immutable values and may be shared with commit listeners. */
 	appendEntry(conversationId: ConversationId, value: EntryDraft): Promise<EntryRecord>;

@@ -7,7 +7,14 @@ import {
 	type StorageWrite,
 } from "@OnePanda-TgSec/tg-gibraltar";
 import { describe, expect, it } from "vitest";
-import { context, createConversation, documentChanges, flush, openTestSession } from "./session-support.ts";
+import {
+	context,
+	conversationMeta,
+	createConversation,
+	documentChanges,
+	flush,
+	openTestSession,
+} from "./session-support.ts";
 
 function documentWrites(writes: readonly StorageWrite[]): readonly StorageWrite[] {
 	return writes.filter(
@@ -718,7 +725,12 @@ describe("Session historical document snapshots", () => {
 
 		const childId = await session.commit(
 			async (tx) =>
-				(await tx.forkConversation(conversationId, secondEntry, { ownership: { kind: "ownerless" } })).id,
+				(
+					await tx.forkConversation(conversationId, secondEntry, {
+						ownership: { kind: "ownerless" },
+						meta: conversationMeta("test"),
+					})
+				).id,
 			context,
 		);
 		expect(await session.snapshotAsOf(V3, childId, firstEntry, context)).toEqual({ count: 1, version: 3 });

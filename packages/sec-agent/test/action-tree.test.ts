@@ -3,7 +3,7 @@ import { defineExtension, defineTask, type TaskId } from "@OnePanda-TgSec/tg-gib
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { actionTreeKey, openSecAgent, patchActionNode, type SecAgent, TgSecActionTreeDoc } from "../src/index.ts";
-import { cleanupTempDirs, context, fauxModel, fauxSetup, tempDir } from "./support.ts";
+import { cleanupTempDirs, context, conversationMeta, fauxModel, fauxSetup, tempDir } from "./support.ts";
 
 afterEach(cleanupTempDirs);
 
@@ -48,7 +48,11 @@ describe("action tree", () => {
 			context,
 		);
 		const child = await agent.root.commit(
-			(tx) => tx.forkConversation(agent.root.id, forkPoint.id, { ownership: { kind: "task", taskId } }),
+			(tx) =>
+				tx.forkConversation(agent.root.id, forkPoint.id, {
+					ownership: { kind: "task", taskId },
+					meta: conversationMeta("test"),
+				}),
 			context,
 		);
 
@@ -81,7 +85,11 @@ describe("action tree", () => {
 		const forkPoint = page.items.find((entry) => entry.kind === "tg.user")!;
 
 		await agent.root.commit(
-			(tx) => tx.forkConversation(agent.root.id, forkPoint.id, { ownership: { kind: "ownerless" } }),
+			(tx) =>
+				tx.forkConversation(agent.root.id, forkPoint.id, {
+					ownership: { kind: "ownerless" },
+					meta: conversationMeta("test"),
+				}),
 			context,
 		);
 		expect(await agent.actionTree(context)).toEqual([]);
@@ -89,7 +97,11 @@ describe("action tree", () => {
 		const ghost = 987_654 as TaskId;
 		await expect(
 			agent.root.commit(
-				(tx) => tx.forkConversation(agent.root.id, forkPoint.id, { ownership: { kind: "task", taskId: ghost } }),
+				(tx) =>
+					tx.forkConversation(agent.root.id, forkPoint.id, {
+						ownership: { kind: "task", taskId: ghost },
+						meta: conversationMeta("test"),
+					}),
 				context,
 			),
 		).rejects.toThrow(/does not exist/);
@@ -109,7 +121,11 @@ describe("action tree", () => {
 			context,
 		);
 		const child = await agent.root.commit(
-			(tx) => tx.forkConversation(agent.root.id, forkPoint.id, { ownership: { kind: "task", taskId } }),
+			(tx) =>
+				tx.forkConversation(agent.root.id, forkPoint.id, {
+					ownership: { kind: "task", taskId },
+					meta: conversationMeta("test"),
+				}),
 			context,
 		);
 

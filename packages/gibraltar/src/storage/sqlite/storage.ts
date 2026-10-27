@@ -1075,12 +1075,21 @@ export class SqliteStorage implements Storage {
 			case "conversation":
 				await this.claimId(executor, write.value.id, "conversation");
 				await executor.run(
-					`INSERT INTO ${this.schema.tables.conversations} (id, project_id, owner_conversation_id, owner_task_id, record) VALUES (?, ?, ?, ?, ?)`,
+					`INSERT INTO ${this.schema.tables.conversations}
+						(id, project_id, owner_conversation_id, owner_task_id, record, title, cwd, lane, created_at, updated_at, archived_at, parent_conversation_id)
+						VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 					write.value.id,
 					this.project,
 					write.value.owner?.conversationId ?? null,
 					write.value.owner?.taskId ?? null,
 					encodeJson(write.value),
+					encodeIndexedString(write.meta.title),
+					encodeIndexedString(write.meta.cwd),
+					encodeIndexedString(write.meta.lane),
+					write.meta.createdAt,
+					write.meta.updatedAt,
+					write.meta.archivedAt ?? null,
+					write.value.parent?.conversationId ?? null,
 				);
 				break;
 			case "entry":

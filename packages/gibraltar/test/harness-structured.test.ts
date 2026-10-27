@@ -38,7 +38,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { allEntries, chatSetup, openChat, waitFor } from "./chat-support.ts";
 import { addHooks, addTask, addTool } from "./harness-support.ts";
-import { ControlledStorage, context } from "./session-support.ts";
+import { ControlledStorage, context, conversationMeta } from "./session-support.ts";
 import { aborted, type Deferred, deferred, failedOf, openTasks, settled } from "./task-support.ts";
 
 // ─── A scriptable task ──────────────────────────────────────────────────────
@@ -162,7 +162,7 @@ type Opened = { harness: Harness; root: Conversation; registry: Registry; report
 
 async function openNodes(storage: Storage = new MemoryStorage()): Promise<Opened> {
 	const opened = await openTasks(storage, [Node]);
-	const root = await opened.harness.root(context);
+	const root = await opened.harness.root(context, { meta: conversationMeta("root") });
 	opened.harness.resume();
 	return { ...opened, root };
 }
@@ -221,7 +221,10 @@ describe("task ownership", () => {
 	it("rejects no ownership, a missing owner, a child in another conversation, and a background child", async () => {
 		const { harness, root } = await openNodes();
 		const parent = await start(root, "parent");
-		const other = await harness.createConversation({ ownership: { kind: "ownerless" } }, context);
+		const other = await harness.createConversation(
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
 		const create = (options: TaskOptions) =>
 			root.commit((tx) => tx.createTask(Node, { name: "x" }, options), context);
 		await expect(create({} as TaskOptions)).rejects.toThrow();
@@ -251,7 +254,11 @@ describe("task ownership", () => {
 		await until(async () => (await state(harness, parent)).status === "completing");
 		const createChild = () => root.commit((tx) => spawn(tx, parent, "late"), context);
 		const createConversation = () =>
-			root.commit((tx) => tx.createConversation({ ownership: { kind: "task", taskId: parent } }), context);
+			root.commit(
+				(tx) =>
+					tx.createConversation({ ownership: { kind: "task", taskId: parent }, meta: conversationMeta("test") }),
+				context,
+			);
 		await expect(createChild()).rejects.toThrow("is completing");
 		await expect(createConversation()).rejects.toThrow("is completing");
 		open("child");
@@ -296,7 +303,12 @@ describe("task ownership", () => {
 		script("host", {
 			run: (runtime, ctx) =>
 				runtime.commit(async (tx) => {
-					child = (await tx.createConversation({ ownership: { kind: "task", taskId: runtime.taskId } })).id;
+					child = (
+						await tx.createConversation({
+							ownership: { kind: "task", taskId: runtime.taskId },
+							meta: conversationMeta("test"),
+						})
+					).id;
 					return { status: "running", checkpoint: { phase: "resume", round: 1 } };
 				}, ctx),
 			resume: (runtime, ctx) =>
@@ -559,7 +571,10 @@ describe("waiting", () => {
 		script("background", { run: (runtime, ctx) => runtime.commit(() => waitOn([owner!], "allSettled"), ctx) });
 		const background = await root.commit(async (tx) => {
 			owner = await tx.createTask(Node, { name: "owner" }, OWN_CONVERSATION);
-			const conversation = await tx.createConversation({ ownership: { kind: "task", taskId: owner } });
+			const conversation = await tx.createConversation({
+				ownership: { kind: "task", taskId: owner },
+				meta: conversationMeta("test"),
+			});
 			const options = { ...OWN_CONVERSATION, conversationId: conversation.id, background: true };
 			return tx.createTask(Node, { name: "background" }, options);
 		}, context);
@@ -775,7 +790,12 @@ describe("completing", () => {
 		script("parent", {
 			run: async (runtime, ctx) => {
 				await runtime.commit(async (tx) => {
-					conversation = (await tx.createConversation({ ownership: { kind: "task", taskId: runtime.taskId } })).id;
+					conversation = (
+						await tx.createConversation({
+							ownership: { kind: "task", taskId: runtime.taskId },
+							meta: conversationMeta("test"),
+						})
+					).id;
 					await tx.createTask(Node, { name: "first" }, { ...OWN_CONVERSATION, conversationId: conversation });
 					return { status: "running", checkpoint: { phase: "resume", round: 1 } };
 				}, ctx);
@@ -970,6 +990,7 @@ describe("abort order", () => {
 			run: async (runtime, ctx) => {
 				await runtime.commit(async (tx) => {
 					const conversation = await tx.createConversation({
+						meta: conversationMeta("test"),
 						ownership: { kind: "task", taskId: runtime.taskId },
 					});
 					x = await tx.createTask(Node, { name: "x" }, { ...OWN_CONVERSATION, conversationId: conversation.id });
@@ -1003,6 +1024,7 @@ describe("boundaries", () => {
 				await runtime.commit(async (tx) => {
 					child = await spawn(tx, runtime.taskId, "child");
 					const conversation = await tx.createConversation({
+						meta: conversationMeta("test"),
 						ownership: { kind: "task", taskId: runtime.taskId },
 					});
 					below = await tx.createTask(
@@ -1030,7 +1052,12 @@ describe("boundaries", () => {
 		script("agent", {
 			run: async (runtime, ctx) => {
 				await runtime.commit(async (tx) => {
-					conversation = (await tx.createConversation({ ownership: { kind: "task", taskId: runtime.taskId } })).id;
+					conversation = (
+						await tx.createConversation({
+							ownership: { kind: "task", taskId: runtime.taskId },
+							meta: conversationMeta("test"),
+						})
+					).id;
 					return { status: "running", checkpoint: { phase: "resume", round: 1 } };
 				}, ctx);
 			},
@@ -1065,7 +1092,7 @@ async function seed(
 ): Promise<Seeded> {
 	const session = createSession(await openNodeSqliteStorage(path));
 	const seeded = await session.commit(async (tx) => {
-		const root = await tx.createConversation({ ownership: { kind: "ownerless" } });
+		const root = await tx.createConversation({ ownership: { kind: "ownerless" }, meta: conversationMeta("test") });
 		const parent = await tx.createTask(Node, { name: "parent" }, { ...OWN_CONVERSATION, conversationId: root.id });
 		const ids: TaskId[] = [];
 		for (const name of children) ids.push(await spawn(tx, parent, name));
@@ -1597,13 +1624,19 @@ describe("conversation abort and boundaries", () => {
 		});
 		const tree = await root.commit(async (tx) => {
 			const owner = await tx.createTask(Node, { name: "owner" }, OWN_CONVERSATION);
-			const outer = await tx.createConversation({ ownership: { kind: "task", taskId: owner } });
+			const outer = await tx.createConversation({
+				ownership: { kind: "task", taskId: owner },
+				meta: conversationMeta("test"),
+			});
 			const background = await tx.createTask(
 				Node,
 				{ name: "background" },
 				{ ...OWN_CONVERSATION, conversationId: outer.id, background: true },
 			);
-			const inner = await tx.createConversation({ ownership: { kind: "task", taskId: background } });
+			const inner = await tx.createConversation({
+				ownership: { kind: "task", taskId: background },
+				meta: conversationMeta("test"),
+			});
 			return { owner, outer: outer.id, background, inner: inner.id };
 		}, context);
 		await until(() => log.includes("run:owner") && log.includes("run:background"));
@@ -1664,13 +1697,19 @@ describe("recovery through ownership edges", () => {
 		const path = await sqlitePath();
 		const session = createSession(await openNodeSqliteStorage(path));
 		const tree = await session.commit(async (tx) => {
-			const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
+			const conversation = await tx.createConversation({
+				ownership: { kind: "ownerless" },
+				meta: conversationMeta("test"),
+			});
 			const owner = await tx.createTask(
 				Node,
 				{ name: "owner" },
 				{ ...OWN_CONVERSATION, conversationId: conversation.id },
 			);
-			const child = await tx.createConversation({ ownership: { kind: "task", taskId: owner } });
+			const child = await tx.createConversation({
+				ownership: { kind: "task", taskId: owner },
+				meta: conversationMeta("test"),
+			});
 			const inner = await tx.createTask(Node, { name: "inner" }, { ...OWN_CONVERSATION, conversationId: child.id });
 			return { owner, inner };
 		}, context);
@@ -1696,6 +1735,7 @@ describe("recovery through ownership edges", () => {
 			run: async (runtime, ctx) => {
 				await runtime.commit(async (tx) => {
 					const conversation = await tx.createConversation({
+						meta: conversationMeta("test"),
 						ownership: { kind: "task", taskId: runtime.taskId },
 					});
 					inner = await tx.createTask(
@@ -1728,7 +1768,12 @@ describe("recovery through ownership edges", () => {
 		script("child", {
 			run: async (runtime, ctx) => {
 				await runtime.commit(async (tx) => {
-					conversation = (await tx.createConversation({ ownership: { kind: "task", taskId: runtime.taskId } })).id;
+					conversation = (
+						await tx.createConversation({
+							ownership: { kind: "task", taskId: runtime.taskId },
+							meta: conversationMeta("test"),
+						})
+					).id;
 					return { status: "running", checkpoint: { phase: "resume", round: 1 } };
 				}, ctx);
 			},
@@ -1846,7 +1891,10 @@ describe("tool rounds and events", () => {
 				parameters: Type.Object({}),
 				execute: async (_args, api, callContext) => {
 					await api.commit(async (tx) => {
-						const child = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
+						const child = await tx.createConversation({
+							ownership: { kind: "task", taskId: api.taskId },
+							meta: conversationMeta("test"),
+						});
 						await tx.createTask(Node, { name: "sub" }, { ...OWN_CONVERSATION, conversationId: child.id });
 					}, callContext);
 					return { output: [{ type: "text", text: "started" }] };

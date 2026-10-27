@@ -32,7 +32,7 @@ import { resolveSettings } from "../src/harness/agent.ts";
 import type { SessionImpl } from "../src/session/session.ts";
 import { allEntries, type ChatSetup, chatSetup, openChat, textOf, unanswered, waitFor } from "./chat-support.ts";
 import { addSection, assistant, user } from "./harness-support.ts";
-import { ControlledStorage, context } from "./session-support.ts";
+import { ControlledStorage, context, conversationMeta } from "./session-support.ts";
 
 const ERROR_503 = fauxAssistantMessage([], { stopReason: "error", errorMessage: "503 Service Unavailable" });
 
@@ -164,7 +164,10 @@ describe("generation", () => {
 	it("fails with no_model when no model is configured or the model is unknown", async () => {
 		const setup = chatSetup();
 		const { harness, root } = await openChat(new MemoryStorage(), setup);
-		const plain = await harness.createConversation({ ownership: { kind: "ownerless" } }, context);
+		const plain = await harness.createConversation(
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
 		harness.resume();
 		const unset = await (await plain.submit({ type: "input", content: "hi" }, context)).wait(context);
 		expect(unset).toMatchObject({ status: "unanswered", reason: "no_model" });
@@ -409,7 +412,11 @@ describe("generation", () => {
 		const { harness, root } = await openChat(new MemoryStorage(), setup);
 		harness.resume();
 		const first = await (await root.submit({ type: "input", content: "a" }, context)).wait(context);
-		const child = await root.fork(first.answer!, { ownership: { kind: "ownerless" } }, context);
+		const child = await root.fork(
+			first.answer!,
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
 		const parent = await harness.snapshot(ProviderDoc, root.id, context);
 		const forked = await harness.snapshot(ProviderDoc, child.id, context);
 		expect(forked!.sessionId).not.toBe(parent!.sessionId);
@@ -494,7 +501,10 @@ describe("generation", () => {
 			{ models: setup.models, registry: setup.registry, settings },
 			context,
 		);
-		const root = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" } } });
+		const root = await harness.root(context, {
+			meta: conversationMeta("root"),
+			agent: { model: { provider: "faux", modelId: "faux-1" } },
+		});
 		harness.resume();
 		expect((await (await root.submit({ type: "input", content: "hi" }, context)).wait(context)).status).toBe("done");
 		// The retry prepares again, so it resolves the settings again and sends the new timeout.
@@ -555,6 +565,7 @@ describe("generation", () => {
 		const sub = await harness.createConversation(
 			{
 				ownership: { kind: "ownerless" },
+				meta: conversationMeta("test"),
 				agent: { model: { provider: "faux", modelId: "faux-1" } },
 				init: async (tx, id) => {
 					const agent = await tx.doc(Agent, id);

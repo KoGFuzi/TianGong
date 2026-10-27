@@ -23,7 +23,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { chatSetup, openChat } from "./chat-support.ts";
 import { addTask, addTool } from "./harness-support.ts";
-import { ControlledStorage, context } from "./session-support.ts";
+import { ControlledStorage, context, conversationMeta } from "./session-support.ts";
 import { aborted, type Deferred, deferred, failedOf, openTasks, settled } from "./task-support.ts";
 
 /** Outcome a held task commits once its gate opens. */
@@ -121,7 +121,10 @@ async function ownedChild(
 			{ name, ...(options.slowOwner === true ? { slowAbort: true } : {}) },
 			{ ownership: { kind: "conversation" }, background: options.background ?? false },
 		);
-		const child = await tx.createConversation({ ownership: { kind: "task", taskId: owner } });
+		const child = await tx.createConversation({
+			ownership: { kind: "task", taskId: owner },
+			meta: conversationMeta("test"),
+		});
 		const inner = await tx.createTask(
 			Hold,
 			{ name: `${name}.inner`, ...(options.slowInner === true ? { slowAbort: true } : {}) },
@@ -168,7 +171,7 @@ function queuedNote(text: string) {
 
 async function openHarness(storage: Storage = new MemoryStorage()) {
 	const opened = await openTasks(storage, [Hold, Waiter]);
-	const root = await opened.harness.root(context);
+	const root = await opened.harness.root(context, { meta: conversationMeta("root") });
 	opened.harness.resume();
 	return { ...opened, root };
 }
@@ -365,13 +368,19 @@ describe("ownership", () => {
 			// Without a Harness, nothing derives marks: a cancelled owner with a live task below it.
 			const session = createSession(await openNodeSqliteStorage(path));
 			const tree = await session.commit(async (tx) => {
-				const root = await tx.createConversation({ ownership: { kind: "ownerless" } });
+				const root = await tx.createConversation({
+					ownership: { kind: "ownerless" },
+					meta: conversationMeta("test"),
+				});
 				const owner = await tx.createTask(
 					Hold,
 					{ name: "gone" },
 					{ ownership: { kind: "conversation" }, conversationId: root.id },
 				);
-				const child = await tx.createConversation({ ownership: { kind: "task", taskId: owner } });
+				const child = await tx.createConversation({
+					ownership: { kind: "task", taskId: owner },
+					meta: conversationMeta("test"),
+				});
 				return {
 					owner,
 					inner: await tx.createTask(
@@ -444,7 +453,10 @@ describe("ownership", () => {
 				{ name: "unregistered" },
 				{ ownership: { kind: "conversation" } },
 			);
-			const child = await tx.createConversation({ ownership: { kind: "task", taskId: owner } });
+			const child = await tx.createConversation({
+				ownership: { kind: "task", taskId: owner },
+				meta: conversationMeta("test"),
+			});
 			return {
 				owner,
 				inner: await tx.createTask(
@@ -497,7 +509,10 @@ describe("ownership", () => {
 		const { harness, root } = await openHarness();
 		const { owner, dependency, blocked } = await root.commit(async (tx) => {
 			const owner = await tx.createTask(Hold, { name: "owner" }, { ownership: { kind: "conversation" } });
-			const child = await tx.createConversation({ ownership: { kind: "task", taskId: owner } });
+			const child = await tx.createConversation({
+				ownership: { kind: "task", taskId: owner },
+				meta: conversationMeta("test"),
+			});
 			const dependency = await tx.createTask(Hold, { name: "dependency" }, { ownership: { kind: "conversation" } });
 			const blocked = await tx.createTask(
 				Waiter,
@@ -611,7 +626,10 @@ describe("owned conversations from tools and supervisors", () => {
 				parameters: Type.Object({}),
 				execute: async (_args, api, callContext) => {
 					const child = await api.commit(async (tx) => {
-						const created = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
+						const created = await tx.createConversation({
+							ownership: { kind: "task", taskId: api.taskId },
+							meta: conversationMeta("test"),
+						});
 						await configure(tx, created.id, { model: { provider: "faux", modelId: "faux-1" } });
 						return created.id;
 					}, callContext);
@@ -666,7 +684,10 @@ describe("owned conversations from tools and supervisors", () => {
 				parameters: Type.Object({}),
 				execute: async (_args, api, callContext) => {
 					const child = await api.commit(async (tx) => {
-						const created = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
+						const created = await tx.createConversation({
+							ownership: { kind: "task", taskId: api.taskId },
+							meta: conversationMeta("test"),
+						});
 						return created.id;
 					}, callContext);
 					const handle = (await api.conversation(child, callContext))!;
@@ -719,7 +740,10 @@ describe("owned conversations from tools and supervisors", () => {
 				parameters: Type.Object({}),
 				execute: async (_args, api, callContext) => {
 					child = await api.commit(async (tx) => {
-						const created = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
+						const created = await tx.createConversation({
+							ownership: { kind: "task", taskId: api.taskId },
+							meta: conversationMeta("test"),
+						});
 						await configure(tx, created.id, { model: { provider: "faux", modelId: "faux-1" } });
 						return created.id;
 					}, callContext);
@@ -768,7 +792,10 @@ describe("owned conversations from tools and supervisors", () => {
 				parameters: Type.Object({}),
 				execute: async (_args, api, callContext) => {
 					const child = await api.commit(async (tx) => {
-						const created = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
+						const created = await tx.createConversation({
+							ownership: { kind: "task", taskId: api.taskId },
+							meta: conversationMeta("test"),
+						});
 						await configure(tx, created.id, { model: { provider: "faux", modelId: "faux-1" } });
 						return created.id;
 					}, callContext);
@@ -807,7 +834,10 @@ describe("owned conversations from tools and supervisors", () => {
 				parameters: Type.Object({ mode: Type.String() }),
 				execute: async (args, api, callContext) => {
 					const child = await api.commit(async (tx) => {
-						const created = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
+						const created = await tx.createConversation({
+							ownership: { kind: "task", taskId: api.taskId },
+							meta: conversationMeta("test"),
+						});
 						return tx.createTask(
 							Hold,
 							{ name: `child.${api.callId}` },
@@ -868,7 +898,10 @@ describe("owned conversations from tools and supervisors", () => {
 					const child = await api.commit(async (tx) => {
 						const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
 						if (existing !== undefined) return existing.id;
-						const created = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
+						const created = await tx.createConversation({
+							ownership: { kind: "task", taskId: api.taskId },
+							meta: conversationMeta("test"),
+						});
 						await configure(tx, created.id, { model: { provider: "faux", modelId: "faux-1" } });
 						return created.id;
 					}, callContext);
@@ -950,7 +983,10 @@ describe("owned conversations from tools and supervisors", () => {
 				{ parent: root.id },
 				{ ownership: { kind: "conversation" }, background: true },
 			);
-			const created = await tx.createConversation({ ownership: { kind: "task", taskId: supervisor } });
+			const created = await tx.createConversation({
+				ownership: { kind: "task", taskId: supervisor },
+				meta: conversationMeta("test"),
+			});
 			await configure(tx, created.id, { model: { provider: "faux", modelId: "faux-1" } });
 			(await tx.doc(Children, root.id)).child = created.id;
 			return { supervisor, child: created.id };

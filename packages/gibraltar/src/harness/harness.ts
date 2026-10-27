@@ -6,6 +6,7 @@ import { contained, SessionImpl } from "../session/session.ts";
 import type { Transaction } from "../session/transaction.ts";
 import type {
 	ConversationId,
+	ConversationMeta,
 	ConversationOwnership,
 	ConversationRecord,
 	Cursor,
@@ -67,7 +68,11 @@ type CreateTarget =
 	  };
 
 /** What the conveniences apply in the creating commit, after the creation hook. */
-type CreateOptions = { readonly agent?: AgentChange; readonly init?: ConversationInit };
+type CreateOptions = {
+	readonly agent?: AgentChange;
+	readonly init?: ConversationInit;
+	readonly meta?: ConversationMeta;
+};
 
 /** Harness-private services used by Conversation handles. */
 type ConversationHost<Tool extends ToolRegistration> = {
@@ -314,7 +319,7 @@ class HarnessImpl<Tool extends ToolRegistration> extends SessionImpl implements 
 
 	root(
 		context: Context,
-		options?: { readonly agent?: AgentChange; readonly init?: ConversationInit },
+		options?: { readonly agent?: AgentChange; readonly init?: ConversationInit; readonly meta?: ConversationMeta },
 	): Promise<Conversation> {
 		return this.#create({ kind: "root" }, options ?? {}, context);
 	}
@@ -350,6 +355,7 @@ class HarnessImpl<Tool extends ToolRegistration> extends SessionImpl implements 
 					: target.kind === "fork"
 						? await tx.forkConversation(target.parentId, target.at, { ownership: target.ownership })
 						: await tx.createConversation({ ownership: target.ownership });
+			if (options.meta !== undefined) tx.setConversationMeta(record.id, options.meta);
 			if (options.agent !== undefined) await configure(tx, record.id, options.agent);
 			if (options.init !== undefined) await options.init(tx, record.id);
 			return record.id;

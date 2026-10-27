@@ -3,6 +3,7 @@ import { BACKGROUND_CONTEXT } from "@OnePanda-TgSec/chord/context";
 import {
 	type CommitPublication,
 	type ConversationId,
+	type ConversationMeta,
 	type DocumentAddress,
 	type DocumentCommitChange,
 	type DocumentId,
@@ -16,6 +17,15 @@ import {
 import { SessionImpl } from "../src/session/session.ts";
 
 export const context: Context = BACKGROUND_CONTEXT;
+
+/** Display metadata for conversations created by fixtures; only dedicated metadata tests assert on the values. */
+export const conversationMeta = (title: string): ConversationMeta => ({
+	title,
+	cwd: "",
+	lane: "test",
+	createdAt: 1,
+	updatedAt: 1,
+});
 
 type Deferred = { readonly promise: Promise<void>; readonly resolve: () => void };
 
@@ -153,7 +163,11 @@ export function documentCopyChanges(
 
 /** Create one conversation and return its ID. */
 export async function createConversation(session: SessionImpl): Promise<ConversationId> {
-	return session.commit(async (tx) => (await tx.createConversation({ ownership: { kind: "ownerless" } })).id, context);
+	return session.commit(
+		async (tx) =>
+			(await tx.createConversation({ ownership: { kind: "ownerless" }, meta: conversationMeta("test") })).id,
+		context,
+	);
 }
 
 /** Resolve after pending microtasks and one macrotask turn. */

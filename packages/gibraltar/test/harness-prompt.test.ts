@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
 import { resolveAgent, resolveSettings } from "../src/harness/agent.ts";
 import { planSystemEntries, renderSections, replaySections } from "../src/harness/prompt.ts";
 import { addSection, openHarness, user } from "./harness-support.ts";
-import { context } from "./session-support.ts";
+import { context, conversationMeta } from "./session-support.ts";
 
 type Planned = { readonly sections: Record<string, string | null>; readonly omit?: readonly EntryId[] };
 
@@ -41,7 +41,7 @@ async function apply(conversation: Conversation, desired: Record<string, string>
 
 async function root(): Promise<Conversation> {
 	const { harness } = await openHarness(new MemoryStorage());
-	return harness.root(context);
+	return harness.root(context, { meta: conversationMeta("root") });
 }
 
 async function lastSystemId(conversation: Conversation): Promise<EntryId> {

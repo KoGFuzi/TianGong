@@ -4,6 +4,7 @@ import type { Op } from "@OnePanda-TgSec/chord/delta";
 import { idFromNumber } from "../ids.ts";
 import {
 	type ConversationId,
+	type ConversationMeta,
 	type Cursor,
 	type DocumentCreate,
 	type DocumentId,
@@ -24,8 +25,20 @@ import type { StorageConformanceAssertions, StorageConformanceCase, StorageConfo
 const context = BACKGROUND_CONTEXT;
 type StoredTask = TaskRecord<JsonValue, JsonValue, JsonValue>;
 
+/** Display metadata for fixture conversations; only C7 asserts on the values, the rest need them present. */
+const conversationMeta = (title: string): ConversationMeta => ({
+	title,
+	cwd: "/tmp/tg-gibraltar-conformance",
+	lane: "conformance",
+	createdAt: 1,
+	updatedAt: 1,
+});
+
 async function createRoot(storage: Storage): Promise<ConversationId> {
-	await storage.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], context);
+	await storage.commit(
+		[{ type: "conversation", value: { id: ROOT_CONVERSATION_ID }, meta: conversationMeta("root") }],
+		context,
+	);
 	return ROOT_CONVERSATION_ID;
 }
 
@@ -69,8 +82,8 @@ async function seedLifecycleFixture(storage: Storage): Promise<LifecycleFixture>
 	const otherConversationId = await storage.mintId<ConversationId>();
 	await storage.commit(
 		[
-			{ type: "conversation", value: { id: conversationId } },
-			{ type: "conversation", value: { id: otherConversationId } },
+			{ type: "conversation", value: { id: conversationId }, meta: conversationMeta("fixture") },
+			{ type: "conversation", value: { id: otherConversationId }, meta: conversationMeta("fixture") },
 		],
 		context,
 	);
@@ -190,7 +203,10 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 			await expect(createRoot(storage)).resolves.toBe(ROOT_CONVERSATION_ID);
 			expect(await storage.conversation(ROOT_CONVERSATION_ID, context)).toEqual({ id: ROOT_CONVERSATION_ID });
 			await expect(
-				storage.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], context),
+				storage.commit(
+					[{ type: "conversation", value: { id: ROOT_CONVERSATION_ID }, meta: conversationMeta("fixture") }],
+					context,
+				),
 			).rejects.toThrow(`ID ${ROOT_CONVERSATION_ID} already belongs to conversation`);
 		}),
 
@@ -239,7 +255,7 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 							{ type: "task", value: runningTask },
 							{ type: "submission", value: doneInput },
 							{ type: "entry", value: entry(transientEntryId, rootId, "assistant") },
-							{ type: "conversation", value: { id: rootId } },
+							{ type: "conversation", value: { id: rootId }, meta: conversationMeta("fixture") },
 						],
 						context,
 					),
@@ -389,8 +405,8 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 			const thirdId = await storage.mintId<ConversationId>();
 			await storage.commit(
 				[
-					{ type: "conversation", value: { id: thirdId } },
-					{ type: "conversation", value: { id: secondId } },
+					{ type: "conversation", value: { id: thirdId }, meta: conversationMeta("fixture") },
+					{ type: "conversation", value: { id: secondId }, meta: conversationMeta("fixture") },
 				],
 				context,
 			);
@@ -414,18 +430,21 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 			const thirdId = await storage.mintId<ConversationId>();
 			await storage.commit(
 				[
-					{ type: "conversation", value: { id: otherOwnerId } },
+					{ type: "conversation", value: { id: otherOwnerId }, meta: conversationMeta("fixture") },
 					{
 						type: "conversation",
 						value: { id: firstId, owner: { conversationId: rootId, taskId: firstTaskId } },
+						meta: conversationMeta("fixture"),
 					},
 					{
 						type: "conversation",
 						value: { id: secondId, owner: { conversationId: rootId, taskId: secondTaskId } },
+						meta: conversationMeta("fixture"),
 					},
 					{
 						type: "conversation",
 						value: { id: thirdId, owner: { conversationId: otherOwnerId, taskId: firstTaskId } },
+						meta: conversationMeta("fixture"),
 					},
 				],
 				context,
@@ -476,6 +495,7 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 					{
 						type: "conversation",
 						value: { id: childId, parent: { conversationId: rootId, at: rootForkPoint } },
+						meta: conversationMeta("fixture"),
 					},
 				],
 				context,
@@ -497,6 +517,7 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 					{
 						type: "conversation",
 						value: { id: grandchildId, parent: { conversationId: childId, at: childForkPoint } },
+						meta: conversationMeta("fixture"),
 					},
 				],
 				context,
@@ -709,7 +730,10 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 			async (storage) => {
 				const rootId = await createRoot(storage);
 				const secondConversationId = await storage.mintId<ConversationId>();
-				await storage.commit([{ type: "conversation", value: { id: secondConversationId } }], context);
+				await storage.commit(
+					[{ type: "conversation", value: { id: secondConversationId }, meta: conversationMeta("fixture") }],
+					context,
+				);
 				const firstId = await storage.mintId<SubmissionId>();
 				const secondId = await storage.mintId<SubmissionId>();
 				const otherConversationId = await storage.mintId<SubmissionId>();
@@ -1054,8 +1078,8 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 				const secondChildId = await storage.mintId<ConversationId>();
 				await storage.commit(
 					[
-						{ type: "conversation", value: { id: childId } },
-						{ type: "conversation", value: { id: secondChildId } },
+						{ type: "conversation", value: { id: childId }, meta: conversationMeta("fixture") },
+						{ type: "conversation", value: { id: secondChildId }, meta: conversationMeta("fixture") },
 					],
 					context,
 				);
@@ -1755,12 +1779,18 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 			const deletion = await storage.deleteConversation(fixture.conversationId, context);
 			expect(deletion).toBeDefined();
 			await expect(
-				storage.commit([{ type: "conversation", value: { id: fixture.conversationId } }], context),
+				storage.commit(
+					[{ type: "conversation", value: { id: fixture.conversationId }, meta: conversationMeta("fixture") }],
+					context,
+				),
 			).rejects.toThrow(`ID ${fixture.conversationId} already belongs to conversation`);
 			// Fresh allocation still advances past every committed ID, and using it succeeds.
 			const fresh = await storage.mintId<ConversationId>();
 			expect(fresh).toBeGreaterThan(fixture.documentIds[2]);
-			await storage.commit([{ type: "conversation", value: { id: fresh } }], context);
+			await storage.commit(
+				[{ type: "conversation", value: { id: fresh }, meta: conversationMeta("fixture") }],
+				context,
+			);
 			expect((await storage.conversation(fresh, context))?.id).toBe(fresh);
 		}),
 
@@ -1772,7 +1802,10 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 
 		createCase(options, "keeps a fork child readable after its parent conversation is deleted", async (storage) => {
 			const parentId = await storage.mintId<ConversationId>();
-			await storage.commit([{ type: "conversation", value: { id: parentId } }], context);
+			await storage.commit(
+				[{ type: "conversation", value: { id: parentId }, meta: conversationMeta("fixture") }],
+				context,
+			);
 			const parentEntryId = await storage.mintId<EntryId>();
 			const parentMarkerId = await storage.mintId<EntryId>();
 			await storage.commit(
@@ -1788,6 +1821,7 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 					{
 						type: "conversation",
 						value: { id: childId, parent: { conversationId: parentId, at: parentMarkerId } },
+						meta: conversationMeta("fixture"),
 					},
 				],
 				context,
@@ -1861,6 +1895,28 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 				submissions: countOf("tg.export.submission"),
 				documents: countOf("tg.export.doc"),
 			});
+		}),
+
+		createCase(options, "keeps the metadata columns and the immutable record apart", async (storage) => {
+			const rootId = await createRoot(storage);
+			const ownerTaskId = await storage.mintId<TaskId<JsonValue>>();
+			const childId = await storage.mintId<ConversationId>();
+			await storage.commit(
+				[
+					{
+						type: "conversation",
+						value: { id: childId, owner: { conversationId: rootId, taskId: ownerTaskId } },
+						meta: conversationMeta("owned child"),
+					},
+				],
+				context,
+			);
+			// The columns are the display authority; the record stays identity and ancestry only.
+			expect(await storage.conversation(childId, context)).toEqual({
+				id: childId,
+				owner: { conversationId: rootId, taskId: ownerTaskId },
+			});
+			expect(await storage.conversation(rootId, context)).toEqual({ id: rootId });
 		}),
 
 		createCase(options, "rejects every operation after close", async (storage) => {

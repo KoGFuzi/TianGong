@@ -20,7 +20,7 @@ import {
 	type ToolRegistration,
 } from "@OnePanda-TgSec/tg-gibraltar";
 import type { ExecutionEnv } from "../src/env/index.ts";
-import { context } from "./session-support.ts";
+import { context, conversationMeta } from "./session-support.ts";
 
 /** Models and registry that survive a close/reopen, like a host process's own objects. */
 export type ChatSetup = {
@@ -61,7 +61,10 @@ export async function openChat(
 		},
 		context,
 	);
-	const root = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" } } });
+	const root = await harness.root(context, {
+		agent: { model: { provider: "faux", modelId: "faux-1" } },
+		meta: conversationMeta("root"),
+	});
 	return { harness, root };
 }
 

@@ -17,7 +17,7 @@ import { describe, expect, it, onTestFinished } from "vitest";
 import { SessionImpl, setDefaultDocumentRetention } from "../src/session/session.ts";
 import { chatSetup, openChat } from "./chat-support.ts";
 import { addTool } from "./harness-support.ts";
-import { ControlledStorage, context, createConversation } from "./session-support.ts";
+import { ControlledStorage, context, conversationMeta, createConversation } from "./session-support.ts";
 import { deferred, eventually } from "./task-support.ts";
 
 type Counter = { count: number };
@@ -245,7 +245,13 @@ describe("document cache retention", () => {
 		expect(await session.snapshotAsOf(RewindableDoc, conversationId, first, context)).toEqual({ count: 1 });
 		expect(await session.snapshotAsOf(RewindableDoc, conversationId, second, context)).toEqual({ count: 2 });
 		const fork = await session.commit(
-			async (tx) => (await tx.forkConversation(conversationId, first, { ownership: { kind: "ownerless" } })).id,
+			async (tx) =>
+				(
+					await tx.forkConversation(conversationId, first, {
+						ownership: { kind: "ownerless" },
+						meta: conversationMeta("test"),
+					})
+				).id,
 			context,
 		);
 		await settleLine(session);

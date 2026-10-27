@@ -18,7 +18,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { SessionImpl } from "../src/session/session.ts";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { allEntries, chatSetup, openChat, unanswered } from "./chat-support.ts";
-import { ControlledStorage, context } from "./session-support.ts";
+import { ControlledStorage, context, conversationMeta } from "./session-support.ts";
 import { deferred } from "./task-support.ts";
 
 const directories = new Set<string>();
@@ -97,7 +97,10 @@ describe("submissions", () => {
 		);
 		expect(await first.status(context)).toMatchObject({ requestId: "r1", status: "placed" });
 
-		const other = await harness.createConversation({ ownership: { kind: "ownerless" } }, context);
+		const other = await harness.createConversation(
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
 		const write = await other.submit({ type: "write", entry: { kind: "note" }, requestId: "r1" }, context);
 		expect(write.id).not.toBe(first.id);
 		expect((await other.submit({ type: "write", entry: { kind: "note" }, requestId: "r1" }, context)).id).toBe(
@@ -119,7 +122,10 @@ describe("submissions", () => {
 		const submission = await root.submit({ type: "input", content: "hi" }, context);
 		expect(await submission.abort(context)).toBe("already_placed");
 		expect(await harness.abortSubmission(submission.id, context, root.id)).toBe("already_placed");
-		const other = await harness.createConversation({ ownership: { kind: "ownerless" } }, context);
+		const other = await harness.createConversation(
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
 		expect(await harness.abortSubmission(submission.id, context, other.id)).toBe("not_found");
 		expect(await harness.abortSubmission(999_999 as SubmissionId, context)).toBe("not_found");
 		expect(await harness.submission(999_999 as SubmissionId, context)).toBeUndefined();

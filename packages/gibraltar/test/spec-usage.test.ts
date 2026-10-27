@@ -34,6 +34,7 @@ import {
 import { expect, expectTypeOf, it } from "vitest";
 import type { ExecutionEnv } from "../src/env/index.ts";
 import { CodingTools, createBashTool, createEditTool, createReadTool } from "../src/tools/index.ts";
+import { conversationMeta } from "./session-support.ts";
 
 // ─── Names the spec leaves to the application ────────────────────────────────
 
@@ -170,7 +171,10 @@ function examples() {
 						const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
 						if (existing !== undefined) return existing.id;
 						// Starts as a copy of this conversation's agent: model, thinking level, cwd, extensions, tools.
-						const created = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
+						const created = await tx.createConversation({
+							ownership: { kind: "task", taskId: api.taskId },
+							meta: conversationMeta("test"),
+						});
 						// Without this extension, the child is not offered this tool.
 						await configure(tx, created.id, { extensions: { remove: [Subagent] } });
 						return created.id;
@@ -240,7 +244,10 @@ function examples() {
 		// Section 2.2: a tool's commit creates a configured child.
 		childInToolCommit: async (tx: Tx, api: { readonly taskId: TaskId }) => {
 			// In a tool's commit. The child starts as a copy of this conversation's agent: model, extensions, tools, cwd.
-			const child = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
+			const child = await tx.createConversation({
+				ownership: { kind: "task", taskId: api.taskId },
+				meta: conversationMeta("test"),
+			});
 			// A cheaper model, only the read tool, and its own worktree; everything else stays as copied.
 			await configure(tx, child.id, { model: haiku, tools: [readTool], cwd: worktree });
 		},
@@ -312,7 +319,10 @@ function examples() {
 				context,
 			);
 			// The conversation remembers its model and directory; a restart elsewhere keeps both.
-			const root = await harness.root(context, { agent: { model: sonnet, cwd: process.cwd() } });
+			const root = await harness.root(context, {
+				meta: conversationMeta("root"),
+				agent: { model: sonnet, cwd: process.cwd() },
+			});
 
 			await root.configure({ tools: { remove: [editTool] } }, context);
 			await root.configure({ tools: { remove: [bashTool] } }, context); // edit is offered again
@@ -342,7 +352,10 @@ function examples() {
 			// In subagentTool's spawn commit, after the name checks:
 			const anchor = await tx.createTask(Anchor, null, { ownership: { kind: "conversation" }, background: true });
 			// Owned by a task of the parent: starts as a copy of the parent's agent.
-			const child = await tx.createConversation({ ownership: { kind: "task", taskId: anchor } });
+			const child = await tx.createConversation({
+				ownership: { kind: "task", taskId: anchor },
+				meta: conversationMeta("test"),
+			});
 			await configure(tx, child.id, {
 				extensions: { remove: [SubagentTools] },
 				instructions: `You are the subagent "${name}". Answer the main agent's requests.`,

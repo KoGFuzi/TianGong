@@ -26,7 +26,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { type ChatSetup, chatSetup, openChat, textOf, waitFor } from "./chat-support.ts";
 import { addTool } from "./harness-support.ts";
-import { context, documentChanges } from "./session-support.ts";
+import { context, conversationMeta, documentChanges } from "./session-support.ts";
 import { aborted, deferred } from "./task-support.ts";
 
 /** Attach and start an event stream that records every delivered batch. */
@@ -470,7 +470,10 @@ describe("agent events", () => {
 			fauxAssistantMessage([fauxText("done")]),
 		]);
 		const { harness, root } = await openChat(new MemoryStorage(), setup);
-		const other = await harness.createConversation({ ownership: { kind: "ownerless" } }, context);
+		const other = await harness.createConversation(
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
 		const { stream, events, batches } = await listen(harness, root);
 		const input = await root.submit({ type: "input", content: "a" }, context);
 		await waitFor(() => events().some((event) => event.type === "tool_execution_start"));

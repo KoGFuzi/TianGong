@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { chatSetup, openChat } from "./chat-support.ts";
-import { context } from "./session-support.ts";
+import { context, conversationMeta } from "./session-support.ts";
 
 const directories: string[] = [];
 
@@ -52,7 +52,10 @@ describe("projectUsage", () => {
 		setup.faux.setResponses([reply("ok")]);
 		await (await root.submit({ type: "input", content: "hi" }, context)).wait(context);
 
-		const child = await harness.createConversation({ ownership: { kind: "ownerless" } }, context);
+		const child = await harness.createConversation(
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
 		child.configure({ model: { provider: "faux", modelId: "faux-1" } }, context);
 		setup.faux.setResponses([reply("yes")]);
 		await (await child.submit({ type: "input", content: "hello" }, context)).wait(context);
@@ -82,7 +85,7 @@ describe("projectUsage", () => {
 		const { harness, root } = await openChat(storage, setup);
 		setup.faux.setResponses([reply("ok")]);
 		await (await root.submit({ type: "input", content: "hi" }, context)).wait(context);
-		await harness.createConversation({ ownership: { kind: "ownerless" } }, context);
+		await harness.createConversation({ ownership: { kind: "ownerless" }, meta: conversationMeta("test") }, context);
 
 		expect((await projectUsage(storage, context)).conversations).toBe(1);
 

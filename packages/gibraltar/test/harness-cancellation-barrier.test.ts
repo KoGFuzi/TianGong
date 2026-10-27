@@ -1,7 +1,7 @@
 import type { Context } from "@OnePanda-TgSec/chord";
 import { createSession, defineTask, MemoryStorage, type StorageWrite, type TaskId } from "@OnePanda-TgSec/tg-gibraltar";
 import { describe, expect, it } from "vitest";
-import { context, flush } from "./session-support.ts";
+import { context, conversationMeta, flush } from "./session-support.ts";
 import { aborted, deferred, eventually, openTasks } from "./task-support.ts";
 
 /** Runs until aborted; its abort handler ends it `aborted`. */
@@ -61,7 +61,7 @@ describe("work below a cancelled owner", () => {
 			},
 		});
 		const { harness } = await openTasks(storage, [Dormant, Child]);
-		const root = await harness.root(context);
+		const root = await harness.root(context, { meta: conversationMeta("root") });
 		const parent = await root.commit(
 			(tx) => tx.createTask(Dormant, null, { ownership: { kind: "conversation" } }),
 			context,
@@ -95,7 +95,7 @@ describe("work below a cancelled owner", () => {
 		const storage = new MemoryStorage();
 		const session = createSession(storage);
 		const conversation = await session.commit(
-			(tx) => tx.createConversation({ ownership: { kind: "ownerless" } }),
+			(tx) => tx.createConversation({ ownership: { kind: "ownerless" }, meta: conversationMeta("test") }),
 			context,
 		);
 		const parent = await session.commit(
@@ -147,7 +147,7 @@ describe("work below a cancelled owner", () => {
 		const storage = new MemoryStorage();
 		const session = createSession(storage);
 		const conversation = await session.commit(
-			(tx) => tx.createConversation({ ownership: { kind: "ownerless" } }),
+			(tx) => tx.createConversation({ ownership: { kind: "ownerless" }, meta: conversationMeta("test") }),
 			context,
 		);
 		const top = await session.commit(
@@ -191,7 +191,7 @@ describe("work below a cancelled owner", () => {
 		const storage = new MemoryStorage();
 		const session = createSession(storage);
 		const conversation = await session.commit(
-			(tx) => tx.createConversation({ ownership: { kind: "ownerless" } }),
+			(tx) => tx.createConversation({ ownership: { kind: "ownerless" }, meta: conversationMeta("test") }),
 			context,
 		);
 		const holder = await session.commit(

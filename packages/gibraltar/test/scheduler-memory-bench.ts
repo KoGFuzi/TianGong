@@ -23,6 +23,7 @@ import {
 } from "../src/index.ts";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { retainedBytes } from "./heap-retained.ts";
+import { conversationMeta } from "./session-support.ts";
 
 const waiting = new Map<string, () => void>();
 /** Holds until released by name, then completes. */
@@ -66,7 +67,7 @@ async function run(cycles: number) {
 		const registry = createRegistry();
 		registry.install(defineExtension({ name: "bench", tasks: [Hold] }));
 		const harness = await Harness.open(storage, { models: createModels(), registry }, context);
-		const root = await harness.root(context);
+		const root = await harness.root(context, { meta: conversationMeta("root") });
 		harness.resume();
 		const parent = await root.commit(
 			(tx) => tx.createTask(Hold, { name: "parent" }, { ownership: { kind: "conversation" } }),
@@ -82,7 +83,10 @@ async function run(cycles: number) {
 					{ name: `tool${n}` },
 					{ ownership: { kind: "task", taskId: parent } },
 				);
-				const child = await tx.createConversation({ ownership: { kind: "task", taskId: tool } });
+				const child = await tx.createConversation({
+					ownership: { kind: "task", taskId: tool },
+					meta: conversationMeta("test"),
+				});
 				const inner = await tx.createTask(
 					Hold,
 					{ name: `inner${n}` },

@@ -23,6 +23,7 @@ import { createRegistry, defineTool, Harness, LiveDoc, MemoryStorage, type Stora
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { createBashTool } from "../src/tools/index.ts";
 import { addTool } from "./harness-support.ts";
+import { conversationMeta } from "./session-support.ts";
 
 type Backend = "memory" | "sqlite";
 type Rate = "low" | "normal" | "high";
@@ -190,7 +191,10 @@ async function runScenario(scenario: Scenario): Promise<Metrics> {
 		const nodeEnv = new NodeExecutionEnv({ cwd: directory });
 		const env = () => nodeEnv;
 		let harness = await Harness.open(await openTimed(), { models, registry, env }, context);
-		const root = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" } } });
+		const root = await harness.root(context, {
+			meta: conversationMeta("root"),
+			agent: { model: { provider: "faux", modelId: "faux-1" } },
+		});
 		let liveCommits = 0;
 		let liveOpBytes = 0;
 		let outputSets = 0;

@@ -5,7 +5,15 @@ import { idFromNumber } from "../src/ids.ts";
 import type { SqliteDatabase, SqliteExecutor, SqliteValue } from "../src/storage/sqlite/index.ts";
 import { SqliteStorage } from "../src/storage/sqlite/index.ts";
 import { NodeSqliteDatabase, openNodeSqliteDatabase } from "../src/storage/sqlite/node.ts";
-import { type DocumentId, type EntryId, ROOT_CONVERSATION_ID } from "../src/types.ts";
+import { type ConversationMeta, type DocumentId, type EntryId, ROOT_CONVERSATION_ID } from "../src/types.ts";
+
+const conversationMeta = (title: string): ConversationMeta => ({
+	title,
+	cwd: "",
+	lane: "test",
+	createdAt: 1,
+	updatedAt: 1,
+});
 
 type SettlementMode = "immediate" | "delay" | "reject";
 
@@ -82,7 +90,10 @@ describe("portable SQLite facade settlement", () => {
 	it("prepares each storage statement once per connection and reuses it across transactions", async () => {
 		const connection = new PrepareCountingDatabaseSync(":memory:");
 		const storage = await SqliteStorage.open(new NodeSqliteDatabase(connection));
-		await storage.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], BACKGROUND_CONTEXT);
+		await storage.commit(
+			[{ type: "conversation", value: { id: ROOT_CONVERSATION_ID }, meta: conversationMeta("fixture") }],
+			BACKGROUND_CONTEXT,
+		);
 		await storage.commit(
 			Array.from({ length: 100 }, (_, index) => ({
 				type: "entry" as const,
@@ -102,7 +113,10 @@ describe("portable SQLite facade settlement", () => {
 		expect((await storage.entry(idFromNumber<EntryId>(2), BACKGROUND_CONTEXT))?.entry.kind).toBe("cached");
 		expect((await storage.entry(idFromNumber<EntryId>(102), BACKGROUND_CONTEXT))?.entry.kind).toBe("cached-again");
 		await expect(
-			storage.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], BACKGROUND_CONTEXT),
+			storage.commit(
+				[{ type: "conversation", value: { id: ROOT_CONVERSATION_ID }, meta: conversationMeta("fixture") }],
+				BACKGROUND_CONTEXT,
+			),
 		).rejects.toThrow("ID 1 already belongs to conversation");
 		expect((await storage.entry(idFromNumber<EntryId>(2), BACKGROUND_CONTEXT))?.entry.kind).toBe("cached");
 		expect(connection.repeatedPrepares()).toEqual([]);
@@ -174,7 +188,7 @@ describe("portable SQLite facade settlement", () => {
 
 		const storage = await SqliteStorage.open(database);
 		const commit = storage.commit(
-			[{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }],
+			[{ type: "conversation", value: { id: ROOT_CONVERSATION_ID }, meta: conversationMeta("fixture") }],
 			BACKGROUND_CONTEXT,
 		);
 		const read = storage.conversation(ROOT_CONVERSATION_ID, BACKGROUND_CONTEXT);
@@ -242,7 +256,7 @@ describe("portable SQLite facade settlement", () => {
 		const entryId = idFromNumber<EntryId>(2);
 		await storage.commit(
 			[
-				{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } },
+				{ type: "conversation", value: { id: ROOT_CONVERSATION_ID }, meta: conversationMeta("fixture") },
 				{ type: "entry", value: { id: entryId, conversationId: ROOT_CONVERSATION_ID, kind: "probe" } },
 			],
 			BACKGROUND_CONTEXT,

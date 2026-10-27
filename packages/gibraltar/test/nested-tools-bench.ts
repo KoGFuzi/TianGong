@@ -28,6 +28,7 @@ import {
 	ToolResultEntry,
 } from "../src/index.ts";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
+import { conversationMeta } from "./session-support.ts";
 
 type Scenario = {
 	calls: number;
@@ -131,7 +132,10 @@ async function runScenario(scenario: Scenario): Promise<{ perRun: Run[]; closedB
 			return commit(writes, commitContext);
 		};
 		const harness = await Harness.open(storage, { models, registry }, context);
-		const root = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" } } });
+		const root = await harness.root(context, {
+			meta: conversationMeta("root"),
+			agent: { model: { provider: "faux", modelId: "faux-1" } },
+		});
 		const perRun: Run[] = [];
 		const top = scenario.depth === 1 ? scenario.calls : scenario.calls / FAN_OUT;
 		const baseHeap = heapAfterGc();

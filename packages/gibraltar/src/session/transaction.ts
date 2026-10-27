@@ -11,11 +11,12 @@ import {
 	type ResolvedAddress,
 	resolveAddress,
 } from "../documents.ts";
-import { ReadAfterWrite } from "../errors.ts";
+import { ReadAfterWrite, StorageRequestError } from "../errors.ts";
 import type {
 	ConversationDocFamilyToken,
 	ConversationDocToken,
 	ConversationId,
+	ConversationMeta,
 	ConversationOwnership,
 	ConversationQuery,
 	ConversationRecord,
@@ -56,6 +57,11 @@ import { ROOT_CONVERSATION_ID } from "../types.ts";
 import { prepareForkDocumentCopies } from "./forks.ts";
 
 type AnyTaskRecord = TaskRecord<JsonValue, JsonValue, JsonValue>;
+
+/** Staged writes before metadata resolution: a created conversation's meta is staged separately. */
+type StagedWrite =
+	| { readonly type: "conversation"; readonly value: ConversationRecord }
+	| Exclude<StorageWrite, { readonly type: "conversation" }>;
 
 /** A staged submission change: a settlement, or the placement of a queued submission at its entry. */
 type SubmissionChange = SubmissionSettlement | { readonly status: "placed"; readonly entry: EntryId };
@@ -200,8 +206,10 @@ export class Transaction implements Tx {
 	#hasTableWrite = false;
 
 	/** Atomic batch; conversation and entry writes stage eagerly, while task and document writes assemble later. */
-	readonly #writes: StorageWrite[] = [];
+	readonly #writes: StagedWrite[] = [];
 	readonly #createdConversationIds = new Set<ConversationId>();
+	/** Display metadata staged for conversations this transaction created, resolved into the writes at assembly. */
+	readonly #conversationMeta = new Map<ConversationId, ConversationMeta>();
 	readonly #forkSourceConversationIds = new Set<ConversationId>();
 	readonly #forkSourceDocumentIds = new Set<DocumentId>();
 	/** One entry per task touched by a public read, candidate write, or document-owner lookup. */
@@ -279,8 +287,23 @@ export class Transaction implements Tx {
 
 	// ─── Table writes ───────────────────────────────────────────────────────
 
-	createConversation(options: { readonly ownership: ConversationOwnership }): Promise<ConversationRecord> {
-		return this.#write(() => this.#stageConversation(undefined, options.ownership));
+	createConversation(options: {
+		readonly ownership: ConversationOwnership;
+		readonly meta?: ConversationMeta;
+	}): Promise<ConversationRecord> {
+		return this.#write(async () => {
+			const record = await this.#stageConversation(undefined, options.ownership);
+			if (options.meta !== undefined) this.setConversationMeta(record.id, options.meta);
+			return record;
+		});
+	}
+
+	setConversationMeta(conversationId: ConversationId, meta: ConversationMeta): void {
+		this.#assertOpen();
+		if (!this.#createdConversationIds.has(conversationId)) {
+			throw new StorageRequestError(`Conversation ${conversationId} is not created by this transaction`);
+		}
+		this.#conversationMeta.set(conversationId, meta);
 	}
 
 	/** Internal final-form bootstrap path for the reserved root identity. */
@@ -291,11 +314,13 @@ export class Transaction implements Tx {
 	forkConversation(
 		parentConversationId: ConversationId,
 		at: EntryId,
-		options: { readonly ownership: ConversationOwnership },
+		options: { readonly ownership: ConversationOwnership; readonly meta?: ConversationMeta },
 	): Promise<ConversationRecord> {
-		return this.#write(() =>
-			this.#stageConversation({ conversationId: parentConversationId, at }, options.ownership),
-		);
+		return this.#write(async () => {
+			const record = await this.#stageConversation({ conversationId: parentConversationId, at }, options.ownership);
+			if (options.meta !== undefined) this.setConversationMeta(record.id, options.meta);
+			return record;
+		});
 	}
 
 	async #stageConversation(
@@ -681,6 +706,7 @@ export class Transaction implements Tx {
 	/** Seal after callback failure: abort every change and observe every pending operation. */
 	async settleFailure(): Promise<void> {
 		this.#sealed = true;
+		this.#conversationMeta.clear();
 		this.#abortChanges();
 		await Promise.allSettled(this.#pendingOperations);
 	}
@@ -703,6 +729,7 @@ export class Transaction implements Tx {
 			}
 			return await this.#assemble();
 		} catch (error) {
+			this.#conversationMeta.clear();
 			this.#abortChanges();
 			throw error;
 		}
@@ -843,7 +870,14 @@ export class Transaction implements Tx {
 			if (next !== current) this.#submissions.set(id, next);
 		}
 
-		const writes = this.#writes;
+		const writes: StorageWrite[] = this.#writes.map((write) => {
+			if (write.type !== "conversation") return write;
+			const meta = this.#conversationMeta.get(write.value.id);
+			if (meta === undefined) {
+				throw new StorageRequestError(`Conversation ${write.value.id} is created without metadata`);
+			}
+			return { ...write, meta };
+		});
 		for (const value of this.#submissions.values()) writes.push({ type: "submission", value });
 		for (const task of this.#tasksById.values()) {
 			if (task.write !== undefined) writes.push({ type: "task", value: task.write.record });

@@ -1,7 +1,7 @@
 import { defineTask, MemoryStorage, type TaskId, type TaskInspection } from "@OnePanda-TgSec/tg-gibraltar";
 import { describe, expect, it } from "vitest";
 import { chatSetup, openChat, unanswered, waitFor } from "./chat-support.ts";
-import { context } from "./session-support.ts";
+import { context, conversationMeta } from "./session-support.ts";
 import { completed, deferred, eventually, openTasks } from "./task-support.ts";
 
 type Step = { phase: "run" };
@@ -74,7 +74,7 @@ describe("Harness.inspect()", () => {
 			task("test.too-old", 1),
 		];
 		const { harness } = await openTasks(new MemoryStorage(), registered);
-		const root = await harness.root(context);
+		const root = await harness.root(context, { meta: conversationMeta("root") });
 		const ids = await root.commit(async (tx) => {
 			gateId = await tx.createTask(Gate, null, { ownership: { kind: "conversation" } });
 			return {
@@ -147,7 +147,10 @@ describe("Harness.inspect()", () => {
 		const busy = unanswered();
 		setup.faux.setResponses([busy.step]);
 		const { harness, root } = await openChat(new MemoryStorage(), setup);
-		const other = await harness.createConversation({ ownership: { kind: "ownerless" } }, context);
+		const other = await harness.createConversation(
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
 		await other.submit({ type: "write", entry: { kind: "note" } }, context);
 		const input = await root.submit({ type: "input", content: "hi" }, context);
 		await busy.reached;

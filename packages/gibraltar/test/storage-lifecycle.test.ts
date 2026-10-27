@@ -7,7 +7,21 @@ import { afterEach, describe, expect, it } from "vitest";
 import { MemoryStorage } from "../src/storage/memory.ts";
 import { applySqliteMigrations, SQLITE_MIGRATIONS, type SqliteStorage } from "../src/storage/sqlite/index.ts";
 import { openNodeSqliteDatabase, openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
-import { type ConversationId, type DocumentId, type EntryId, ROOT_CONVERSATION_ID } from "../src/types.ts";
+import {
+	type ConversationId,
+	type ConversationMeta,
+	type DocumentId,
+	type EntryId,
+	ROOT_CONVERSATION_ID,
+} from "../src/types.ts";
+
+const conversationMeta = (title: string): ConversationMeta => ({
+	title,
+	cwd: "",
+	lane: "test",
+	createdAt: 1,
+	updatedAt: 1,
+});
 
 const context = BACKGROUND_CONTEXT;
 const openStorages = new Set<SqliteStorage>();
@@ -39,8 +53,8 @@ async function seedConversation(storage: SqliteStorage): Promise<ConversationId>
 	const documentId = await storage.mintId<DocumentId>();
 	await storage.commit(
 		[
-			{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } },
-			{ type: "conversation", value: { id: conversationId } },
+			{ type: "conversation", value: { id: ROOT_CONVERSATION_ID }, meta: conversationMeta("fixture") },
+			{ type: "conversation", value: { id: conversationId }, meta: conversationMeta("fixture") },
 			{ type: "entry", value: { id: entryId, conversationId, kind: "message" } },
 			{
 				type: "document.create",
@@ -183,18 +197,24 @@ describe("storage lifecycle", () => {
 
 	it("appends one durable audit event per deletion in deletion order", async () => {
 		const { storage, path } = await createSqliteStorage();
-		await storage.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], context);
+		await storage.commit(
+			[{ type: "conversation", value: { id: ROOT_CONVERSATION_ID }, meta: conversationMeta("fixture") }],
+			context,
+		);
 		const firstId = await storage.mintId<ConversationId>();
 		const firstEntryId = await storage.mintId<EntryId>();
 		await storage.commit(
 			[
-				{ type: "conversation", value: { id: firstId } },
+				{ type: "conversation", value: { id: firstId }, meta: conversationMeta("fixture") },
 				{ type: "entry", value: { id: firstEntryId, conversationId: firstId, kind: "message" } },
 			],
 			context,
 		);
 		const secondId = await storage.mintId<ConversationId>();
-		await storage.commit([{ type: "conversation", value: { id: secondId } }], context);
+		await storage.commit(
+			[{ type: "conversation", value: { id: secondId }, meta: conversationMeta("fixture") }],
+			context,
+		);
 
 		const firstDeletion = await storage.deleteConversation(firstId, context);
 		const secondDeletion = await storage.deleteConversation(secondId, context);
@@ -245,7 +265,10 @@ describe("storage lifecycle", () => {
 
 	it("rejects lifecycle operations after close", async () => {
 		const { storage, directory } = await createSqliteStorage();
-		await storage.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], context);
+		await storage.commit(
+			[{ type: "conversation", value: { id: ROOT_CONVERSATION_ID }, meta: conversationMeta("fixture") }],
+			context,
+		);
 		await storage.close(context);
 		await expect(storage.deleteConversation(ROOT_CONVERSATION_ID, context)).rejects.toThrow("closed");
 		await expect(storage.exportConversation(ROOT_CONVERSATION_ID, context)).rejects.toThrow("closed");
@@ -254,7 +277,10 @@ describe("storage lifecycle", () => {
 
 	it("rejects MemoryStorage file backups as an unsupported capability", async () => {
 		const storage = new MemoryStorage();
-		await storage.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], context);
+		await storage.commit(
+			[{ type: "conversation", value: { id: ROOT_CONVERSATION_ID }, meta: conversationMeta("fixture") }],
+			context,
+		);
 		const directory = await mkdtemp(join(tmpdir(), "tg-gibraltar-lifecycle-"));
 		tempDirectories.add(directory);
 		const path = join(directory, "memory-backup.json");

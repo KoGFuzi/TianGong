@@ -14,7 +14,7 @@ import { rankDocuments, tokenize } from "../src/search.ts";
 import { createToolSearchExtension } from "../src/tool-search/index.ts";
 import { allEntries, type ChatSetup, chatSetup, openChat } from "./chat-support.ts";
 import { addTool } from "./harness-support.ts";
-import { context } from "./session-support.ts";
+import { context, conversationMeta } from "./session-support.ts";
 
 function tool(name: string, description: string, extra: Partial<ToolRegistration> = {}): ToolRegistration {
 	return defineTool({
@@ -176,8 +176,16 @@ describe("deferred tools and tool_search", () => {
 		const { harness, root } = await openChat(new MemoryStorage(), chat);
 		await (await root.submit({ type: "input", content: "go" }, context)).wait(context);
 		const entries = await allEntries(root);
-		const before = await root.fork(entries[0]!.id, { ownership: { kind: "ownerless" } }, context);
-		const after = await root.fork(entries.at(-1)!.id, { ownership: { kind: "ownerless" } }, context);
+		const before = await root.fork(
+			entries[0]!.id,
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
+		const after = await root.fork(
+			entries.at(-1)!.id,
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
 		expect(await offered(before)).not.toContain("github_get_issue");
 		expect(await offered(after)).toContain("github_get_issue");
 		await root.reset(undefined, context);

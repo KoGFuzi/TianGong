@@ -2,6 +2,7 @@ import type { JsonValue } from "@OnePanda-TgSec/chord";
 import { BACKGROUND_CONTEXT } from "@OnePanda-TgSec/chord/context";
 import type {
 	ConversationId,
+	ConversationMeta,
 	DocumentCreate,
 	DocumentId,
 	EntryId,
@@ -13,6 +14,14 @@ import type {
 	TaskRecord,
 } from "../types.ts";
 import { ROOT_CONVERSATION_ID } from "../types.ts";
+
+const benchmarkConversationMeta = (title: string): ConversationMeta => ({
+	title,
+	cwd: "",
+	lane: "benchmark",
+	createdAt: 1,
+	updatedAt: 1,
+});
 
 export type StorageBenchmarkScale = {
 	readonly name: string;
@@ -89,7 +98,10 @@ export async function seedStorageBenchmark(
 	storage: Storage,
 	scale: StorageBenchmarkScale = TIMING_SCALE,
 ): Promise<StorageBenchmarkDataset> {
-	await storage.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], BACKGROUND_CONTEXT);
+	await storage.commit(
+		[{ type: "conversation", value: { id: ROOT_CONVERSATION_ID }, meta: benchmarkConversationMeta("benchmark") }],
+		BACKGROUND_CONTEXT,
+	);
 
 	let firstEntryId: EntryId | undefined;
 	for (let start = 0; start < scale.entryCount; start += BATCH_SIZE) {
@@ -235,6 +247,7 @@ export async function seedStorageBenchmark(
 				{
 					type: "conversation",
 					value: { id: conversationId, parent: { conversationId: parentConversationId, at: parentAt } },
+					meta: benchmarkConversationMeta("forked"),
 				},
 			],
 			BACKGROUND_CONTEXT,
@@ -389,7 +402,10 @@ export type StorageWriteBenchmark = {
 
 /** Seed the common state expected by every write benchmark sample. */
 export async function seedStorageWriteBenchmark(storage: Storage): Promise<void> {
-	await storage.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], BACKGROUND_CONTEXT);
+	await storage.commit(
+		[{ type: "conversation", value: { id: ROOT_CONVERSATION_ID }, meta: benchmarkConversationMeta("benchmark") }],
+		BACKGROUND_CONTEXT,
+	);
 	await storage.commit(
 		await Promise.all(
 			Array.from({ length: 100 }, async (_, index) => ({

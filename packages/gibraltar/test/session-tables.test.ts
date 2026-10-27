@@ -11,7 +11,14 @@ import {
 } from "@OnePanda-TgSec/tg-gibraltar";
 import { describe, expect, it } from "vitest";
 import { idFromNumber } from "../src/ids.ts";
-import { context, createConversation, documentChanges, flush, openTestSession } from "./session-support.ts";
+import {
+	context,
+	conversationMeta,
+	createConversation,
+	documentChanges,
+	flush,
+	openTestSession,
+} from "./session-support.ts";
 
 type Checkpoint = { phase: "start" } | { phase: "next"; step: number };
 const WorkTask = defineTask<{ path: string }, Checkpoint, { ok: boolean }>({
@@ -132,7 +139,10 @@ describe("Session transaction tables", () => {
 	it("creates conversations, entries, and tasks with minted IDs", async () => {
 		const { session, storage, publications } = openTestSession();
 		const created = await session.commit(async (tx) => {
-			const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
+			const conversation = await tx.createConversation({
+				ownership: { kind: "ownerless" },
+				meta: conversationMeta("test"),
+			});
 			const first = await tx.appendEntry(conversation.id, { kind: "note", data: "one" });
 			const headed = await tx.appendEntry(conversation.id, { kind: "summary", head: "self" });
 			const task = await tx.createTask(
@@ -194,7 +204,10 @@ describe("Session transaction tables", () => {
 				{ path: "background" },
 				{ ownership: { kind: "conversation" }, conversationId: parentId, background: true },
 			);
-			const child = await tx.createConversation({ ownership: { kind: "task", taskId: supervisorId } });
+			const child = await tx.createConversation({
+				ownership: { kind: "task", taskId: supervisorId },
+				meta: conversationMeta("test"),
+			});
 			return { supervisorId, child };
 		}, context);
 
@@ -239,7 +252,14 @@ describe("Session transaction tables", () => {
 
 		const missingTaskId = idFromNumber<TaskId>(999);
 		await expect(
-			session.commit((tx) => tx.createConversation({ ownership: { kind: "task", taskId: missingTaskId } }), context),
+			session.commit(
+				(tx) =>
+					tx.createConversation({
+						ownership: { kind: "task", taskId: missingTaskId },
+						meta: conversationMeta("test"),
+					}),
+				context,
+			),
 		).rejects.toThrow("Conversation owner task 999 does not exist");
 
 		let rejectedChildId: ConversationId | undefined;
@@ -250,7 +270,12 @@ describe("Session transaction tables", () => {
 					{ path: "aborting" },
 					{ ownership: { kind: "conversation" }, conversationId: parentId },
 				);
-				rejectedChildId = (await tx.createConversation({ ownership: { kind: "task", taskId: supervisorId } })).id;
+				rejectedChildId = (
+					await tx.createConversation({
+						ownership: { kind: "task", taskId: supervisorId },
+						meta: conversationMeta("test"),
+					})
+				).id;
 				tx.setTask({
 					id: supervisorId,
 					conversationId: parentId,
@@ -274,7 +299,10 @@ describe("Session transaction tables", () => {
 					{ path: "terminal" },
 					{ ownership: { kind: "conversation" }, conversationId: parentId },
 				);
-				await tx.createConversation({ ownership: { kind: "task", taskId: supervisorId } });
+				await tx.createConversation({
+					ownership: { kind: "task", taskId: supervisorId },
+					meta: conversationMeta("test"),
+				});
 				tx.setTask({
 					id: supervisorId,
 					conversationId: parentId,
@@ -294,7 +322,11 @@ describe("Session transaction tables", () => {
 		}, context);
 		await expect(
 			session.commit(
-				(tx) => tx.createConversation({ ownership: { kind: "task", taskId: terminalOwnerId } }),
+				(tx) =>
+					tx.createConversation({
+						ownership: { kind: "task", taskId: terminalOwnerId },
+						meta: conversationMeta("test"),
+					}),
 				context,
 			),
 		).rejects.toThrow("is terminal");
@@ -377,7 +409,7 @@ describe("Session transaction tables", () => {
 		for (const document of documents) expect(document.conversationId).toBe(conversationId);
 
 		await session.commit(async (tx) => {
-			await tx.createConversation({ ownership: { kind: "ownerless" } });
+			await tx.createConversation({ ownership: { kind: "ownerless" }, meta: conversationMeta("test") });
 			(await tx.doc(ProgressDoc, taskId)).lines.push("committed task");
 		}, context);
 		await flush();

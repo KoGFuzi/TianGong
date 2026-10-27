@@ -126,6 +126,13 @@ export function createTaskTool(options: TaskToolOptions): ToolRegistration<typeo
 				const child = await api.commit(async (tx) => {
 					const created = await tx.forkConversation(api.conversationId, forkPoint, {
 						ownership: { kind: "task", taskId: api.taskId },
+						meta: {
+							title: args.intent.length > 80 ? `${args.intent.slice(0, 80)}…` : args.intent,
+							cwd: policy.cwd ?? "",
+							lane,
+							createdAt: now(),
+							updatedAt: now(),
+						},
 					});
 					const agent = await tx.doc(AgentDoc, created.id);
 					agent.extensions = [...policy.extensions];

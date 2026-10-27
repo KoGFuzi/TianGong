@@ -3,6 +3,7 @@ import { createModels, fauxAssistantMessage, fauxText, fauxToolCall, Type } from
 import {
 	type Conversation,
 	type ConversationId,
+	type ConversationMeta,
 	createRegistry,
 	defineDoc,
 	defineTask,
@@ -21,7 +22,7 @@ import type { SessionImpl } from "../src/session/session.ts";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { chatSetup, openChat } from "./chat-support.ts";
 import { addHooks, addTask, addTool } from "./harness-support.ts";
-import { ControlledStorage, context, flush } from "./session-support.ts";
+import { ControlledStorage, context, conversationMeta, flush } from "./session-support.ts";
 import { completed, countingReader, deferred, eventually, openTasks, settled } from "./task-support.ts";
 
 type Step = { phase: "run" };
@@ -74,7 +75,7 @@ async function seedRunningTask(storage: Storage): Promise<void> {
 	const task = { id, conversationId, kind: "test.seeded", version: 1, input: null, background: false, state };
 	await storage.commit(
 		[
-			{ type: "conversation", value: { id: conversationId } },
+			{ type: "conversation", value: { id: conversationId }, meta: conversationMeta("fixture") },
 			{ type: "task", value: { ...task, abortRequested: false } },
 		],
 		context,
@@ -136,7 +137,7 @@ describe("Harness close", () => {
 			readAfterRelease = await storageOpen(storage);
 		});
 		const { harness } = await openTasks(storage, [Stubborn]);
-		await start(await harness.root(context), Stubborn);
+		await start(await harness.root(context, { meta: conversationMeta("root") }), Stubborn);
 		harness.resume();
 		await reached.promise;
 		const closing = harness.close(context);
@@ -209,7 +210,7 @@ describe("Harness close", () => {
 				log.push(`end ${mine}`);
 			});
 			const first = await openTasks(await openNodeSqliteStorage(path), [Stubborn]);
-			const id = await start(await first.harness.root(context), Stubborn);
+			const id = await start(await first.harness.root(context, { meta: conversationMeta("root") }), Stubborn);
 			first.harness.resume();
 			await eventually(() => log.length === 1);
 			const closing = first.harness.close(context).then(() => void log.push("closed"));
@@ -237,7 +238,7 @@ describe("Harness close", () => {
 			await gate.promise;
 		});
 		const { harness } = await openTasks(storage, [Stubborn]);
-		await start(await harness.root(context), Stubborn);
+		await start(await harness.root(context, { meta: conversationMeta("root") }), Stubborn);
 		harness.resume();
 		await reached.promise;
 		const controller = new AbortController();
@@ -257,7 +258,7 @@ describe("Harness close", () => {
 	it("settles durably a commit whose committer was cancelled while it was in Storage", async () => {
 		const storage = new ControlledStorage();
 		const { harness } = await openTasks(storage, []);
-		const root = await harness.root(context);
+		const root = await harness.root(context, { meta: conversationMeta("root") });
 		const held = storage.holdCommits();
 		const controller = new AbortController();
 		const committing = root.commit(
@@ -282,7 +283,7 @@ describe("Harness close", () => {
 		});
 		const storage = new ControlledStorage();
 		const { harness } = await openTasks(storage, []);
-		const root = await harness.root(context);
+		const root = await harness.root(context, { meta: conversationMeta("root") });
 		await harness.commit(async (tx) => {
 			(await tx.doc(Notes)).text = "before";
 		}, context);
@@ -343,7 +344,7 @@ describe("Harness close", () => {
 		});
 		const storage = new ControlledStorage();
 		const { harness } = await openTasks(storage, []);
-		const root = await harness.root(context);
+		const root = await harness.root(context, { meta: conversationMeta("root") });
 		await harness.commit(async (tx) => {
 			(await tx.doc(Notes)).text = "x";
 		}, context);
@@ -394,7 +395,7 @@ describe("Harness close", () => {
 	it("rejects conversation and Harness operations once close begins; inspect queued before reports closing", async () => {
 		const storage = new ControlledStorage();
 		const { harness } = await openTasks(storage, []);
-		const root = await harness.root(context);
+		const root = await harness.root(context, { meta: conversationMeta("root") });
 		const entry = await root.commit((tx) => tx.appendEntry(root.id, { kind: "note" }), context);
 		const submission = await root.submit({ type: "write", entry: { kind: "note" } }, context);
 
@@ -410,7 +411,7 @@ describe("Harness close", () => {
 			commit: () => root.commit(() => {}, context),
 			context: () => root.context(context),
 			entries: () => root.entries({}, 10, undefined, context),
-			fork: () => root.fork(entry.id, { ownership: { kind: "ownerless" } }, context),
+			fork: () => root.fork(entry.id, { ownership: { kind: "ownerless" }, meta: conversationMeta("test") }, context),
 			compact: () => root.compact(undefined, context),
 			reset: () => root.reset(undefined, context),
 			abort: () => root.abort(context),
@@ -422,9 +423,10 @@ describe("Harness close", () => {
 			status: () => submission.status(context),
 			wait: () => submission.wait(context),
 			abortSubmission: () => submission.abort(context),
-			root: () => harness.root(context),
+			root: () => harness.root(context, { meta: conversationMeta("root") }),
 			conversation: () => harness.conversation(root.id, context),
-			createConversation: () => harness.createConversation({ ownership: { kind: "ownerless" } }, context),
+			createConversation: () =>
+				harness.createConversation({ ownership: { kind: "ownerless" }, meta: conversationMeta("test") }, context),
 			getTask: () => harness.getTask(1 as TaskId, context),
 			inspect: () => harness.inspect(context),
 			submission: () => harness.submission(submission.id, context),
@@ -464,7 +466,7 @@ describe("Harness close", () => {
 		const Pending = oneStep("test.queued-pending");
 		const storage = new ControlledStorage();
 		const { harness } = await openTasks(storage, []);
-		const root = await harness.root(context);
+		const root = await harness.root(context, { meta: conversationMeta("root") });
 		await harness.commit((tx) => tx.doc(Notes).then(() => {}), context);
 		const taskId = await start(root, Pending);
 		const write = await root.submit({ type: "write", entry: { kind: "note" } }, context);
@@ -521,7 +523,7 @@ describe("scheduling on a paused Harness", () => {
 			ran = true;
 		});
 		const { harness } = await openTasks(new MemoryStorage(), [Marker]);
-		const root = await harness.root(context);
+		const root = await harness.root(context, { meta: conversationMeta("root") });
 		// Background, so idle waits and conversation abort leave it alone.
 		const id = await start(root, Marker, true);
 		const submissionId = await harness.commit(
@@ -596,7 +598,7 @@ describe("registry changes before resume", () => {
 			});
 		const storage = new MemoryStorage();
 		const first = await openTasks(storage, []);
-		const root = await first.harness.root(context);
+		const root = await first.harness.root(context, { meta: conversationMeta("root") });
 		const missing = await start(root, define("unused"));
 		expect((await first.harness.inspect(context)).tasks).toMatchObject([
 			{ state: { kind: "blocked", reason: "missing_task" } },

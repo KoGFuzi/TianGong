@@ -15,6 +15,7 @@ import { CodemodeSandbox } from "@earendil-works/pi-codemode";
 import { createCodemodeTool } from "../src/codemode/index.ts";
 import { createRegistry, defineExtension, defineTool, Harness } from "../src/index.ts";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
+import { conversationMeta } from "./session-support.ts";
 
 type Shape = "sequential" | "parallel";
 
@@ -63,7 +64,10 @@ async function run(mode: "codemode" | "plain", shape: Shape, n: number): Promise
 		]);
 		const storage = await openNodeSqliteStorage(join(directory, "session.sqlite"));
 		const harness = await Harness.open(storage, { models, registry, settings: {} }, context);
-		const root = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" } } });
+		const root = await harness.root(context, {
+			meta: conversationMeta("root"),
+			agent: { model: { provider: "faux", modelId: "faux-1" } },
+		});
 		let commits = 0;
 		harness.subscribeCommits(() => {
 			commits++;

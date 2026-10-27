@@ -18,7 +18,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { openNodeSqliteStorage } from "../src/storage/sqlite/node.ts";
 import { addTask, addTool } from "./harness-support.ts";
-import { ControlledStorage, context, flush } from "./session-support.ts";
+import { ControlledStorage, context, conversationMeta, flush } from "./session-support.ts";
 import { aborted, abortedWith, completed, countingReader, deferred, eventually, openTasks } from "./task-support.ts";
 
 const directories = new Set<string>();
@@ -40,7 +40,7 @@ async function createIn<S extends { phase: string }, R>(
 	harness: OpenHarness,
 	task: Task<null, S, R, object>,
 ): Promise<TaskId<R>> {
-	const root = await harness.root(context);
+	const root = await harness.root(context, { meta: conversationMeta("root") });
 	return root.commit((tx) => tx.createTask(task, null, { ownership: { kind: "conversation" } }), context);
 }
 
@@ -118,7 +118,7 @@ describe("task recovery", () => {
 		const now = () => clock;
 
 		const first = await openTasks(await openNodeSqliteStorage(path), [Transfer], { now });
-		const root = await first.harness.root(context);
+		const root = await first.harness.root(context, { meta: conversationMeta("root") });
 		const id = await root.commit(
 			(tx) => tx.createTask(Transfer, { amount: 7 }, { ownership: { kind: "conversation" } }),
 			context,
@@ -144,7 +144,7 @@ describe("task recovery", () => {
 		const Transfer = transferTask(service, { first: true });
 
 		const first = await openTasks(await openNodeSqliteStorage(path), [Transfer]);
-		const root = await first.harness.root(context);
+		const root = await first.harness.root(context, { meta: conversationMeta("root") });
 		const id = await root.commit(
 			(tx) => tx.createTask(Transfer, { amount: 7 }, { ownership: { kind: "conversation" } }),
 			context,
@@ -531,7 +531,7 @@ describe("blocked tasks", () => {
 			initial: () => ({ n: 0 }),
 		});
 		const { harness } = await openTasks(new MemoryStorage(), []);
-		const root = await harness.root(context);
+		const root = await harness.root(context, { meta: conversationMeta("root") });
 		const id = await root.commit(async (tx) => {
 			const created = await tx.createTask(versioned(1, "x"), null, { ownership: { kind: "conversation" } });
 			(await tx.doc(Scratch, created)).n = 1;

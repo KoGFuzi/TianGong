@@ -18,7 +18,7 @@ import {
 } from "@OnePanda-TgSec/tg-gibraltar";
 import { describe, expect, it } from "vitest";
 import { addHooks, addTask, addTool, user } from "./harness-support.ts";
-import { ControlledStorage, context, flush } from "./session-support.ts";
+import { ControlledStorage, context, conversationMeta, flush } from "./session-support.ts";
 import { aborted, abortedWith, completed, deferred, eventually, openTasks, settled } from "./task-support.ts";
 
 type Step = { phase: "run" };
@@ -64,7 +64,7 @@ async function openRoot(
 	options: Parameters<typeof openTasks>[2] & { readonly storage?: MemoryStorage } = {},
 ) {
 	const opened = await openTasks(options.storage ?? new MemoryStorage(), tasks, options);
-	const root = await opened.harness.root(context);
+	const root = await opened.harness.root(context, { meta: conversationMeta("root") });
 	return { ...opened, root };
 }
 
@@ -232,7 +232,10 @@ describe("task phases", () => {
 			abort: async () => {},
 		});
 		const { harness, root } = await openRoot([Writer, Child]);
-		const conversation = await harness.createConversation({ ownership: { kind: "ownerless" } }, context);
+		const conversation = await harness.createConversation(
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
 		const id = await conversation.commit(
 			(tx) => tx.createTask(Writer, null, { ownership: { kind: "conversation" } }),
 			context,
@@ -812,7 +815,10 @@ describe("task scheduling", () => {
 		});
 		const { harness, root } = await openRoot([Gated]);
 		await harness.waitForIdle(context);
-		const other = await harness.createConversation({ ownership: { kind: "ownerless" } }, context);
+		const other = await harness.createConversation(
+			{ ownership: { kind: "ownerless" }, meta: conversationMeta("test") },
+			context,
+		);
 		const foreground = await start(root, Gated);
 		const background = await start(root, Gated, { background: true });
 		const elsewhere = await start(other, Gated);
@@ -1371,7 +1377,7 @@ describe("task close", () => {
 		addTask(registry, Two);
 		const harness = await Harness.open(new MemoryStorage(), { models: createModels(), registry: reader }, context);
 		harnessRef = harness;
-		const root = await harness.root(context);
+		const root = await harness.root(context, { meta: conversationMeta("root") });
 		await root.commit((tx) => tx.createTask(Two, null, { ownership: { kind: "conversation" } }), context);
 		harness.resume();
 		await eventually(() => closing !== undefined);

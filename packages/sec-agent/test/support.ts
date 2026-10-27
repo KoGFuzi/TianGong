@@ -6,11 +6,21 @@ import {
 	fauxProvider,
 	type Models,
 } from "@OnePanda-TgSec/tg-ai";
+import type { ConversationMeta } from "@OnePanda-TgSec/tg-gibraltar";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export const context = BACKGROUND_CONTEXT;
+
+/** Display metadata for conversations created by fixtures; only dedicated metadata tests assert on the values. */
+export const conversationMeta = (title: string): ConversationMeta => ({
+	title,
+	cwd: "",
+	lane: "test",
+	createdAt: 1,
+	updatedAt: 1,
+});
 
 const directories: string[] = [];
 const closers: Array<() => Promise<void>> = [];

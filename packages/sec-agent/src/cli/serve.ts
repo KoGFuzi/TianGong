@@ -7,7 +7,7 @@ import {
 	fauxAssistantMessage,
 	fauxProvider,
 } from "@OnePanda-TgSec/tg-ai";
-import type { JsonObject, ModelRef, SessionDocToken, Tx } from "@OnePanda-TgSec/tg-gibraltar";
+import type { ConversationId, JsonObject, ModelRef, SessionDocToken, Tx } from "@OnePanda-TgSec/tg-gibraltar";
 import {
 	isTgSecMode,
 	loadTgSecScopeRegistry,
@@ -56,6 +56,10 @@ export type ServeOptions = {
 	readonly port?: number;
 	/** Display name of the campaign's root target; defaults to the project name. */
 	readonly target?: string;
+	/** Print this project's history conversation table and exit without opening a model or the WebUI. */
+	readonly history?: boolean;
+	/** Restore from one history conversation instead of the reserved root. */
+	readonly resume?: { readonly source: ConversationId | "latest" };
 	readonly cwd: string;
 };
 
@@ -180,6 +184,7 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
 			model: modelRef,
 			cwd: options.cwd,
 			...(databasePath === undefined ? {} : { path: databasePath }),
+			...(options.resume === undefined ? {} : { resume: options.resume }),
 			extensions: [core, secTools, ...mcpHost.extensions],
 			onClose: async () => {
 				for (const error of await mcpHost.close()) process.stderr.write(`tg-sec mcp: ${error}\n`);

@@ -3,7 +3,15 @@
 import type { Context } from "@OnePanda-TgSec/chord";
 import { BACKGROUND_CONTEXT } from "@OnePanda-TgSec/chord/context";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@OnePanda-TgSec/tg-ai";
-import type { JsonObject, SessionDocToken, Tx } from "@OnePanda-TgSec/tg-gibraltar";
+import type {
+	ConversationId,
+	ConversationSummary,
+	Cursor,
+	JsonObject,
+	SessionDocToken,
+	Tx,
+} from "@OnePanda-TgSec/tg-gibraltar";
+import { openNodeSqliteStorage } from "@OnePanda-TgSec/tg-gibraltar/storage/sqlite/node";
 import {
 	createTgSecScopeRegistry,
 	readTgSecMode,
@@ -14,6 +22,7 @@ import { InMemoryTelemetryContext } from "@OnePanda-TgSec/tg-telemetry";
 import { createStdinAskChannel } from "../ask.ts";
 import type { SecAgent } from "../bootstrap.ts";
 import { openSecAgent, type SecAgentLane } from "../bootstrap.ts";
+import { projectDatabasePath } from "../config.ts";
 import { createSecCoreExtension } from "../core-extension.ts";
 import { openTgSecEvidenceStore } from "../evidence/store.ts";
 import { buildSecGuard, secAttestForbiddenRead, secDeclaredTools } from "../guard-wiring.ts";
@@ -76,7 +85,56 @@ type CliOptions = {
 	evidence?: string;
 	cwd: string;
 	input: string;
+	/** Print this project's history conversation table and exit without opening a model. */
+	history?: boolean;
+	/** Restore from one history conversation instead of the reserved root. */
+	resume?: { readonly source: ConversationId | "latest" };
 };
+
+/** The local time the history table shows, `YYYY-MM-DD HH:MM`. */
+function formatCreatedAt(at: number): string {
+	const date = new Date(at);
+	const pad = (value: number): string => String(value).padStart(2, "0");
+	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
+ * Print one row per conversation, newest first: ID, lane, local creation time, and the title, with an
+ * `[archived] ` prefix on archived rows. Ancestry shows through the fork's `↳ ` title mark only, so
+ * the lane column keeps a stable width.
+ */
+async function printHistory(project: string, db: string | undefined): Promise<void> {
+	const path = db ?? projectDatabasePath(project);
+	const storage = await openNodeSqliteStorage(path, { project });
+	try {
+		const summaries: ConversationSummary[] = [];
+		let cursor: Cursor | undefined;
+		do {
+			const page = await storage.scanConversationSummaries({ archived: "include" }, 100, cursor, BACKGROUND_CONTEXT);
+			summaries.push(...page.items);
+			cursor = page.next;
+		} while (cursor !== undefined);
+		if (summaries.length === 0) {
+			process.stdout.write(`no history in project "${project}" (${path})\n`);
+			return;
+		}
+		const idWidth = Math.max("id".length, ...summaries.map((summary) => String(summary.id).length));
+		const laneWidth = Math.max("lane".length, ...summaries.map((summary) => summary.meta.lane.length));
+		const createdWidth = "created".length;
+		const rows = summaries.map((summary) => ({
+			id: String(summary.id),
+			lane: summary.meta.lane,
+			created: formatCreatedAt(summary.meta.createdAt),
+			title: `${summary.meta.archivedAt === undefined ? "" : "[archived] "}${summary.meta.title}`,
+		}));
+		const line = (columns: readonly string[]): string =>
+			`${columns[0]!.padEnd(idWidth)}  ${columns[1]!.padEnd(laneWidth)}  ${columns[2]!.padEnd(createdWidth)}  ${columns[3]}`;
+		process.stdout.write(`${line(["id", "lane", "created", "title"])}\n`);
+		for (const row of rows) process.stdout.write(`${line([row.id, row.lane, row.created, row.title])}\n`);
+	} finally {
+		await storage.close(BACKGROUND_CONTEXT);
+	}
+}
 
 function usage(): string {
 	const providers = oauthProviderNames().join("\n");
@@ -94,6 +152,9 @@ serve options:
   --model <provider/model>  Model to run (default: TG_SEC_MODEL, the remembered model,
                             then the first authenticated model)
   --faux                    Local echo model: no credentials, no egress
+  --history                 Print this project's history conversations and exit
+  --session <id>            Restore by forking this history conversation; it stays read-only
+  --continue                Restore by forking the newest non-archived root conversation
   --host <address>          Bind address (default: 127.0.0.1)
   --port <number>           Port (default: 0, the OS picks a free one)
   --target <name>           Display name of the campaign target (default: the project)
@@ -109,6 +170,9 @@ smoke options:
   --db <file>               SQLite file (default: per-project XDG path)
   --evidence <dir>          Evidence directory (prints a summary when set)
   --input <text>            Smoke turn input
+  --history                 Print this project's history conversations and exit
+  --session <id>            Restore by forking this history conversation; it stays read-only
+  --continue                Restore by forking the newest non-archived root conversation
 
 OAuth providers:
 ${providers}
@@ -122,12 +186,23 @@ function parseArgs(argv: readonly string[]): CliOptions {
 	let db: string | undefined;
 	let evidence: string | undefined;
 	let input = "打印当前目录，然后报告完成。";
+	let history = false;
+	let session: ConversationId | undefined;
+	let cont = false;
 	for (let index = 0; index < argv.length; index += 1) {
 		const flag = argv[index];
 		const value = argv[index + 1];
 		if (flag === "--help") {
 			process.stdout.write(usage());
 			process.exit(0);
+		}
+		if (flag === "--history") {
+			history = true;
+			continue;
+		}
+		if (flag === "--continue") {
+			cont = true;
+			continue;
 		}
 		if (flag === undefined || value === undefined)
 			throw new TypeError(`tg-sec: ${flag ?? "positional"} needs a value`);
@@ -138,14 +213,26 @@ function parseArgs(argv: readonly string[]): CliOptions {
 		else if (flag === "--input") input = value;
 		else if (flag === "--lane" && isLane(value)) lane = value;
 		else if (flag === "--mode" && isMode(value)) mode = value;
-		else throw new TypeError(`tg-sec: unknown argument ${flag}`);
+		else if (flag === "--session") {
+			const parsed = Number(value);
+			if (!Number.isSafeInteger(parsed) || parsed < 1) {
+				throw new TypeError(`tg-sec: --session must be a positive integer, got ${JSON.stringify(value)}`);
+			}
+			session = parsed as ConversationId;
+		} else throw new TypeError(`tg-sec: unknown argument ${flag}`);
 	}
+	if (history && session !== undefined) throw new TypeError("tg-sec: --history cannot be combined with --session");
+	if (history && cont) throw new TypeError("tg-sec: --history cannot be combined with --continue");
+	if (session !== undefined && cont) throw new TypeError("tg-sec: --session cannot be combined with --continue");
 	return {
 		project,
 		lane,
 		mode,
 		...(db === undefined ? {} : { db }),
 		...(evidence === undefined ? {} : { evidence }),
+		...(history ? { history: true } : {}),
+		...(session === undefined ? {} : { resume: { source: session } }),
+		...(cont ? { resume: { source: "latest" as const } } : {}),
 		cwd: process.cwd(),
 		input,
 	};
@@ -163,6 +250,9 @@ function parseServeArgs(argv: readonly string[]): ServeOptions | undefined {
 	let host: string | undefined;
 	let port: number | undefined;
 	let target: string | undefined;
+	let history = false;
+	let session: ConversationId | undefined;
+	let cont = false;
 
 	for (let index = 0; index < argv.length; index += 1) {
 		const flag = argv[index];
@@ -172,6 +262,14 @@ function parseServeArgs(argv: readonly string[]): ServeOptions | undefined {
 		}
 		if (flag === "--faux") {
 			faux = true;
+			continue;
+		}
+		if (flag === "--history") {
+			history = true;
+			continue;
+		}
+		if (flag === "--continue") {
+			cont = true;
 			continue;
 		}
 		const value = argv[index + 1];
@@ -216,10 +314,24 @@ function parseServeArgs(argv: readonly string[]): ServeOptions | undefined {
 			case "--target":
 				target = value;
 				break;
+			case "--session": {
+				const parsed = Number(value);
+				if (!Number.isSafeInteger(parsed) || parsed < 1) {
+					throw new TypeError(`tg-sec serve: --session must be a positive integer, got ${JSON.stringify(value)}`);
+				}
+				session = parsed as ConversationId;
+				break;
+			}
 			default:
 				throw new TypeError(`tg-sec serve: unknown argument ${flag}`);
 		}
 	}
+	if (history && faux) throw new TypeError("tg-sec serve: --history cannot be combined with --faux");
+	if (history && session !== undefined) {
+		throw new TypeError("tg-sec serve: --history cannot be combined with --session");
+	}
+	if (history && cont) throw new TypeError("tg-sec serve: --history cannot be combined with --continue");
+	if (session !== undefined && cont) throw new TypeError("tg-sec serve: --session cannot be combined with --continue");
 	if (faux && model !== undefined) throw new TypeError("tg-sec serve: --faux cannot be combined with --model");
 	return {
 		project,
@@ -227,6 +339,9 @@ function parseServeArgs(argv: readonly string[]): ServeOptions | undefined {
 		...(mode === undefined ? {} : { mode }),
 		...(model === undefined ? {} : { model }),
 		...(faux ? { faux: true } : {}),
+		...(history ? { history: true } : {}),
+		...(session === undefined ? {} : { resume: { source: session } }),
+		...(cont ? { resume: { source: "latest" as const } } : {}),
 		...(db === undefined ? {} : { db }),
 		...(evidence === undefined ? {} : { evidence }),
 		...(scope === undefined ? {} : { scope }),
@@ -255,6 +370,10 @@ async function main(): Promise<void> {
 	if (command === "serve") {
 		const serveOptions = parseServeArgs(argv.slice(1));
 		if (serveOptions === undefined) return;
+		if (serveOptions.history === true) {
+			await printHistory(serveOptions.project, serveOptions.db);
+			return;
+		}
 		await runServeCommand(serveOptions);
 		return;
 	}
@@ -264,6 +383,10 @@ async function main(): Promise<void> {
 	}
 	const options = parseArgs(argv);
 	const context = BACKGROUND_CONTEXT;
+	if (options.history === true) {
+		await printHistory(options.project, options.db);
+		return;
+	}
 	const print = (line: string) => process.stdout.write(`${line}\n`);
 	const telemetry = new InMemoryTelemetryContext();
 	const evidenceDir = options.evidence ?? `${options.cwd}/.tg-sec-smoke-evidence`;
@@ -337,6 +460,7 @@ async function main(): Promise<void> {
 		model,
 		cwd: options.cwd,
 		...(options.db === undefined ? {} : { path: options.db }),
+		...(options.resume === undefined ? {} : { resume: options.resume }),
 		extensions: [core, secTools, ...mcp.extensions],
 		onClose: async () => {
 			for (const error of await mcp.close()) process.stderr.write(`tg-sec mcp: ${error}\n`);

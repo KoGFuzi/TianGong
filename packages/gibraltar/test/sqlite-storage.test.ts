@@ -226,7 +226,7 @@ describe("Pico SqliteStorage", () => {
 		openStorages.add(reopened);
 		expect(await reopened.conversation(ROOT_CONVERSATION_ID, context)).toEqual({ id: ROOT_CONVERSATION_ID });
 		// The prefixed schema reports its health through the adapter's own prefixed table name.
-		expect(await reopened.health()).toMatchObject({ ok: true, schemaVersion: 3 });
+		expect(await reopened.health()).toMatchObject({ ok: true, schemaVersion: 4 });
 		const database = new DatabaseSync(path);
 		try {
 			const names = database

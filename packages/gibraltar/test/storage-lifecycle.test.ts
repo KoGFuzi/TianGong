@@ -96,12 +96,67 @@ function readTableCounts(path: string): Record<string, number> {
 	}
 }
 
+type ConversationColumn = {
+	readonly cid: number;
+	readonly name: string;
+	readonly type: string;
+	readonly notnull: number;
+	readonly dflt_value: string | null;
+	readonly pk: number;
+};
+
+type ConversationColumnShape = Pick<ConversationColumn, "name" | "type" | "notnull" | "dflt_value">;
+
+function readConversationColumns(path: string, table: string): ReadonlyMap<string, ConversationColumnShape> {
+	const database = new DatabaseSync(path, { readOnly: true });
+	try {
+		const rows = database.prepare(`PRAGMA table_info(${table})`).all() as unknown as ConversationColumn[];
+		return new Map(rows.map(({ cid: _cid, pk: _pk, ...column }) => [column.name, column]));
+	} finally {
+		database.close();
+	}
+}
+
+function readIndexNames(path: string, table: string): readonly string[] {
+	const database = new DatabaseSync(path, { readOnly: true });
+	try {
+		const rows = database.prepare(`PRAGMA index_list(${table})`).all() as unknown as { readonly name: string }[];
+		return rows.map((row) => row.name);
+	} finally {
+		database.close();
+	}
+}
+
+type ConversationMetaRow = {
+	readonly title: string;
+	readonly cwd: string;
+	readonly lane: string;
+	readonly created_at: number;
+	readonly updated_at: number;
+	readonly archived_at: number | null;
+	readonly parent_conversation_id: number | null;
+};
+
+function readConversationMetaRows(path: string, table = "conversations"): readonly ConversationMetaRow[] {
+	const database = new DatabaseSync(path, { readOnly: true });
+	try {
+		return database
+			.prepare(
+				`SELECT title, cwd, lane, created_at, updated_at, archived_at, parent_conversation_id
+				FROM ${table} ORDER BY id`,
+			)
+			.all() as unknown as ConversationMetaRow[];
+	} finally {
+		database.close();
+	}
+}
+
 describe("storage lifecycle", () => {
-	it("reports schema version 3 and an empty audit column for a fresh database", async () => {
+	it("reports schema version 4 and an empty audit column for a fresh database", async () => {
 		const { storage, path } = await createSqliteStorage();
 		const health = await storage.health();
 		expect(health.ok).toBe(true);
-		expect(health.schemaVersion).toBe(3);
+		expect(health.schemaVersion).toBe(4);
 		expect(readMetadataRow(path).deleted_conversations).toBe("[]");
 	});
 
@@ -122,7 +177,7 @@ describe("storage lifecycle", () => {
 
 		const storage = await openNodeSqliteStorage(path);
 		openStorages.add(storage);
-		expect((await storage.health()).schemaVersion).toBe(3);
+		expect((await storage.health()).schemaVersion).toBe(4);
 		expect(readMetadataRow(path)).toEqual({ deleted_conversations: "[]", next_id: "2", next_seq: 1 });
 	});
 
@@ -170,7 +225,7 @@ describe("storage lifecycle", () => {
 		openStorages.add(snapshot);
 		const health = await snapshot.health();
 		expect(health.ok).toBe(true);
-		expect(health.schemaVersion).toBe(3);
+		expect(health.schemaVersion).toBe(4);
 		expect(readTableCounts(backupPath)).toEqual(readTableCounts(path));
 		expect(await snapshot.conversation(ROOT_CONVERSATION_ID, context)).toEqual({ id: ROOT_CONVERSATION_ID });
 		expect(await snapshot.conversation(conversationId, context)).toEqual({ id: conversationId });
@@ -210,5 +265,99 @@ describe("storage lifecycle", () => {
 
 		await storage.close(context);
 		await expect(storage.backup(path, context)).rejects.toThrow("closed");
+	});
+
+	it("adds the conversation metadata columns and backfills rows written before version 4", async () => {
+		const { storage, path } = await createSqliteStorage();
+		expect((await storage.health()).schemaVersion).toBe(4);
+		const columns = readConversationColumns(path, "conversations");
+		// Shapes observed through PRAGMA table_info on a STRICT table: NOT NULL display columns carry
+		// their SQL defaults, the nullable ancestry and archive stamps carry none.
+		expect(columns.get("title")).toEqual({ name: "title", type: "TEXT", notnull: 1, dflt_value: "''" });
+		expect(columns.get("cwd")).toEqual({ name: "cwd", type: "TEXT", notnull: 1, dflt_value: "''" });
+		expect(columns.get("lane")).toEqual({ name: "lane", type: "TEXT", notnull: 1, dflt_value: "''" });
+		expect(columns.get("created_at")).toEqual({ name: "created_at", type: "INTEGER", notnull: 1, dflt_value: "0" });
+		expect(columns.get("updated_at")).toEqual({ name: "updated_at", type: "INTEGER", notnull: 1, dflt_value: "0" });
+		expect(columns.get("archived_at")).toEqual({
+			name: "archived_at",
+			type: "INTEGER",
+			notnull: 0,
+			dflt_value: null,
+		});
+		expect(columns.get("parent_conversation_id")).toEqual({
+			name: "parent_conversation_id",
+			type: "INTEGER",
+			notnull: 0,
+			dflt_value: null,
+		});
+
+		// A database left at version 3 with rows already in it: the rows must survive the upgrade with
+		// backfilled defaults, and the ID allocation state must not move.
+		const directory = await mkdtemp(join(tmpdir(), "tg-gibraltar-lifecycle-"));
+		tempDirectories.add(directory);
+		const upgradePath = join(directory, "upgrade.sqlite");
+		const v3 = await openNodeSqliteDatabase(upgradePath);
+		try {
+			await applySqliteMigrations(v3, SQLITE_MIGRATIONS.slice(0, 3));
+			await v3.run(
+				`INSERT INTO conversations (id, owner_conversation_id, owner_task_id, record, project_id)
+				VALUES (1, NULL, NULL, ?, 'default'), (2, 1, NULL, ?, 'default')`,
+				JSON.stringify({ id: 1 }),
+				JSON.stringify({ id: 2 }),
+			);
+		} finally {
+			await v3.close();
+		}
+
+		const upgraded = await openNodeSqliteStorage(upgradePath);
+		openStorages.add(upgraded);
+		expect((await upgraded.health()).schemaVersion).toBe(4);
+		expect(readConversationMetaRows(upgradePath)).toEqual([
+			{
+				title: "",
+				cwd: "",
+				lane: "",
+				created_at: 0,
+				updated_at: 0,
+				archived_at: null,
+				parent_conversation_id: null,
+			},
+			{
+				title: "",
+				cwd: "",
+				lane: "",
+				created_at: 0,
+				updated_at: 0,
+				archived_at: null,
+				parent_conversation_id: null,
+			},
+		]);
+		expect(readTableCounts(upgradePath).conversations).toBe(2);
+		expect(readMetadataRow(upgradePath)).toEqual({ deleted_conversations: "[]", next_id: "2", next_seq: 1 });
+	});
+
+	it("applies the conversation metadata columns to a prefixed schema", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "tg-gibraltar-lifecycle-"));
+		tempDirectories.add(directory);
+		const path = join(directory, "prefixed.sqlite");
+		const storage = await openNodeSqliteStorage(path, { prefix: "tg_" });
+		openStorages.add(storage);
+
+		expect((await storage.health()).schemaVersion).toBe(4);
+		const columns = readConversationColumns(path, "tg_conversations");
+		for (const name of [
+			"title",
+			"cwd",
+			"lane",
+			"created_at",
+			"updated_at",
+			"archived_at",
+			"parent_conversation_id",
+		]) {
+			expect(columns.has(name), name).toBe(true);
+		}
+		const indexes = readIndexNames(path, "tg_conversations");
+		expect(indexes).toContain("tg_conversations_by_updated");
+		expect(indexes).toContain("tg_conversations_by_lane");
 	});
 });

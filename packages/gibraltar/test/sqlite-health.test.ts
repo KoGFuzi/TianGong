@@ -182,8 +182,8 @@ describe("project isolation", () => {
 
 describe("version 2 migration", () => {
 	it("keeps the schema history contiguous and ordered", () => {
-		expect(SQLITE_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3]);
-		expect(CURRENT_SQLITE_SCHEMA_VERSION).toBe(3);
+		expect(SQLITE_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4]);
+		expect(CURRENT_SQLITE_SCHEMA_VERSION).toBe(4);
 	});
 
 	it("assigns rows written before isolation to the default project", async () => {

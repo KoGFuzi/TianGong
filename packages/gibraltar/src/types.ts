@@ -1054,6 +1054,49 @@ export type ConversationDeletion = {
 	};
 };
 
+/** Human-facing identity of one conversation, kept in its own columns beside the immutable record. */
+export type ConversationMeta = {
+	/** Short display title; the creator supplies it, `updateConversationMeta` may replace it. */
+	readonly title: string;
+	/** Working directory the conversation was created for. */
+	readonly cwd: string;
+	/** Caller-defined lane tag; opaque to storage. */
+	readonly lane: string;
+	/** Wall-clock milliseconds of the creating commit. */
+	readonly createdAt: number;
+	/** Wall-clock milliseconds of the last metadata change; equals `createdAt` until then. */
+	readonly updatedAt: number;
+	/** Set when the conversation was archived; absent while it is a normal history entry. */
+	readonly archivedAt?: number;
+};
+
+/** One history row: identity, ancestry, and the metadata columns, read in one scan. */
+export type ConversationSummary = {
+	readonly id: ConversationId;
+	readonly parent?: ConversationRecord["parent"];
+	readonly owner?: ConversationRecord["owner"];
+	readonly meta: ConversationMeta;
+};
+
+/** Fields `updateConversationMeta` may change; creation-time fields are not mutable. */
+export type ConversationMetaUpdate = {
+	readonly title?: string;
+	/** `true` stamps `archivedAt` with the storage clock; `false` clears it. */
+	readonly archived?: boolean;
+};
+
+/** Optional filters for an ordered conversation-summary scan. */
+export type ConversationSummaryQuery = {
+	/** Default: exclude archived rows. `include` returns both; `only` returns archived rows. */
+	readonly archived?: "exclude" | "include" | "only";
+	/** Restrict to one lane tag. */
+	readonly lane?: string;
+	/** Restrict to root conversations (no `parent`), the way a history picker wants them. */
+	readonly roots?: boolean;
+	/** Default `descending`: newest conversation first. With a cursor, the cursor's order. */
+	readonly order?: ScanOrder;
+};
+
 /**
  * Atomic persistence boundary for Session records.
  *

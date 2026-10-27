@@ -169,11 +169,35 @@ function renderDeletionAudit(schema: SqliteSchema): readonly string[] {
 	return [`ALTER TABLE ${schema.tables.durableMetadata} ADD COLUMN deleted_conversations TEXT NOT NULL DEFAULT '[]'`];
 }
 
+// Version 4 adds the human-facing conversation metadata used by history listing and recovery. Six
+// display columns plus one ancestry column on conversations only: the immutable record JSON stays the
+// authority for identity and ancestry, and these columns are the authority for display. The ancestry
+// column duplicates record.parent.conversationId, because "list the roots" is the access path a
+// history picker takes and the record is opaque to SQL. createdAt/updatedAt/archivedAt are INTEGER
+// milliseconds; title/cwd/lane are TEXT. Every display column takes a default so rows written before
+// version 4 stay readable: an empty title, an empty cwd, the empty lane, zero timestamps, and not
+// archived. The newest-first listing and the lane filter each get their own project-scoped index.
+function renderConversationMeta(schema: SqliteSchema): readonly string[] {
+	const { tables, indexes } = schema;
+	return [
+		`ALTER TABLE ${tables.conversations} ADD COLUMN title TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE ${tables.conversations} ADD COLUMN cwd TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE ${tables.conversations} ADD COLUMN lane TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE ${tables.conversations} ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE ${tables.conversations} ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE ${tables.conversations} ADD COLUMN archived_at INTEGER`,
+		`ALTER TABLE ${tables.conversations} ADD COLUMN parent_conversation_id INTEGER`,
+		`CREATE INDEX ${indexes.conversationsByUpdated} ON ${tables.conversations} (project_id, id DESC)`,
+		`CREATE INDEX ${indexes.conversationsByLane} ON ${tables.conversations} (project_id, lane, id DESC)`,
+	];
+}
+
 /** Immutable, ordered schema history. Append new migrations after the initial schema ships. */
 export const SQLITE_MIGRATIONS: readonly SqliteMigration[] = [
 	...createSqliteMigrations(DEFAULT_SQLITE_SCHEMA),
 	{ version: 2, statements: renderProjectIsolation(DEFAULT_SQLITE_SCHEMA) },
 	{ version: 3, statements: renderDeletionAudit(DEFAULT_SQLITE_SCHEMA) },
+	{ version: 4, statements: renderConversationMeta(DEFAULT_SQLITE_SCHEMA) },
 ];
 
 export const CURRENT_SQLITE_SCHEMA_VERSION = SQLITE_MIGRATIONS.at(-1)?.version ?? 0;
@@ -196,6 +220,7 @@ export async function applySqliteMigrationsForSchema(
 		...createSqliteMigrations(schema),
 		{ version: 2, statements: renderProjectIsolation(schema) },
 		{ version: 3, statements: renderDeletionAudit(schema) },
+		{ version: 4, statements: renderConversationMeta(schema) },
 	],
 ): Promise<void> {
 	for (let index = 0; index < migrations.length; index++) {

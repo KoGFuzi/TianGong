@@ -211,6 +211,35 @@ await storage.backup("/backup/session-2026-10-09.sqlite", context);
 - `MemoryStorage` 无文件后端（包根导出图保持零 Node 导入），调用会抛 `cannot write file backups`；备份是 SQLite 能力。
 - 备份窗口内进程外写者按 busy 语义等待（默认 5s 超时）。
 
+### 3.5 历史会话列举与恢复（P1-4）
+
+每个会话在创建时就带有人读元数据：标题、cwd、lane、创建/更新时间戳、归档标记，落在
+`conversations` 表自己的列里（迁移 v4）；会话的 record JSON 仍是身份与血缘的唯一权威，元数据
+列只是展示权威。存储层三个入口：
+
+- `scanConversationSummaries(query, limit, cursor, context)`：按 ID **降序**（默认）分页扫描会话
+  摘要，支持 `lane`、`roots`（只看无父会话的根）与 `archived`（`"exclude"` 默认 / `"include"` /
+  `"only"`）过滤，游标续扫沿用 ID-only 契约。
+- `conversationSummary(id, context)`：按 ID 读单条摘要；不存在返回 `undefined`。
+- `updateConversationMeta(id, { title?, archived? }, context)`：改标题或归档/取消归档；会话行是
+  INSERT-only，因此与 `deleteConversation` 同类，是 commit 写路径之外的显式生命周期调用，缺省
+  字段保持原值，`updatedAt` 每次接受调用都重打；会话不存在返回 `undefined` 不抛。
+
+CLI 三个标志（`tg-sec` 与 `tg-sec serve` 都接受）：
+
+| 标志 | 语义 |
+| --- | --- |
+| `--history` | 打印本项目的会话表（id / lane / 创建时间 / 标题，归档行带 `[archived] ` 前缀）后退出；不开模型、不开 WebUI。与 `--session`、`--continue`（serve 下还有 `--faux`）互斥 |
+| `--session <id>` | 从该会话 **fork 出一条新会话**续写；源会话保持只读。会话不存在报 `Conversation <id> is not in <db 路径>`，源会话没有任何 entry 报 `Conversation <id> has no history to restore` |
+| `--continue` | 等价 `--session` 取「最近一条非归档根会话」；无历史时 stderr 提示并照常开根会话（不是错误）。与 `--session` 互斥 |
+
+跨 lane 恢复（例如从 redteam 会话以 `--lane ctf` 恢复）按**本次启动**的 lane 挂载预设，并向
+stderr 打一行 `tg-sec: restoring conversation <id> (lane <源 lane>) into a <本次 lane> campaign;
+guard policy follows <本次 lane>`，取证语境以本次为准。
+
+**本期限制**：WebUI（`tg-sec serve`）仍只投影当前运行的活动会话，不会话列表、不显示 fork 到了
+哪里；历史列举与恢复的唯一入口是 CLI。TUI 同样未提供历史选择器。
+
 ---
 
 ## 4. 健康检查
@@ -222,7 +251,7 @@ const health = await storage.health();
 // {
 //   ok: true,
 //   integrity: "ok",
-//   schemaVersion: 3,
+//   schemaVersion: 4,
 //   journalMode: "wal",
 //   synchronous: 1,
 //   walAutoCheckpointPages: 1000,
@@ -259,8 +288,8 @@ setInterval(async () => {
 	if (health.journalMode !== "wal") {
 		console.error("journal mode regressed:", health.journalMode);
 	}
-	if (health.schemaVersion < 3) {
-		console.warn("schema below deletion audit:", health.schemaVersion);
+	if (health.schemaVersion < 4) {
+		console.warn("schema below conversation metadata columns:", health.schemaVersion);
 	}
 }, 60_000);
 ```
@@ -413,7 +442,7 @@ POST /   Authorization: <缺失>             → 401 { ok: false, code: "missing
 
 1. 升级前完整备份 data 根，包括 `session.sqlite`、`-wal`、`-shm` 三个文件
 2. 停止所有持有该存储的进程（单进程独占存储，无跨进程锁）
-3. 升级代码，重新启动；迁移在打开时自动执行（v3 只对 `durable_metadata` 做一次 `ALTER TABLE` 加审计列，数据表零变更）
+3. 升级代码，重新启动；迁移在打开时自动执行（v3 只对 `durable_metadata` 做一次 `ALTER TABLE` 加审计列；v4 对 `conversations` 表做七次 `ALTER TABLE` 加元数据列并建两个项目内索引，数据行零变更，v4 之前的行回填为空标题/零时间戳/未归档）
 4. 启动后立即执行第 4.2 节自检，确认 `schemaVersion` 达到预期且 `integrity` 为 `ok`
 
 **回滚**：schema 版本只前进不后退。`durable_schema` 版本高于代码支持版本时，打开会直接报错并拒绝，防止降级代码写过新 schema。回滚前先恢复备份文件。

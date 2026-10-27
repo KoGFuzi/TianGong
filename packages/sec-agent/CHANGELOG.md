@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- Campaign history recovery. `openSecAgent` takes `resume: { source: ConversationId | "latest" }`: the chosen
+  history conversation stays read-only and the run continues in a fresh fork of it whose metadata derives from
+  the source (a `↳ `-prefixed title, this run's cwd and lane, no archive state). `latest` picks the newest
+  non-archived root and falls back to opening the root conversation when the project has no history yet;
+  restoring across lanes warns on stderr that guard policy follows this run's lane.
+- `tg-sec` and `tg-sec serve` flags: `--history` prints the project's conversation table (id, lane, created,
+  title, with an `[archived] ` prefix) and exits without opening a model or the WebUI; `--session <id>` and
+  `--continue` restore by forking, with the documented mutual exclusions.
+- The `task` tool's delegation fork writes the child's display metadata: the delegation intent as title,
+  the role policy's cwd, the campaign lane.
+
 ### Changed
 
 - The core extension's prompt sections now follow each conversation's `tg.sec.task-scope` instead

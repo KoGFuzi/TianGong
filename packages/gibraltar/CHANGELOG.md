@@ -51,6 +51,19 @@
 
 ### Added
 
+- Conversation display metadata, stored in its own `conversations` columns beside the immutable record:
+  `ConversationMeta` (title, cwd, lane, createdAt, updatedAt, archivedAt), the `ConversationSummary` row,
+  `ConversationMetaUpdate`, and `ConversationSummaryQuery`. `Tx.setConversationMeta` stages the metadata of a
+  conversation the transaction creates; a second call for the same ID replaces the staged value, and a call for
+  an ID the transaction did not create throws. `tx.createConversation` and `tx.forkConversation` accept the
+  metadata as an optional `meta` field and stage it through the same mechanism.
+- `Storage.updateConversationMeta(id, update, context)`: an explicit lifecycle call outside the commit write
+  path, like `deleteConversation`, replacing one conversation's mutable metadata (its title and archived stamp)
+  and restamping `updatedAt` from the storage clock. Returns `undefined` when the conversation is absent.
+- `Storage.scanConversationSummaries(query, limit, cursor, context)`: conversation summaries in `query.order`
+  (default descending, newest first) by ID, filtered by lane, roots (no parent), and archived state, paged by
+  the ID-only cursor contract like every other scan.
+- `Storage.conversationSummary(id, context)`: one conversation summary by exact ID, `undefined` when absent.
 - Structured tool output. `ToolRegistration.structuredOutputSchema` declares the contract of
   `ToolExecutionResult.structuredOutput`, which nesting tools (`executeTool()` callers) get validated, and the
   model never sees. Without a schema, callers get the result's bounded output as the model sees it: one text
@@ -233,6 +246,14 @@
 
 ### Changed
 
+- `StorageWrite`'s `conversation` branch carries a required `meta: ConversationMeta`, and every conversation
+  creation stages its metadata in the creating commit; a commit that creates a conversation without metadata
+  throws `StorageRequestError`. The durable SQLite schema moves to version 4: seven columns on `conversations`
+  (title, cwd, lane, created_at, updated_at, archived_at, parent_conversation_id — the last duplicating
+  `record.parent.conversationId`, because "list the roots" is a history picker's access path and the record is
+  opaque to SQL) plus two project-scoped indexes, `conversations_by_updated` and `conversations_by_lane`. Rows
+  written before version 4 read back with an empty title and cwd, the empty lane, zero timestamps, and not
+  archived; the record JSON stays the authority for identity and ancestry, the columns for display.
 - A task's context reads are incremental: the view a task's first read derived is extended by the entries that
   arrived since, instead of rescanning the transcript. Entries at or below a read's tail are immutable, so the
   extension derives only what the new entries contribute; a new edit, a new head marker, or an earlier cutoff

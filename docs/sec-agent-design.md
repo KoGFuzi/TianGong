@@ -167,6 +167,11 @@ ExtensionAPI/旧 loop 契约的部分全部按 gibraltar 原生 API 重写，命
 5. TLD 黑名单机制保留、seed 清空；赛道预设（redteam/CTF/SRC）条件化安全策略。
 6. 授权放行走模式/规则预设（操作者侧 `.tiangong/` 配置），不做工具白名单、不做仓库可控文件。
 7. 证据 = 内容寻址不可变 blob + 版本乐观锁（ARTEX 模式），实测留存与还原报文分离。
+8. 历史恢复 = fork 续写（P1-4）：选中的历史会话保持只读，从它 fork 一条新会话承接后续写入，
+   血缘由 `ConversationRecord.parent` 承载；不提供「原地续写历史会话」。不带恢复标志时行为
+   不变：根会话复用 ID=1。会话的展示元数据（标题/cwd/lane/时间戳/归档标记）落 SQLite
+   `conversations` 表的元数据列（迁移 v4），**列是元数据的权威，record JSON 是身份与血缘的
+   权威**——不往 record 里塞标题。
 
 ## 总体分层
 

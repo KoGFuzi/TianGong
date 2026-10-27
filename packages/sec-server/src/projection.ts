@@ -13,6 +13,7 @@ import {
 	type SecNodeKind,
 	type SecRcePath,
 	type SecSeverity,
+	type SecVerificationStatus,
 	secKindForKey,
 } from "./contract.ts";
 
@@ -51,6 +52,51 @@ export type SecProjectionEvidenceSubject = {
 	readonly bindings: readonly SecProjectionEvidenceBinding[];
 };
 
+/** The finding lifecycle the evidence store records; mapped to the wire's verification status. */
+export type SecProjectionFindingStatus = "open" | "verified" | "retest-pass" | "retest-fail" | "wontfix";
+
+/** One finding row, metadata only. Evidence bodies never enter the projection. */
+export type SecProjectionFinding = {
+	readonly findingId: string;
+	readonly lane: string;
+	readonly title: string;
+	readonly severity: SecSeverity;
+	readonly status: SecProjectionFindingStatus;
+	readonly subjectId: string;
+	readonly createdAt: number;
+	readonly updatedAt: number;
+	readonly retestSnapshotId: string;
+};
+
+/** One step of the newest plan revision the root persisted. */
+export type SecProjectionPlanStep = {
+	readonly stepId: string;
+	readonly title: string;
+	readonly detail: string;
+	readonly status: "open" | "active" | "done" | "dropped";
+	readonly ownerRole?: string;
+	readonly conversationId?: number;
+};
+
+/** The newest `tg.sec.plan` revision; when present its steps are the intent source. */
+export type SecProjectionPlan = {
+	readonly revision: number;
+	readonly rationale: string;
+	readonly createdAt: number;
+	readonly steps: readonly SecProjectionPlanStep[];
+};
+
+/** One host-validated terminal declaration; `unverified` claims never change a finding. */
+export type SecProjectionTerminal = {
+	readonly claim: "getshell" | "getflag" | "high_critical_finding";
+	readonly lane: string;
+	readonly status: "unverified" | "verified";
+	readonly reason: string;
+	readonly findingId?: string;
+	readonly snapshotId?: string;
+	readonly declaredAt: number;
+};
+
 /** Everything the projection reads; the host assembles it from the action tree and evidence store. */
 export type SecProjectionInput = {
 	readonly project: string;
@@ -58,6 +104,12 @@ export type SecProjectionInput = {
 	readonly rootConversationId: number;
 	readonly actions: readonly SecProjectionAction[];
 	readonly evidence: readonly SecProjectionEvidenceSubject[];
+	/** Registered findings; an evidence subject without a row keeps the unrated evidence projection. */
+	readonly findings?: readonly SecProjectionFinding[];
+	/** The newest plan revision; when absent the action intents remain the fallback. */
+	readonly plan?: SecProjectionPlan;
+	/** Persisted terminal declarations, host-validated or marked unverified. */
+	readonly terminals?: readonly SecProjectionTerminal[];
 	readonly now: number;
 };
 
@@ -150,14 +202,31 @@ export function projectSecGraph(input: SecProjectionInput): SecGraph {
 		intents.push(intentForAction(action, parent));
 	}
 
-	for (const subject of input.evidence) {
+	if (input.plan !== undefined && input.plan.steps.length > 0) {
+		intents.length = 0;
+		for (const step of input.plan.steps) intents.push(intentForPlanStep(step, input.plan, rootKey));
+	}
+
+	const findingsBySubject = new Map<string, SecProjectionFinding>();
+	for (const finding of input.findings ?? []) findingsBySubject.set(finding.subjectId, finding);
+	const subjects: SecProjectionEvidenceSubject[] = [...input.evidence];
+	const knownSubjects = new Set(subjects.map((subject) => subject.subjectId));
+	for (const finding of input.findings ?? []) {
+		if (knownSubjects.has(finding.subjectId)) continue;
+		knownSubjects.add(finding.subjectId);
+		subjects.push({ subjectId: finding.subjectId, version: 0, bindings: [] });
+	}
+
+	for (const subject of subjects) {
+		const finding = findingsBySubject.get(subject.subjectId);
 		const key = evidenceNodeKey(subject.subjectId);
-		const createdAt = earliestCapture(subject) ?? input.now;
+		const createdAt = earliestCapture(subject) ?? finding?.createdAt ?? input.now;
+		const severity = finding?.severity ?? "info";
 		nodes.push({
 			id: key,
 			key,
 			type: "vuln",
-			title: clip(subject.subjectId, MAX_TITLE),
+			title: clip(finding?.title ?? subject.subjectId, MAX_TITLE),
 			detail: {
 				subjectId: subject.subjectId,
 				version: subject.version,
@@ -170,19 +239,31 @@ export function projectSecGraph(input: SecProjectionInput): SecGraph {
 					status: binding.status,
 					capturedAt: binding.capturedAt,
 				})),
+				...(finding === undefined
+					? {}
+					: {
+							finding: {
+								lane: clip(finding.lane, MAX_TITLE),
+								severity: finding.severity,
+								status: finding.status,
+								retestSnapshotId: finding.retestSnapshotId,
+							},
+						}),
 			} satisfies JsonValue,
-			severity: "info",
+			severity,
 			is_rce: false,
-			risk_score: riskScore("info", "vuln", false),
+			risk_score: riskScore(severity, "vuln", false),
 			tags: [
 				"evidence",
-				"unrated",
+				...(finding === undefined
+					? ["unrated"]
+					: ["finding", `severity:${finding.severity}`, `status:${finding.status}`]),
 				`subject:${subject.subjectId}`,
 				...new Set(subject.bindings.map((binding) => `role:${binding.role}`)),
 			],
-			status: "open",
+			status: finding?.status ?? "open",
 			created_at: createdAt,
-			updated_at: input.now,
+			updated_at: finding?.updatedAt ?? input.now,
 		});
 		edges.push({
 			id: `leads-to:${rootKey}->${key}`,
@@ -195,7 +276,48 @@ export function projectSecGraph(input: SecProjectionInput): SecGraph {
 		});
 	}
 
-	const findings = input.evidence.map((subject) => findingForSubject(subject, input.now));
+	for (const terminal of input.terminals ?? []) {
+		const key = terminalNodeKey(terminal.claim);
+		const verified = terminal.status === "verified";
+		const isRce = verified && terminal.claim === "getshell";
+		const severity = terminalSeverity(terminal.claim, verified);
+		nodes.push({
+			id: key,
+			key,
+			type: "goal",
+			title: clip(terminalTitle(terminal.claim), MAX_TITLE),
+			detail: {
+				claim: terminal.claim,
+				lane: clip(terminal.lane, MAX_TITLE),
+				status: terminal.status,
+				reason: clip(terminal.reason, MAX_DETAIL),
+				...(terminal.findingId === undefined ? {} : { findingId: terminal.findingId }),
+				...(terminal.snapshotId === undefined ? {} : { snapshotId: terminal.snapshotId }),
+				declaredAt: terminal.declaredAt,
+			} satisfies JsonValue,
+			severity,
+			is_rce: isRce,
+			risk_score: riskScore(severity, "goal", isRce),
+			tags: ["terminal", `claim:${terminal.claim}`, `lane:${terminal.lane}`, `terminal:${terminal.status}`],
+			status: terminal.status,
+			created_at: terminal.declaredAt,
+			updated_at: terminal.declaredAt,
+		});
+		edges.push({
+			id: `leads-to:${rootKey}->${key}`,
+			from: rootKey,
+			to: key,
+			relation: "LEADS_TO",
+			weight: verified ? 1 : 0.2,
+			rationale: clip(terminal.reason, MAX_DETAIL),
+			on_rce_path: false,
+		});
+	}
+
+	const findings = subjects.map((subject) => {
+		const finding = findingsBySubject.get(subject.subjectId);
+		return finding === undefined ? findingForSubject(subject, input.now) : findingForRecord(finding, subject);
+	});
 	const marked = markRcePath(nodes, edges, findings);
 	const rcePath = marked.path;
 	const stats = computeStats(nodes, edges, findings, intents);
@@ -258,6 +380,50 @@ function intentForAction(action: SecProjectionAction, parentKey: string): SecGra
 	};
 }
 
+/** A plan step is the authoritative intent; the action tree keeps supplying nodes and edges. */
+function intentForPlanStep(step: SecProjectionPlanStep, plan: SecProjectionPlan, rootKey: string): SecGraphIntent {
+	const status =
+		step.status === "done"
+			? "verified"
+			: step.status === "dropped"
+				? "disproved"
+				: step.status === "active"
+					? "active"
+					: "open";
+	const estSuccess =
+		step.status === "done" ? 1 : step.status === "dropped" ? 0.05 : step.status === "active" ? 0.6 : 0.4;
+	const rationale =
+		plan.rationale === "" ? `plan revision ${plan.revision}` : `plan revision ${plan.revision}: ${plan.rationale}`;
+	return {
+		id: `intent:plan-${plan.revision}-${step.stepId}`,
+		from: [rootKey],
+		description: clip(step.title, MAX_DETAIL),
+		rationale: clip(rationale, MAX_DETAIL),
+		est_success: estSuccess,
+		status,
+		strategy_key: step.stepId,
+		priority: step.status === "open" || step.status === "active" ? 1 : 0,
+		...(step.detail === "" ? {} : { result_summary: clip(step.detail, MAX_DETAIL) }),
+	};
+}
+
+function terminalNodeKey(claim: SecProjectionTerminal["claim"]): string {
+	if (claim === "getshell") return "goal:shell-terminal";
+	if (claim === "getflag") return "goal:flag-terminal";
+	return "goal:high-critical-terminal";
+}
+
+function terminalTitle(claim: SecProjectionTerminal["claim"]): string {
+	if (claim === "getshell") return "getshell terminal claim";
+	if (claim === "getflag") return "getflag terminal claim";
+	return "high/critical finding terminal claim";
+}
+
+function terminalSeverity(claim: SecProjectionTerminal["claim"], verified: boolean): SecSeverity {
+	if (!verified) return "info";
+	return claim === "getflag" ? "high" : "critical";
+}
+
 /** A subject id may hold any character; the node key keeps a readable stem and a short hash. */
 export function evidenceNodeKey(subjectId: string): string {
 	const stem = subjectId
@@ -316,6 +482,34 @@ function findingForSubject(subject: SecProjectionEvidenceSubject, now: number): 
 	};
 }
 
+/**
+ * A registered finding: the row supplies the title, rubric severity and lifecycle; the mapped status
+ * lands in the contract's existing verification vocabulary, so the wire shape is unchanged.
+ */
+function findingForRecord(finding: SecProjectionFinding, subject: SecProjectionEvidenceSubject): SecFinding {
+	const retest = finding.retestSnapshotId === "" ? "" : `; retest ${finding.retestSnapshotId}`;
+	return {
+		id: finding.findingId,
+		node_key: evidenceNodeKey(finding.subjectId),
+		severity: finding.severity,
+		category: "finding",
+		title: clip(finding.title, MAX_TITLE),
+		description: `${finding.lane} finding at status ${finding.status}; ${subject.bindings.length} snapshot(s) at evidence version ${subject.version}${retest}`,
+		evidence: evidenceSummary(subject),
+		critical: finding.severity === "critical",
+		created_at: earliestCapture(subject) ?? finding.createdAt,
+		verification_status: verificationOf(finding.status),
+	};
+}
+
+/** The store's five lifecycle states onto the contract's four verification states. */
+function verificationOf(status: SecProjectionFindingStatus): SecVerificationStatus {
+	if (status === "open") return "pending";
+	if (status === "retest-fail") return "rejected";
+	if (status === "wontfix") return "excluded";
+	return "verified";
+}
+
 function closeableVerified(key: string, findings: readonly SecFinding[]): boolean {
 	return findings.some(
 		(finding) =>
@@ -327,7 +521,7 @@ function closeableVerified(key: string, findings: readonly SecFinding[]): boolea
 
 function sinkPriority(node: SecGraphNode, findings: readonly SecFinding[]): number {
 	const tags = new Set(node.tags.map((tag) => tag.toLowerCase()));
-	if (node.type === "goal" && node.key.startsWith("goal:shell")) return 4;
+	if (node.type === "goal" && node.key.startsWith("goal:shell") && node.is_rce) return 4;
 	if (node.type === "foothold" && (node.is_rce || tags.has("getshell"))) return 3;
 	if ((node.type === "vuln" || node.type === "danger") && closeableVerified(node.key, findings)) return 3;
 	if (node.type === "vuln" && node.is_rce) return 2;
@@ -349,7 +543,12 @@ function attackAdjacency(nodes: readonly SecGraphNode[], edges: readonly SecGrap
 		const from = byKey.get(edge.from);
 		const to = byKey.get(edge.to);
 		if (from === undefined || to === undefined) continue;
-		if (from.type === "target" && (to.type === "goal" || to.key.startsWith("goal:") || to.key.startsWith("flag:"))) {
+		const verifiedShellGoal = to.type === "goal" && to.is_rce;
+		if (
+			from.type === "target" &&
+			!verifiedShellGoal &&
+			(to.type === "goal" || to.key.startsWith("goal:") || to.key.startsWith("flag:"))
+		) {
 			continue;
 		}
 		const weight = Math.max(0.01, Math.min(1, edge.weight));
@@ -538,6 +737,9 @@ function computeStats(
 function isLandedShell(node: SecGraphNode): boolean {
 	if (node.type !== "foothold" && node.type !== "goal") return false;
 	const tags = new Set(node.tags.map((tag) => tag.toLowerCase()));
+	if (node.type === "goal") {
+		return node.is_rce || (node.status === "verified" && (tags.has("getshell") || node.key.startsWith("goal:shell")));
+	}
 	return (
 		node.is_rce || tags.has("getshell") || node.key.startsWith("goal:shell") || node.key.startsWith("foothold:shell")
 	);

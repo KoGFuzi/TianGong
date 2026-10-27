@@ -14,7 +14,7 @@ import {
 	secAttestRulesSample,
 	secDeclaredTools,
 } from "../src/guard-wiring.ts";
-import type { TaskChildPolicy } from "../src/task-tool.ts";
+import { secRolePolicies } from "../src/role-policies.ts";
 import { createSecToolsExtension } from "../src/tools/extension.ts";
 import type { RequestExecutor } from "../src/tools/transport.ts";
 import { cleanupTempDirs, context, fauxModel, fauxSetup, tempDir, trackStore } from "./support.ts";
@@ -171,11 +171,7 @@ describe("buildSecGuard", () => {
 });
 
 describe("guard-wiring attestation end to end", () => {
-	const policies: Record<SecAgentLane, TaskChildPolicy> = {
-		redteam: { extensions: ["sec-core"] },
-		ctf: { extensions: ["sec-core"] },
-		src: { extensions: ["sec-core"] },
-	};
+	const policies = secRolePolicies;
 
 	async function openGuardedAgent(
 		project: string,
@@ -215,7 +211,7 @@ describe("guard-wiring attestation end to end", () => {
 		// The batch-5 forensic surface the declared set names: installing it keeps probe 4 aligned.
 		const store = await openTgSecEvidenceStore({ dir: await tempDir("tg-sec-guard-ev-") });
 		trackStore(store);
-		agent.registry.install(createSecToolsExtension({ store, executor: guardFauxExecutor }));
+		agent.registry.install(createSecToolsExtension({ store, executor: guardFauxExecutor, lane: "redteam" }));
 		// beforeTool re-reads the live mode document on every call; persist it so the constructed
 		// mode and the document agree instead of the harness default (`auto`) silently winning.
 		await wiring.guard.switchMode(mode, "test", context);

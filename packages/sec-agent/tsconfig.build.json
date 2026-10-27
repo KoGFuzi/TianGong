@@ -4,6 +4,7 @@
 		"outDir": "./dist",
 		"paths": {
 			"@earendil-works/pi-codemode": ["../codemode/dist/index.d.ts"],
+			"@earendil-works/pi-mcp": ["../mcp/dist/index.d.ts"],
 			"@OnePanda-TgSec/chord": ["../chord/dist/index.d.ts"],
 			"@OnePanda-TgSec/tg-ai": ["../ai/dist/index.d.ts"],
 			"@OnePanda-TgSec/tg-ai/auth/node": ["../ai/dist/auth-node.d.ts"],

@@ -48,6 +48,7 @@
 	},
 	"dependencies": {
 		"@earendil-works/pi-codemode": "^1.4.0",
+		"@earendil-works/pi-mcp": "^1.4.0",
 		"@OnePanda-TgSec/chord": "^2.0.1",
 		"@OnePanda-TgSec/tg-ai": "^2.0.1",
 		"@OnePanda-TgSec/tg-gibraltar": "^2.0.1",

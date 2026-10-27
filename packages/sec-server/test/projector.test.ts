@@ -3,7 +3,14 @@ import type { AgentEvent, ConversationId, EntryId, SubmissionId, TaskId } from "
 import { AgentDoc, UsageDoc } from "@OnePanda-TgSec/tg-gibraltar";
 import { describe, expect, test } from "vitest";
 import type { SecEventFrame, SecServerFrame, SecSnapshotFrame } from "../src/contract.ts";
-import { projectSecGraph, type SecProjectionAction, type SecProjectionInput } from "../src/projection.ts";
+import {
+	projectSecGraph,
+	type SecProjectionAction,
+	type SecProjectionEvidenceSubject,
+	type SecProjectionFinding,
+	type SecProjectionInput,
+	type SecProjectionPlan,
+} from "../src/projection.ts";
 import { initialRunState, SecGraphProjector, SecRunProjector } from "../src/projector.ts";
 
 const ROOT = 1;
@@ -116,6 +123,51 @@ describe("SecGraphProjector", () => {
 		expect(eventFrame(frames[2]!).payload).toMatchObject({ status: "verified", est_success: 1 });
 	});
 
+	test("itemizes a finding lifecycle change as a finding frame", () => {
+		const evidence: SecProjectionEvidenceSubject = {
+			subjectId: "finding-1",
+			version: 2,
+			bindings: [
+				{
+					snapshotId: "snap-1",
+					role: "proof",
+					note: "",
+					capturedAt: 50,
+					method: "GET",
+					url: "https://demo.local/admin",
+					status: 200,
+				},
+			],
+		};
+		const open: SecProjectionFinding = {
+			findingId: "finding-1",
+			lane: "redteam",
+			title: "SQL injection",
+			severity: "high",
+			status: "open",
+			subjectId: "finding-1",
+			createdAt: 60,
+			updatedAt: 60,
+			retestSnapshotId: "",
+		};
+		const projector = new SecGraphProjector();
+		projector.update({ ...input(), evidence: [evidence], findings: [open] });
+
+		const frames = projector.update({
+			...input(),
+			now: 1100,
+			evidence: [evidence],
+			findings: [{ ...open, status: "verified", updatedAt: 110 }],
+		});
+		const findingFrame = frames.find((frame) => frame.type === "finding");
+		expect(findingFrame).toBeDefined();
+		expect(eventFrame(findingFrame!).payload).toMatchObject({
+			id: "finding-1",
+			severity: "high",
+			verification_status: "verified",
+		});
+	});
+
 	test("adds an rce_path frame when a sink appears", () => {
 		const projector = new SecGraphProjector();
 		projector.update(input());
@@ -136,6 +188,31 @@ describe("SecGraphProjector", () => {
 		expect(frames).toHaveLength(1);
 		const frame = snapshotFrame(frames[0]!);
 		expect(frame.payload.nodes.map((node) => node.key)).toEqual(["target:demo"]);
+	});
+
+	test("resynchronizes when a new plan revision replaces the intent ids", () => {
+		const projector = new SecGraphProjector();
+		projector.update(input());
+		const first: SecProjectionPlan = {
+			revision: 1,
+			rationale: "",
+			createdAt: 1000,
+			steps: [{ stepId: "recon", title: "Enumerate", detail: "", status: "open" }],
+		};
+		const introduced = projector.update({ ...input([], 1000), plan: first });
+		expect(introduced.map((frame) => frame.type)).toEqual(["intent"]);
+
+		const second: SecProjectionPlan = {
+			...first,
+			revision: 2,
+			steps: [{ ...first.steps[0]!, status: "done" }],
+		};
+		const frames = projector.update({ ...input([], 1000), plan: second });
+		expect(frames).toHaveLength(1);
+		const frame = snapshotFrame(frames[0]!);
+		expect(frame.payload.intents).toMatchObject([
+			{ id: "intent:plan-2-recon", status: "verified", strategy_key: "recon" },
+		]);
 	});
 
 	test("publishes to every subscriber even when one throws", () => {

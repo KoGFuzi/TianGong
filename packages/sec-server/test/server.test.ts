@@ -10,7 +10,14 @@ import {
 } from "@OnePanda-TgSec/tg-gibraltar";
 import { request } from "node:http";
 import { afterEach, describe, expect, test } from "vitest";
-import { type SecServerHandle, type SecServerHost, startSecServer } from "../src/index.ts";
+import {
+	createSecApprovalQueue,
+	type SecApprovalQueue,
+	type SecAskPayload,
+	type SecServerHandle,
+	type SecServerHost,
+	startSecServer,
+} from "../src/index.ts";
 import type { SecProjectionAction } from "../src/projection.ts";
 import { TestWsClient } from "./websocket-client.ts";
 
@@ -21,6 +28,7 @@ type Setup = {
 	readonly server: SecServerHandle;
 	readonly harness: Harness;
 	readonly root: Conversation;
+	readonly approvals: SecApprovalQueue;
 	readonly callCount: () => number;
 };
 
@@ -41,6 +49,7 @@ async function setup(): Promise<Setup> {
 	const root = await harness.root(context, { agent: { model: { provider: "faux", modelId: "faux-1" } } });
 	faux.setResponses([fauxAssistantMessage("noted"), fauxAssistantMessage("noted"), fauxAssistantMessage("noted")]);
 
+	const approvals = createSecApprovalQueue();
 	const actions: SecProjectionAction[] = [
 		{
 			conversationId: 2,
@@ -69,6 +78,7 @@ async function setup(): Promise<Setup> {
 			};
 			await (await root.submit(submission, context)).wait(context);
 		},
+		approvals,
 	};
 	const server = await startSecServer({
 		host,
@@ -77,7 +87,7 @@ async function setup(): Promise<Setup> {
 		refreshDelayMs: 5,
 		heartbeatMs: 0,
 	});
-	const started: Setup = { server, harness, root, callCount: () => faux.state.callCount };
+	const started: Setup = { server, harness, root, approvals, callCount: () => faux.state.callCount };
 	setups.push(started);
 	return started;
 }
@@ -268,6 +278,86 @@ describe("startSecServer", () => {
 				Cookie: cookie,
 			}),
 		).rejects.toThrow(/404 Not Found/);
+	});
+
+	test("streams a guard ask, redacts its body, and resolves the operator reply", async () => {
+		const { server, approvals } = await setup();
+		const cookie = await login(server);
+		const client = await TestWsClient.connect(new URL(`ws://127.0.0.1:${server.port}/${ENTRY}/ws`), {
+			Origin: `http://127.0.0.1:${server.port}`,
+			Cookie: cookie,
+		});
+		await client.waitForJson((value) => (value as { type?: string }).type === "snapshot");
+
+		const answer = approvals.ask({
+			toolName: "http_request",
+			resource: "tool:http_request",
+			reason: "the target is outside the registered scope",
+			forced: true,
+			args: { url: "https://outside.example/api", body: "QUJD" },
+		});
+		const ask = await client.waitForJson<{ type: string; payload: SecAskPayload }>(
+			(value) => (value as { type?: string }).type === "ask",
+		);
+		expect(ask.payload).toEqual({
+			id: "ask-1",
+			toolName: "http_request",
+			resource: "tool:http_request",
+			reason: "the target is outside the registered scope",
+			forced: true,
+			args: { url: "https://outside.example/api", body: "[omitted 3 bytes]" },
+		});
+
+		client.sendText(JSON.stringify({ type: "ask_reply", id: ask.payload.id, reply: "always" }));
+		await expect(answer).resolves.toBe("always");
+		const settled = await client.waitForJson<{ type: string; payload: { message: string } }>(
+			(value) =>
+				(value as { type?: string }).type === "log" &&
+				String((value as { payload?: { message?: string } }).payload?.message).includes("always"),
+		);
+		expect(settled.payload.message).toBe(`guard ask ${ask.payload.id}: always`);
+		expect(approvals.pending()).toEqual([]);
+		client.close();
+	});
+
+	test("replays pending asks to a late client and denies them on shutdown", async () => {
+		const { server, approvals } = await setup();
+		const cookie = await login(server);
+		const url = new URL(`ws://127.0.0.1:${server.port}/${ENTRY}/ws`);
+		const headers = { Origin: `http://127.0.0.1:${server.port}`, Cookie: cookie };
+		const first = await TestWsClient.connect(url, headers);
+		await first.waitForJson((value) => (value as { type?: string }).type === "snapshot");
+
+		const answer = approvals.ask({
+			toolName: "read",
+			resource: "tool:read",
+			reason: "strict mode puts every tool call in front of a human",
+			forced: false,
+			args: { path: "src/index.ts" },
+		});
+		const ask = await first.waitForJson<{ type: string; payload: SecAskPayload }>(
+			(value) => (value as { type?: string }).type === "ask",
+		);
+
+		const second = await TestWsClient.connect(url, headers);
+		await second.waitForJson((value) => (value as { type?: string }).type === "snapshot");
+		const replay = await second.waitForJson<{ type: string; payload: SecAskPayload }>(
+			(value) => (value as { type?: string }).type === "ask",
+		);
+		expect(replay.payload.id).toBe(ask.payload.id);
+
+		second.sendText(JSON.stringify({ type: "ask_reply", id: "ask-999", reply: "deny" }));
+		const warn = await second.waitForJson<{ type: string; payload: { level: string; message: string } }>(
+			(value) =>
+				(value as { type?: string }).type === "log" &&
+				(value as { payload?: { level?: string } }).payload?.level === "warn",
+		);
+		expect(warn.payload.message).toContain("no longer pending");
+		expect(approvals.pending()).toHaveLength(1);
+
+		await server.close();
+		await expect(answer).resolves.toBe("deny");
+		first.close();
 	});
 
 	test("closes the listener and its clients with the handle", async () => {

@@ -4,17 +4,18 @@ import { defineExtension, hook, ToolTask } from "@OnePanda-TgSec/tg-gibraltar";
 import type { TelemetryContext } from "@OnePanda-TgSec/tg-telemetry";
 import type { SecAgentLane } from "./bootstrap.ts";
 import type { SecGuardWiring } from "./guard-wiring.ts";
+import type { TaskChildPolicy, TgSecAgentRole } from "./role-policies.ts";
 import type { SecPromptSections } from "./sections.ts";
-import { secLaneSections, secPromptSections } from "./sections.ts";
-import { createTaskTool, type TaskChildPolicy } from "./task-tool.ts";
+import { secPromptSections, secScopePromptSections } from "./sections.ts";
+import { createTaskTool } from "./task-tool.ts";
 
 export type SecCoreExtensionOptions = {
 	lane: SecAgentLane;
 	/** The guard under test. Attestation runs against it before its first verdict. */
 	wiring: SecGuardWiring;
-	/** Per-lane child policies for `task`; the host decides what a delegation may carry. */
-	policies: Readonly<Record<SecAgentLane, TaskChildPolicy>>;
-	/** Prompt sections; defaults to `secLaneSections(lane)`. */
+	/** The closed role catalog for `task`; the host decides what a delegation may carry. */
+	policies: Readonly<Record<TgSecAgentRole, TaskChildPolicy>>;
+	/** Prompt sections; defaults to the host lane's map for the root and role+lane maps for children. */
 	sections?: SecPromptSections;
 	/** Audit sink shared with the guard; the `task` tool records `tg.span.sec.fork` through it. */
 	telemetry?: TelemetryContext;
@@ -50,7 +51,8 @@ export function createSecCoreExtension(options: SecCoreExtensionOptions): Extens
 	return defineExtension({
 		name: "sec-core",
 		tools: [taskTool],
-		sections: secPromptSections(options.sections ?? secLaneSections(options.lane)),
+		sections:
+			options.sections === undefined ? secScopePromptSections(options.lane) : secPromptSections(options.sections),
 		hooks: [hook(ToolTask, { beforeTool })],
 	});
 }

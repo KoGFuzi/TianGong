@@ -1,4 +1,5 @@
 import type { TgSecAskChannel, TgSecAskReply, TgSecDecision, TgSecRequest } from "@OnePanda-TgSec/tg-sec-guard";
+import type { SecApprovalQueue } from "@OnePanda-TgSec/tg-sec-server";
 import { createInterface } from "node:readline";
 
 /** One recorded ask: the request and the decision that escalated it. */
@@ -27,6 +28,22 @@ export function createQueueAskChannel(replies: readonly TgSecAskReply[] = []): S
 		return reply ?? "deny";
 	};
 	return { ask, asked };
+}
+
+/**
+ * The WebUI ask channel: the guard's escalation is parked on the sidecar's approval queue, the
+ * browser sees an `ask` frame and answers with `ask_reply`, and the guard's existing `always`
+ * semantics apply unchanged. A closed queue resolves `deny`, so a vanished sidecar fails closed.
+ */
+export function createApprovalAskChannel(approvals: SecApprovalQueue): TgSecAskChannel {
+	return (request, decision) =>
+		approvals.ask({
+			toolName: request.toolName,
+			resource: request.resource,
+			reason: decision.reason,
+			forced: decision.forced,
+			args: request.arguments,
+		});
 }
 
 export type StdinAskChannelOptions = {

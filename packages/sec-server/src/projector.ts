@@ -291,20 +291,26 @@ const BODY_KEYS = new Set([
 /**
  * A tool call's arguments can carry an evidence body (base64 request/response). Those bodies are
  * content-addressed and must never reach the transcript or the browser, so the summary replaces
- * any body-shaped key with a byte count and caps depth and string length.
+ * any body-shaped key with a byte count and caps depth and string length. The input is `unknown`
+ * because a guard ask hands over the tool call's raw argument tree; anything that is not JSON is
+ * represented as a string instead of throwing.
  */
-function summarizeJson(value: JsonValue, depth = 0): JsonValue {
+export function summarizeJson(value: unknown, depth = 0): JsonValue {
 	if (depth > 4) return "[depth limit]";
 	if (typeof value === "string") return value.length > 300 ? `${value.slice(0, 299)}…` : value;
-	if (value === null || typeof value === "number" || typeof value === "boolean") return value;
+	if (value === null || typeof value === "boolean") return value;
+	if (typeof value === "number") return Number.isFinite(value) ? value : String(value);
+	if (value === undefined) return "[undefined]";
+	if (typeof value === "bigint") return `${value.toString()}n`;
 	if (Array.isArray(value)) {
 		const items = value.slice(0, 20).map((item) => summarizeJson(item, depth + 1));
 		if (value.length > 20) items.push(`[${value.length - 20} more]`);
 		return items;
 	}
+	if (typeof value !== "object") return `[unsupported: ${typeof value}]`;
 	const out: { [key: string]: JsonValue } = {};
 	let count = 0;
-	for (const [key, item] of Object.entries(value)) {
+	for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
 		if (count >= 40) {
 			out["…"] = "[key limit]";
 			break;

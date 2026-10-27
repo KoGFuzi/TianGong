@@ -17,8 +17,8 @@ import { openSecAgent, type SecAgentLane } from "../bootstrap.ts";
 import { createSecCoreExtension } from "../core-extension.ts";
 import { openTgSecEvidenceStore } from "../evidence/store.ts";
 import { buildSecGuard, secAttestForbiddenRead, secDeclaredTools } from "../guard-wiring.ts";
+import { openSecMcpHost } from "../mcp/host.ts";
 import { watchSecEvents } from "../observation.ts";
-import type { TaskChildPolicy } from "../task-tool.ts";
 import { createSecToolsExtension } from "../tools/extension.ts";
 import type { HttpRequest, HttpResponse, RequestExecutor } from "../tools/transport.ts";
 import { oauthProviderNames, runAuthCommand } from "./auth.ts";
@@ -302,6 +302,8 @@ async function main(): Promise<void> {
 	const scopeRegistry = createTgSecScopeRegistry([
 		{ kind: "exact-host", pattern: SMOKE_HOST, effect: "allow", enabled: true },
 	]);
+	const mcp = await openSecMcpHost({ cwd: options.cwd });
+	for (const error of mcp.errors) process.stderr.write(`tg-sec mcp: ${error}\n`);
 	const wiring = await buildSecGuard({
 		session,
 		lane: options.lane,
@@ -314,16 +316,18 @@ async function main(): Promise<void> {
 		attestParts: {
 			forbiddenRead: secAttestForbiddenRead(`${options.cwd}/.tg-sec-smoke-data`),
 			registeredTools: () => registeredTools,
-			declaredTools: secDeclaredTools(options.lane),
+			declaredTools: secDeclaredTools(options.lane, mcp.declaredTools),
 		},
 	});
-	const policies: Record<SecAgentLane, TaskChildPolicy> = {
-		redteam: { extensions: ["sec-core"] },
-		ctf: { extensions: ["sec-core"] },
-		src: { extensions: ["sec-core"] },
-	};
-	const core = createSecCoreExtension({ lane: options.lane, wiring, policies, telemetry });
-	const secTools = createSecToolsExtension({ store, executor: smokeExecutor });
+	const core = createSecCoreExtension({ lane: options.lane, wiring, policies: mcp.policies, telemetry });
+	const secTools = createSecToolsExtension({
+		store,
+		executor: smokeExecutor,
+		lane: options.lane,
+		project: options.project,
+		target: options.project,
+		...(mcp.flowFetcher === undefined ? {} : { flowFetcher: mcp.flowFetcher }),
+	});
 
 	const agent: SecAgent = await openSecAgent({
 		context,
@@ -333,7 +337,13 @@ async function main(): Promise<void> {
 		model,
 		cwd: options.cwd,
 		...(options.db === undefined ? {} : { path: options.db }),
-		extensions: [core, secTools],
+		extensions: [core, secTools, ...mcp.extensions],
+		onClose: async () => {
+			for (const error of await mcp.close()) process.stderr.write(`tg-sec mcp: ${error}\n`);
+		},
+	}).catch(async (error: unknown) => {
+		await mcp.close();
+		throw error;
 	});
 	session.attach(agent.harness);
 	registeredTools = agent.registry

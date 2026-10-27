@@ -7,13 +7,21 @@ import {
 	rootTargetKey,
 	type SecProjectionAction,
 	type SecProjectionEvidenceSubject,
+	type SecProjectionFinding,
 	type SecProjectionInput,
+	type SecProjectionPlan,
+	type SecProjectionTerminal,
 } from "../src/projection.ts";
 
 const ROOT = 1;
 
 function input(
-	overrides: Partial<Pick<SecProjectionInput, "project" | "target" | "actions" | "evidence" | "now">> = {},
+	overrides: Partial<
+		Pick<
+			SecProjectionInput,
+			"project" | "target" | "actions" | "evidence" | "findings" | "plan" | "terminals" | "now"
+		>
+	> = {},
 ): SecProjectionInput {
 	return {
 		project: "demo",
@@ -55,6 +63,21 @@ function evidence(overrides: Partial<SecProjectionEvidenceSubject> = {}): SecPro
 				status: 200,
 			},
 		],
+		...overrides,
+	};
+}
+
+function finding(overrides: Partial<SecProjectionFinding> = {}): SecProjectionFinding {
+	return {
+		findingId: "finding-1",
+		lane: "redteam",
+		title: "SQL injection",
+		severity: "high",
+		status: "verified",
+		subjectId: "finding-1",
+		createdAt: 60,
+		updatedAt: 120,
+		retestSnapshotId: "",
 		...overrides,
 	};
 }
@@ -269,6 +292,74 @@ describe("projectSecGraph", () => {
 		expect(graph.stats).toMatchObject({ nodes: 2, edges: 1, findings: 1, low: 1, medium: 0, high: 0 });
 	});
 
+	test("maps a registered finding onto the existing node and finding frames", () => {
+		const graph = projectSecGraph(input({ evidence: [evidence()], findings: [finding()] }));
+
+		const key = evidenceNodeKey("finding-1");
+		const node = graph.nodes.find((candidate) => candidate.key === key);
+		expect(node).toMatchObject({
+			title: "SQL injection",
+			severity: "high",
+			status: "verified",
+			risk_score: SEC_SEVERITY_SCORE.high + 4,
+			created_at: 50,
+			updated_at: 120,
+		});
+		expect(node?.tags).toEqual(
+			expect.arrayContaining(["evidence", "finding", "severity:high", "status:verified", "subject:finding-1"]),
+		);
+		expect(node?.detail).toMatchObject({
+			finding: { lane: "redteam", severity: "high", status: "verified", retestSnapshotId: "" },
+		});
+
+		expect(graph.findings).toEqual([
+			{
+				id: "finding-1",
+				node_key: key,
+				severity: "high",
+				category: "finding",
+				title: "SQL injection",
+				description: "redteam finding at status verified; 1 snapshot(s) at evidence version 3",
+				evidence: "[proof] GET https://demo.local/admin -> 200 - admin panel",
+				critical: false,
+				created_at: 50,
+				verification_status: "verified",
+			},
+		]);
+		expect(graph.stats).toMatchObject({ findings: 1, high: 1, medium: 0, low: 0, critical: 0 });
+	});
+
+	test("maps every finding lifecycle state onto the contract's verification status", () => {
+		const cases = [
+			["open", "pending"],
+			["verified", "verified"],
+			["retest-pass", "verified"],
+			["retest-fail", "rejected"],
+			["wontfix", "excluded"],
+		] as const;
+		for (const [status, expected] of cases) {
+			const graph = projectSecGraph(input({ evidence: [evidence()], findings: [finding({ status })] }));
+			expect(graph.findings[0]?.verification_status).toBe(expected);
+		}
+	});
+
+	test("emits a finding node for a registered finding with no evidence yet", () => {
+		const graph = projectSecGraph(input({ findings: [finding({ status: "open" })] }));
+
+		const key = evidenceNodeKey("finding-1");
+		expect(graph.nodes.find((candidate) => candidate.key === key)).toMatchObject({
+			type: "vuln",
+			severity: "high",
+			status: "open",
+		});
+		expect(graph.findings[0]).toMatchObject({
+			id: "finding-1",
+			severity: "high",
+			verification_status: "pending",
+			evidence: "no snapshots bound",
+		});
+	});
+
 	test("maps a failed action intent to a disproved intent and open actions to the frontier", () => {
 		const graph = projectSecGraph(
 			input({
@@ -329,5 +420,129 @@ describe("projectSecGraph", () => {
 		const node = graph.nodes.find((candidate) => candidate.type === "info");
 		expect(node?.title).toHaveLength(120);
 		expect(node?.title.endsWith("…")).toBe(true);
+	});
+});
+
+function plan(overrides: Partial<SecProjectionPlan> = {}): SecProjectionPlan {
+	return {
+		revision: 2,
+		rationale: "recon done",
+		createdAt: 200,
+		steps: [
+			{ stepId: "recon", title: "Enumerate the target", detail: "ports", status: "done" },
+			{ stepId: "exploit", title: "Prove the injection", detail: "", status: "active" },
+		],
+		...overrides,
+	};
+}
+
+function terminal(overrides: Partial<SecProjectionTerminal> = {}): SecProjectionTerminal {
+	return {
+		claim: "getshell",
+		lane: "redteam",
+		status: "unverified",
+		reason: "finding F-1 is still open",
+		findingId: "F-1",
+		declaredAt: 300,
+		...overrides,
+	};
+}
+
+describe("plan intents", () => {
+	test("the newest plan revision replaces action-derived intents", () => {
+		const graph = projectSecGraph(
+			input({
+				actions: [action({ conversationId: 2, intent: "service: 8080/http nginx" })],
+				plan: plan(),
+			}),
+		);
+
+		expect(graph.intents).toEqual([
+			{
+				id: "intent:plan-2-recon",
+				from: ["target:demo"],
+				description: "Enumerate the target",
+				rationale: "plan revision 2: recon done",
+				est_success: 1,
+				status: "verified",
+				strategy_key: "recon",
+				priority: 0,
+				result_summary: "ports",
+			},
+			{
+				id: "intent:plan-2-exploit",
+				from: ["target:demo"],
+				description: "Prove the injection",
+				rationale: "plan revision 2: recon done",
+				est_success: 0.6,
+				status: "active",
+				strategy_key: "exploit",
+				priority: 1,
+			},
+		]);
+		expect(graph.intents.map((intent) => intent.id)).not.toContain("intent:conv-2");
+		expect(graph.frontier).toEqual({ open: 1, strategies: 2, by_status: { verified: 1, active: 1 } });
+		expect(graph.stats.frontier_open).toBe(1);
+		expect(graph.stats.services).toBe(1);
+	});
+
+	test("dropped steps become disproved intents", () => {
+		const graph = projectSecGraph(
+			input({
+				plan: plan({
+					steps: [{ stepId: "dead", title: "Try the decoy", detail: "", status: "dropped" }],
+				}),
+			}),
+		);
+		expect(graph.intents[0]).toMatchObject({ status: "disproved", est_success: 0.05, priority: 0 });
+	});
+
+	test("with no plan the action intents remain the fallback", () => {
+		const graph = projectSecGraph(input({ actions: [action({ conversationId: 2 })] }));
+		expect(graph.intents.map((intent) => intent.id)).toEqual(["intent:conv-2"]);
+	});
+});
+
+describe("terminal declarations", () => {
+	test("an unverified getshell claim projects as a goal but changes no finding", () => {
+		const graph = projectSecGraph(
+			input({
+				findings: [finding({ status: "open" })],
+				terminals: [terminal()],
+			}),
+		);
+
+		const node = graph.nodes.find((candidate) => candidate.key === "goal:shell-terminal");
+		expect(node).toMatchObject({
+			type: "goal",
+			severity: "info",
+			is_rce: false,
+			status: "unverified",
+		});
+		expect(node?.tags).toEqual(["terminal", "claim:getshell", "lane:redteam", "terminal:unverified"]);
+		expect(graph.stats.has_shell).toBe(false);
+		// An unverified claim changes nothing about the candidate path; the open finding still owns it.
+		expect(graph.rce_path).toEqual(projectSecGraph(input({ findings: [finding({ status: "open" })] })).rce_path);
+		expect(graph.findings[0]).toMatchObject({ id: "finding-1", verification_status: "pending" });
+	});
+
+	test("a verified getshell claim marks the graph as shelled", () => {
+		const graph = projectSecGraph(
+			input({ terminals: [terminal({ status: "verified", reason: "finding F-1 is high/verified" })] }),
+		);
+		const node = graph.nodes.find((candidate) => candidate.key === "goal:shell-terminal");
+		expect(node).toMatchObject({ severity: "critical", is_rce: true, status: "verified" });
+		expect(graph.stats.has_shell).toBe(true);
+		expect(graph.rce_path.path).toEqual(["target:demo", "goal:shell-terminal"]);
+		expect(graph.rce_path.frontier_mode).toBe(false);
+	});
+
+	test("a verified getflag claim uses the high severity floor", () => {
+		const graph = projectSecGraph(
+			input({ terminals: [terminal({ claim: "getflag", lane: "ctf", status: "verified", reason: "flag exists" })] }),
+		);
+		const node = graph.nodes.find((candidate) => candidate.key === "goal:flag-terminal");
+		expect(node).toMatchObject({ severity: "high", is_rce: false, status: "verified" });
+		expect(graph.stats.has_shell).toBe(false);
 	});
 });

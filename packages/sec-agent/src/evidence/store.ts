@@ -10,6 +10,14 @@ import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import { basename, join } from "node:path";
+import {
+	assertTgSecFindingSeverity,
+	assertTgSecFindingStatus,
+	isTgSecFindingTransitionAllowed,
+	isTgSecRetestStatus,
+	type TgSecFindingSeverity,
+	type TgSecFindingStatus,
+} from "../finding-vocabulary.ts";
 import { EvidenceBlobStore } from "./blobs.ts";
 import { blobsRoot, evidenceIndexPath, stagingDir } from "./config.ts";
 import { TgSecEvidenceConflictError, TgSecEvidenceHashMismatchError, TgSecEvidenceNotFoundError } from "./errors.ts";
@@ -79,9 +87,47 @@ export type TgSecEvidenceBindingEdit = {
 /** Reorder a whole set by binding id, or touch one binding. */
 export type TgSecEvidenceEdit = { readonly reorder: readonly number[] } | TgSecEvidenceBindingEdit;
 
+/** One finding: the campaign's verdict on the subject its evidence is bound to. */
+export type TgSecFindingRecord = {
+	readonly findingId: string;
+	readonly lane: string;
+	readonly title: string;
+	readonly severity: TgSecFindingSeverity;
+	readonly status: TgSecFindingStatus;
+	readonly subjectId: string;
+	readonly createdAt: number;
+	readonly updatedAt: number;
+	/** The newest snapshot a retest attached; empty until the first retest. */
+	readonly retestSnapshotId: string;
+};
+
+/**
+ * One create-or-update request. A finding that does not exist yet is created `open` from `lane`,
+ * `title` and `severity`; the rest of the fields patch an existing one. `snapshotId` is the new
+ * evidence a retest transition must carry.
+ */
+export type TgSecFindingWriteInput = {
+	readonly findingId: string;
+	readonly expectedVersion?: number | null;
+	readonly lane?: string;
+	readonly title?: string;
+	readonly severity?: TgSecFindingSeverity;
+	readonly status?: TgSecFindingStatus;
+	readonly snapshotId?: string;
+};
+
+/** The settled row plus the subject version it was written at. */
+export type TgSecFindingWriteResult = {
+	readonly finding: TgSecFindingRecord;
+	readonly version: number;
+	readonly created: boolean;
+	readonly changed: boolean;
+};
+
 type SnapshotRow = {
 	id: string;
 	source_id: string;
+	flow_id: string;
 	captured_at: number;
 	url: string;
 	method: string;
@@ -97,7 +143,7 @@ type SnapshotRow = {
 	unreferenced_at: number | null;
 };
 
-const SNAPSHOT_COLUMNS = `id, source_id, captured_at, url, method, status, content_type, req_head, resp_head, req_hash, req_len, resp_hash, resp_len, created_at, unreferenced_at`;
+const SNAPSHOT_COLUMNS = `id, source_id, flow_id, captured_at, url, method, status, content_type, req_head, resp_head, req_hash, req_len, resp_hash, resp_len, created_at, unreferenced_at`;
 
 /**
  * The durable evidence store: a content-addressed body tree plus a columnar SQLite index that is
@@ -156,10 +202,11 @@ export class TgSecEvidenceStore {
 				const present = await tx.get<{ id: string }>("SELECT id FROM tg_sec_evidence_snapshots WHERE id = ?", id);
 				if (present !== undefined) return false;
 				await tx.run(
-					`INSERT INTO tg_sec_evidence_snapshots (id, source_id, captured_at, url, method, status, content_type, req_head, resp_head, req_hash, req_len, resp_hash, resp_len, created_at, unreferenced_at)
-					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+					`INSERT INTO tg_sec_evidence_snapshots (id, source_id, flow_id, captured_at, url, method, status, content_type, req_head, resp_head, req_hash, req_len, resp_hash, resp_len, created_at, unreferenced_at)
+					 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
 					id,
 					fields.sourceId,
+					fields.flowId ?? "",
 					fields.capturedAt,
 					fields.url,
 					fields.method,
@@ -260,6 +307,139 @@ export class TgSecEvidenceStore {
 			);
 			const subjects = rows.map((row) => row.subject_id);
 			return { value: subjects, changed: false, count: subjects.length };
+		});
+	}
+
+	/**
+	 * Create a finding or patch an existing one. The write shares `tg_sec_evidence_versions` with the
+	 * evidence set — `expectedVersion` is the same optimistic lock `bind`/`edit` take — so a verdict
+	 * can never race a capture into a state the caller did not read. Creation starts `open`; a status
+	 * move must be legal, and a retest (`retest-pass`/`retest-fail`) must name a snapshot bound to the
+	 * subject that differs from the one the previous retest recorded. That is the mechanism behind
+	 * "a retest leaves new evidence", not a prompt rule.
+	 */
+	writeFinding(input: TgSecFindingWriteInput): Promise<TgSecFindingWriteResult> {
+		const findingId = input.findingId.trim();
+		if (findingId === "") throw new TypeError("a finding needs an id");
+		return this.emitEvidence("edit", findingId, async () => {
+			const result = await this.db.transaction(async (tx) => {
+				const existing = await readFinding(tx, findingId);
+				const now = this.now();
+				if (existing === undefined) {
+					const lane = input.lane?.trim() ?? "";
+					const title = input.title?.trim() ?? "";
+					if (lane === "") throw new TypeError("creating a finding needs a lane");
+					if (title === "") throw new TypeError("creating a finding needs a title");
+					if (input.severity === undefined) throw new TypeError("creating a finding needs a severity");
+					assertTgSecFindingSeverity(input.severity);
+					if (input.status !== undefined && input.status !== "open") {
+						throw new TypeError("a finding starts open; verify it only once evidence exists");
+					}
+					if (input.snapshotId !== undefined) {
+						throw new TypeError("a finding cannot record a retest before it exists");
+					}
+					await this.lockSubject(tx, findingId, input.expectedVersion ?? null);
+					await tx.run(
+						`INSERT INTO tg_sec_findings (finding_id, lane, title, severity, status, subject_id, retest_snapshot_id, created_at, updated_at)
+						 VALUES (?, ?, ?, ?, 'open', ?, '', ?, ?)`,
+						findingId,
+						lane,
+						title,
+						input.severity,
+						findingId,
+						now,
+						now,
+					);
+					await bumpSubjectVersion(tx, findingId);
+					const finding = await readFinding(tx, findingId);
+					return {
+						finding: finding!,
+						version: await readSubjectVersion(tx, findingId),
+						created: true,
+						changed: true,
+					};
+				}
+
+				await this.lockSubject(tx, existing.subjectId, input.expectedVersion ?? null);
+				if (input.lane !== undefined && input.lane.trim() !== existing.lane) {
+					throw new TypeError(`finding ${findingId}'s lane is fixed at creation`);
+				}
+				const title = input.title === undefined ? existing.title : input.title.trim();
+				if (title === "") throw new TypeError("a finding needs a title");
+				const severity = input.severity ?? existing.severity;
+				assertTgSecFindingSeverity(severity);
+				const status = input.status ?? existing.status;
+				assertTgSecFindingStatus(status);
+
+				let retestSnapshotId = existing.retestSnapshotId;
+				if (status !== existing.status) {
+					if (!isTgSecFindingTransitionAllowed(existing.status, status)) {
+						throw new TypeError(`finding ${findingId} cannot move from ${existing.status} to ${status}`);
+					}
+					if (isTgSecRetestStatus(status)) {
+						retestSnapshotId = await requireRetestSnapshot(
+							tx,
+							existing.subjectId,
+							input.snapshotId,
+							existing.retestSnapshotId,
+						);
+					} else if (input.snapshotId !== undefined) {
+						throw new TypeError(`only a retest records a snapshot; ${status} does not`);
+					}
+				} else if (isTgSecRetestStatus(status) && input.snapshotId !== undefined) {
+					retestSnapshotId = await requireRetestSnapshot(
+						tx,
+						existing.subjectId,
+						input.snapshotId,
+						existing.retestSnapshotId,
+					);
+				} else if (input.snapshotId !== undefined) {
+					throw new TypeError(`only a retest records a snapshot; ${status} does not`);
+				}
+
+				const changed =
+					title !== existing.title ||
+					severity !== existing.severity ||
+					status !== existing.status ||
+					retestSnapshotId !== existing.retestSnapshotId;
+				if (changed) {
+					await tx.run(
+						"UPDATE tg_sec_findings SET title = ?, severity = ?, status = ?, retest_snapshot_id = ?, updated_at = ? WHERE finding_id = ?",
+						title,
+						severity,
+						status,
+						retestSnapshotId,
+						now,
+						findingId,
+					);
+					await bumpSubjectVersion(tx, existing.subjectId);
+				}
+				const finding = await readFinding(tx, findingId);
+				return {
+					finding: finding!,
+					version: await readSubjectVersion(tx, existing.subjectId),
+					created: false,
+					changed,
+				};
+			});
+			return { value: result, changed: result.changed || result.created, count: 1 };
+		});
+	}
+
+	/** One finding by id, or `undefined` when it was never registered. */
+	getFinding(findingId: string): Promise<TgSecFindingRecord | undefined> {
+		const id = findingId.trim();
+		return this.emitEvidence("read", id === "" ? undefined : id, async () => {
+			const finding = await this.db.transaction((tx) => readFinding(tx, id));
+			return { value: finding, changed: false, count: finding === undefined ? 0 : 1 };
+		});
+	}
+
+	/** Every registered finding in id order; the report renderer and the projection both enumerate. */
+	listFindings(): Promise<readonly TgSecFindingRecord[]> {
+		return this.emitEvidence("list", undefined, async () => {
+			const findings = await this.db.transaction((tx) => readFindings(tx));
+			return { value: findings, changed: false, count: findings.length };
 		});
 	}
 
@@ -486,6 +666,12 @@ export async function openTgSecEvidenceStore(options: {
 }): Promise<TgSecEvidenceStore> {
 	const database = await openNodeSqliteDatabase(evidenceIndexPath(options.dir));
 	for (const statement of EVIDENCE_SCHEMA) await database.exec(statement);
+	// A database written before flow references existed has the table but not the column; the default
+	// keeps every stored id verifying, because an empty flow id encodes exactly as it did then.
+	const columns = await database.all<{ name: string }>("PRAGMA table_info(tg_sec_evidence_snapshots)");
+	if (!columns.some((column) => column.name === "flow_id")) {
+		await database.exec("ALTER TABLE tg_sec_evidence_snapshots ADD COLUMN flow_id TEXT NOT NULL DEFAULT ''");
+	}
 	return new TgSecEvidenceStore(
 		database,
 		new EvidenceBlobStore(options.dir),
@@ -493,6 +679,83 @@ export async function openTgSecEvidenceStore(options: {
 		options.now ?? defaultNow,
 		options.telemetry ?? NOOP_TELEMETRY_CONTEXT,
 	);
+}
+
+type FindingRow = {
+	finding_id: string;
+	lane: string;
+	title: string;
+	severity: string;
+	status: string;
+	subject_id: string;
+	retest_snapshot_id: string;
+	created_at: number;
+	updated_at: number;
+};
+
+const FINDING_COLUMNS = `finding_id, lane, title, severity, status, subject_id, retest_snapshot_id, created_at, updated_at`;
+
+async function readFinding(tx: SqliteExecutor, findingId: string): Promise<TgSecFindingRecord | undefined> {
+	const row = await tx.get<FindingRow>(
+		`SELECT ${FINDING_COLUMNS} FROM tg_sec_findings WHERE finding_id = ?`,
+		findingId,
+	);
+	return row === undefined ? undefined : findingFromRow(row);
+}
+
+async function readFindings(tx: SqliteExecutor): Promise<TgSecFindingRecord[]> {
+	const rows = await tx.all<FindingRow>(`SELECT ${FINDING_COLUMNS} FROM tg_sec_findings ORDER BY finding_id`);
+	return rows.map(findingFromRow);
+}
+
+function findingFromRow(row: FindingRow): TgSecFindingRecord {
+	assertTgSecFindingSeverity(row.severity);
+	assertTgSecFindingStatus(row.status);
+	return {
+		findingId: row.finding_id,
+		lane: row.lane,
+		title: row.title,
+		severity: row.severity,
+		status: row.status,
+		subjectId: row.subject_id,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+		retestSnapshotId: row.retest_snapshot_id,
+	};
+}
+
+async function readSubjectVersion(tx: SqliteExecutor, subjectId: string): Promise<number> {
+	const row = await tx.get<{ v: number }>(
+		"SELECT evidence_version AS v FROM tg_sec_evidence_versions WHERE subject_id = ?",
+		subjectId,
+	);
+	return row?.v ?? 0;
+}
+
+async function bumpSubjectVersion(tx: SqliteExecutor, subjectId: string): Promise<void> {
+	await tx.run(
+		"UPDATE tg_sec_evidence_versions SET evidence_version = evidence_version + 1 WHERE subject_id = ?",
+		subjectId,
+	);
+}
+
+/** A retest transition must cite a snapshot bound to the subject and not the one already recorded. */
+async function requireRetestSnapshot(
+	tx: SqliteExecutor,
+	subjectId: string,
+	rawSnapshotId: string | undefined,
+	previousSnapshotId: string,
+): Promise<string> {
+	const snapshotId = rawSnapshotId?.trim() ?? "";
+	if (snapshotId === "") throw new TypeError("a retest needs a new evidence snapshot id");
+	if (snapshotId === previousSnapshotId) throw new TgSecEvidenceConflictError();
+	const bound = await tx.get<{ one: number }>(
+		"SELECT 1 AS one FROM tg_sec_evidence_bindings WHERE subject_id = ? AND snapshot_id = ?",
+		subjectId,
+		snapshotId,
+	);
+	if (bound === undefined) throw new TgSecEvidenceNotFoundError();
+	return snapshotId;
 }
 
 async function readSet(tx: SqliteExecutor, subjectId: string): Promise<TgSecEvidenceSet> {
@@ -531,6 +794,7 @@ function assertSnapshotIntegrity(row: SnapshotRow): void {
 function fieldsFromRow(row: SnapshotRow): TgSecEvidenceSnapshotFields {
 	return {
 		sourceId: row.source_id,
+		flowId: row.flow_id,
 		capturedAt: row.captured_at,
 		url: row.url,
 		method: row.method,

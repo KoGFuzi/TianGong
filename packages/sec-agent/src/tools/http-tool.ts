@@ -1,6 +1,7 @@
 import { defineTool, type ToolRegistration } from "@OnePanda-TgSec/tg-gibraltar";
 import { Type } from "typebox";
 import type { TgSecEvidenceRole, TgSecEvidenceStore } from "../evidence/store.ts";
+import { recordConversationFinding } from "../task-findings.ts";
 import type { RequestExecutor } from "./transport.ts";
 
 /**
@@ -87,7 +88,7 @@ export function createHttpRequestTool(options: HttpRequestToolOptions): ToolRegi
 		callers: ["model", "tools"],
 		deferred: true,
 		replay: "unsafe",
-		async execute(args, api) {
+		async execute(args, api, context) {
 			const method = (args.method ?? "GET").toUpperCase();
 			const body = args.body ?? "";
 			const headers = args.headers ?? {};
@@ -115,6 +116,7 @@ export function createHttpRequestTool(options: HttpRequestToolOptions): ToolRegi
 					},
 				]);
 				evidenceVersion = set.version;
+				await recordConversationFinding(api, findingId, context);
 			}
 			const summary =
 				`${method} ${args.url} -> ${response.status}; ${requestBytes.length}B sent, ${response.body.length}B received; snapshot ${snapshot.id}` +

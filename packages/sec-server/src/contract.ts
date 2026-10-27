@@ -183,7 +183,7 @@ export type SecGraph = {
 	stats: SecGraphStats;
 };
 
-/** The event names the projection emits; the reference client switches on these. */
+/** The event names the sidecar emits; the reference client switches on these. */
 export const SEC_EVENT_TYPES = [
 	"node",
 	"edge",
@@ -197,6 +197,7 @@ export const SEC_EVENT_TYPES = [
 	"tool_result",
 	"thought",
 	"memory",
+	"ask",
 ] as const;
 
 export type SecEventType = (typeof SEC_EVENT_TYPES)[number];
@@ -244,6 +245,16 @@ export type SecMemoryPayload = {
 	kind?: string;
 };
 
+/** One guard escalation waiting on the operator; `args` is already summarized and body-redacted. */
+export type SecAskPayload = {
+	id: string;
+	toolName: string;
+	resource: string;
+	reason: string;
+	forced: boolean;
+	args: JsonValue;
+};
+
 export type SecEventPayload =
 	| SecGraphNode
 	| SecGraphEdge
@@ -255,7 +266,8 @@ export type SecEventPayload =
 	| SecStatusPayload
 	| SecToolPayload
 	| SecThoughtPayload
-	| SecMemoryPayload;
+	| SecMemoryPayload
+	| SecAskPayload;
 
 /** The first frame on every connection: the whole graph plus the run state it was read with. */
 export type SecSnapshotFrame = {
@@ -273,8 +285,21 @@ export type SecPongFrame = {
 
 export type SecServerFrame = SecSnapshotFrame | SecEventFrame | SecPongFrame;
 
+/** The replies a guard ask accepts; the semantics are sec-guard's (`always` is an exact grant). */
+export const SEC_ASK_REPLIES = ["allow", "deny", "always"] as const;
+
+export type SecAskReply = (typeof SEC_ASK_REPLIES)[number];
+
+export function isSecAskReply(value: unknown): value is SecAskReply {
+	return typeof value === "string" && (SEC_ASK_REPLIES as readonly string[]).includes(value);
+}
+
 /** Frames a browser client sends; anything else is ignored. */
-export type SecClientFrame = { type: "steer"; content: string } | { type: "refresh" } | { type: "ping" };
+export type SecClientFrame =
+	| { type: "steer"; content: string }
+	| { type: "ask_reply"; id: string; reply: SecAskReply }
+	| { type: "refresh" }
+	| { type: "ping" };
 
 export function isSecSnapshotFrame(frame: SecServerFrame): frame is SecSnapshotFrame {
 	return frame.type === "snapshot";

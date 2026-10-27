@@ -2,7 +2,7 @@ import { fauxAssistantMessage, fauxText, fauxToolCall } from "@OnePanda-TgSec/tg
 import { AgentDoc, type ConversationId, defineExtension } from "@OnePanda-TgSec/tg-gibraltar";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createTaskTool, openSecAgent } from "../src/index.ts";
+import { createTaskTool, openSecAgent, TgSecTaskScopeDoc } from "../src/index.ts";
 import { cleanupTempDirs, context, fauxModel, fauxSetup, tempDir } from "./support.ts";
 
 afterEach(cleanupTempDirs);
@@ -25,8 +25,8 @@ describe("task tool", () => {
 			lane: "redteam",
 			policies: {
 				redteam: { extensions: ChildPolicyExtensions, model: fauxModel },
-				ctf: { extensions: [] },
-				src: { extensions: [] },
+				binary: { extensions: [] },
+				reporting: { extensions: [] },
 			},
 			now: () => 5,
 		});
@@ -73,6 +73,10 @@ describe("task tool", () => {
 		const childAgent = await agent.harness.snapshot(AgentDoc, childId as ConversationId, context);
 		expect(childAgent).toMatchObject({ extensions: ChildPolicyExtensions, model: fauxModel });
 
+		// The fork persists the depth and the chosen role/lane for the depth gate and later sections.
+		const scope = await agent.harness.snapshot(TgSecTaskScopeDoc, childId as ConversationId, context);
+		expect(scope).toEqual({ depth: 1, role: "redteam", lane: "redteam" });
+
 		await agent.close(context);
 	}, 30_000);
 
@@ -80,7 +84,7 @@ describe("task tool", () => {
 		const dir = await tempDir();
 		const { faux, models } = fauxSetup();
 		faux.setResponses([
-			fauxAssistantMessage([fauxToolCall("task", { intent: "broken delegation" }, { id: "t1" })], {
+			fauxAssistantMessage([fauxToolCall("task", { intent: "broken delegation", role: "binary" }, { id: "t1" })], {
 				stopReason: "toolUse",
 			}),
 			fauxAssistantMessage("gave up"),
@@ -91,8 +95,8 @@ describe("task tool", () => {
 			lane: "ctf",
 			policies: {
 				redteam: { extensions: [] },
-				ctf: { extensions: ChildPolicyExtensions, model: null },
-				src: { extensions: [] },
+				binary: { extensions: ChildPolicyExtensions, model: null },
+				reporting: { extensions: [] },
 			},
 			now: () => 9,
 		});

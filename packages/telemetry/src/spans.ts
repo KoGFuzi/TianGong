@@ -360,7 +360,7 @@ export const TG_SPAN_SCHEMA = defineTelemetrySchema({
 		},
 		"tg.span.sec.fork": {
 			description:
-				"One foreground `task` delegation to a child conversation forked from the caller. Attributes carry the lane and the outcome only — never the delegation intent or any child text.",
+				"One foreground `task` delegation to a child conversation forked from the caller. Attributes carry the lane, the role and the outcome only — never the delegation intent or any child text.",
 			parents: { kind: "root_or_external" },
 			startAttributes: {
 				lane: {
@@ -368,24 +368,32 @@ export const TG_SPAN_SCHEMA = defineTelemetrySchema({
 					values: ["redteam", "ctf", "src"],
 					required: true,
 					cardinality: "low",
-					description: "The lane whose static policy the child runs under.",
+					description: "The lane whose guard and sections condition the child.",
+				},
+				role: {
+					type: "string",
+					values: ["redteam", "binary", "reporting"],
+					required: true,
+					cardinality: "low",
+					description: "The static role policy the child runs under.",
 				},
 			},
 			endAttributes: {
 				outcome: {
 					type: "string",
-					values: ["done", "failed", "aborted"],
+					values: ["done", "failed", "aborted", "depth-rejected"],
 					cardinality: "low",
-					description: "How the child's delegation settled.",
+					description:
+						"How the delegation settled; `depth-rejected` is a nested call refused by the single-hop gate.",
 				},
 				depth: {
 					type: "number",
 					cardinality: "low",
 					description:
-						"Child depth below the root conversation. Batch-4's foreground `task` is a single hop, so this is always 1.",
+						"The child depth below the root this call would have created. A root call creates depth 1; a nested call is rejected at depth 2.",
 				},
 			},
-			status: { default: "ok", errorWhen: "The delegation fails, aborts, or throws." },
+			status: { default: "ok", errorWhen: "The delegation fails, aborts, is rejected, or throws." },
 		},
 		"tg.span.sec.evidence": {
 			description:

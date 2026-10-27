@@ -189,6 +189,15 @@ describe("extractConnectionTargets: strong evidence", () => {
 		expect(targets(args("connect", { host: "localhost" }))).toEqual(["localhost/strong"]);
 		expect(targets(args("netfetch", { url: "http://localhost:8080/x" }))).toEqual(["localhost/strong"]);
 	});
+
+	it("takes a domain-named parameter as a declared target", () => {
+		// MCP scanners name the field `domain` (or `domains`); the name, not the shell, is what
+		// declares the value a connection target. This is the bridge's scope coverage.
+		expect(targets(args("mcp__yak__scan", { domain: "localhost" }))).toEqual(["localhost/strong"]);
+		expect(targets(args("mcp__yak__scan", { domains: ["scanme.example.net"] }))).toEqual([
+			"scanme.example.net/strong",
+		]);
+	});
 });
 
 describe("extractConnectionTargets: weak evidence", () => {

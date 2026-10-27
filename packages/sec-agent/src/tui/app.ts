@@ -49,8 +49,8 @@ import { evidenceDir } from "../evidence/config.ts";
 import type { TgSecEvidenceStore } from "../evidence/store.ts";
 import { openTgSecEvidenceStore } from "../evidence/store.ts";
 import { buildSecGuard, type SecGuardWiring, secAttestForbiddenRead, secDeclaredTools } from "../guard-wiring.ts";
+import { openSecMcpHost, type SecMcpHost } from "../mcp/host.ts";
 import { type SecObservation, watchSecEvents } from "../observation.ts";
-import type { TaskChildPolicy } from "../task-tool.ts";
 import { createSecToolsExtension } from "../tools/extension.ts";
 import { nodeRequestExecutor } from "../tools/transport.ts";
 import { createTgSecAskController, type TgSecAskController } from "./ask.ts";
@@ -1058,8 +1058,12 @@ export async function openTgSecTui(options: TgSecTuiOptions): Promise<TgSecTuiAp
 	const session = createDeferredSessionPort();
 	let registeredTools: readonly string[] = [];
 	let agent: SecAgent | undefined;
+	let mcp: SecMcpHost | undefined;
 	try {
 		const scopeRegistry = await loadTgSecScopeRegistry(scopePath);
+		const mcpHost = await openSecMcpHost({ cwd: options.cwd });
+		mcp = mcpHost;
+		for (const error of mcpHost.errors) process.stderr.write(`tg-sec mcp: ${error}\n`);
 		const wiring = await buildSecGuard({
 			session,
 			lane: options.lane,
@@ -1072,16 +1076,18 @@ export async function openTgSecTui(options: TgSecTuiOptions): Promise<TgSecTuiAp
 			attestParts: {
 				forbiddenRead: secAttestForbiddenRead(join(dataDir, "attest")),
 				registeredTools: () => registeredTools,
-				declaredTools: secDeclaredTools(options.lane),
+				declaredTools: secDeclaredTools(options.lane, mcpHost.declaredTools),
 			},
 		});
-		const policies: Record<SecAgentLane, TaskChildPolicy> = {
-			redteam: { extensions: ["sec-core"] },
-			ctf: { extensions: ["sec-core"] },
-			src: { extensions: ["sec-core"] },
-		};
-		const core = createSecCoreExtension({ lane: options.lane, wiring, policies, telemetry });
-		const secTools = createSecToolsExtension({ store, executor: nodeRequestExecutor() });
+		const core = createSecCoreExtension({ lane: options.lane, wiring, policies: mcpHost.policies, telemetry });
+		const secTools = createSecToolsExtension({
+			store,
+			executor: nodeRequestExecutor(),
+			lane: options.lane,
+			project: options.project,
+			target: options.project,
+			...(mcpHost.flowFetcher === undefined ? {} : { flowFetcher: mcpHost.flowFetcher }),
+		});
 		agent = await openSecAgent({
 			context,
 			project: options.project,
@@ -1090,7 +1096,10 @@ export async function openTgSecTui(options: TgSecTuiOptions): Promise<TgSecTuiAp
 			model: modelRef,
 			cwd: options.cwd,
 			...(databasePath === undefined ? {} : { path: databasePath }),
-			extensions: [core, secTools],
+			extensions: [core, secTools, ...mcpHost.extensions],
+			onClose: async () => {
+				for (const error of await mcpHost.close()) process.stderr.write(`tg-sec mcp: ${error}\n`);
+			},
 		});
 		session.attach(agent.harness);
 		// `root()` only applies its agent on creation, so a restart must reconcile the stored model
@@ -1137,6 +1146,8 @@ export async function openTgSecTui(options: TgSecTuiOptions): Promise<TgSecTuiAp
 		asks.close();
 		const opened = agent;
 		if (opened !== undefined) await ignoreFailure(() => opened.close(context));
+		const bridge = mcp;
+		if (bridge !== undefined) await ignoreFailure(() => bridge.close());
 		await ignoreFailure(() => store.close());
 		throw error;
 	}

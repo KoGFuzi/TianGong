@@ -15,17 +15,27 @@ import {
 	type TgSecPermissionMode,
 	type TgSecSessionPort,
 } from "@OnePanda-TgSec/tg-sec-guard";
-import { type SecProjectionEvidenceSubject, type SecServerHandle, startSecServer } from "@OnePanda-TgSec/tg-sec-server";
+import {
+	createSecApprovalQueue,
+	type SecProjectionEvidenceSubject,
+	type SecProjectionFinding,
+	type SecProjectionPlan,
+	type SecProjectionTerminal,
+	type SecServerHandle,
+	startSecServer,
+} from "@OnePanda-TgSec/tg-sec-server";
 import { InMemoryTelemetryContext } from "@OnePanda-TgSec/tg-telemetry";
 import { join } from "node:path";
-import { createStdinAskChannel } from "../ask.ts";
+import { createApprovalAskChannel } from "../ask.ts";
 import { openSecAgent, type SecAgent, type SecAgentLane } from "../bootstrap.ts";
 import { fauxDatabasePath, safeProjectSegment, tgSecDataDir } from "../config.ts";
 import { createSecCoreExtension } from "../core-extension.ts";
 import { evidenceDir } from "../evidence/config.ts";
 import { openTgSecEvidenceStore, type TgSecEvidenceStore } from "../evidence/store.ts";
 import { buildSecGuard, secAttestForbiddenRead, secDeclaredTools } from "../guard-wiring.ts";
-import type { TaskChildPolicy } from "../task-tool.ts";
+import { openSecMcpHost, type SecMcpHost } from "../mcp/host.ts";
+import { latestPlan } from "../plan.ts";
+import { listTerminals } from "../terminal.ts";
 import { createSecToolsExtension } from "../tools/extension.ts";
 import { nodeRequestExecutor } from "../tools/transport.ts";
 import { createTgSecModels, resetFauxContext, tryResolveTgSecModel } from "../tui/model.ts";
@@ -80,10 +90,11 @@ function scriptFauxEcho(faux: FauxProviderHandle): void {
 }
 
 /**
- * `tg-sec serve`: open the campaign runtime and the read-only-by-default WebUI sidecar on the same
- * harness. The server projects the action tree and evidence store onto the StrikeAgent graph
- * contract, streams agent events over WebSocket, and accepts steering back into the conversation.
- * The guard's interactive asks stay in this terminal; the browser can steer, not approve.
+ * `tg-sec serve`: open the campaign runtime and the WebUI sidecar on the same harness. The server
+ * projects the action tree and evidence store onto the StrikeAgent graph contract, streams agent
+ * events over WebSocket, and accepts steering back into the conversation. Guard escalations travel
+ * the other way: the host parks them on the shared approval queue, the browser shows them and
+ * answers with `ask_reply`, and the guard's own `always` semantics decide what a grant covers.
  */
 export async function runServeCommand(options: ServeOptions): Promise<void> {
 	const context = BACKGROUND_CONTEXT;
@@ -110,22 +121,33 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
 	const store = await openTgSecEvidenceStore({ dir: options.evidence ?? evidenceDir(options.project), telemetry });
 	const scopePath = options.scope ?? join(dataDir, "projects", safeProjectSegment(options.project), "scope.json");
 	const session = createDeferredSessionPort();
+	const approvals = createSecApprovalQueue();
 	let registeredTools: readonly string[] = [];
 	let agent: SecAgent | undefined;
+	let mcp: SecMcpHost | undefined;
 	let server: SecServerHandle | undefined;
 
 	const shutdown = async (): Promise<void> => {
+		// Fail closed before unwinding: a tool call parked on an operator is denied, so the harness
+		// can finish the aborted turn instead of waiting forever on a browser that is going away.
+		approvals.close();
 		const running = server;
 		server = undefined;
 		if (running !== undefined) await running.close().catch(() => undefined);
 		const opened = agent;
 		agent = undefined;
 		if (opened !== undefined) await opened.close(context).catch(() => undefined);
+		const bridge = mcp;
+		mcp = undefined;
+		if (bridge !== undefined) await bridge.close().catch(() => undefined);
 		await store.close().catch(() => undefined);
 	};
 
 	try {
 		const scopeRegistry = await loadTgSecScopeRegistry(scopePath);
+		const mcpHost = await openSecMcpHost({ cwd: options.cwd });
+		mcp = mcpHost;
+		for (const error of mcpHost.errors) process.stderr.write(`tg-sec mcp: ${error}\n`);
 		const wiring = await buildSecGuard({
 			session,
 			lane: options.lane,
@@ -133,21 +155,23 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
 			...(options.mode === undefined ? {} : { mode: options.mode }),
 			scopeRegistry,
 			judgeModel: { models, model: modelRef },
-			askChannel: createStdinAskChannel(),
+			askChannel: createApprovalAskChannel(approvals),
 			telemetry,
 			attestParts: {
 				forbiddenRead: secAttestForbiddenRead(join(dataDir, "attest")),
 				registeredTools: () => registeredTools,
-				declaredTools: secDeclaredTools(options.lane),
+				declaredTools: secDeclaredTools(options.lane, mcpHost.declaredTools),
 			},
 		});
-		const policies: Record<SecAgentLane, TaskChildPolicy> = {
-			redteam: { extensions: ["sec-core"] },
-			ctf: { extensions: ["sec-core"] },
-			src: { extensions: ["sec-core"] },
-		};
-		const core = createSecCoreExtension({ lane: options.lane, wiring, policies, telemetry });
-		const secTools = createSecToolsExtension({ store, executor: nodeRequestExecutor() });
+		const core = createSecCoreExtension({ lane: options.lane, wiring, policies: mcpHost.policies, telemetry });
+		const secTools = createSecToolsExtension({
+			store,
+			executor: nodeRequestExecutor(),
+			lane: options.lane,
+			project: options.project,
+			target: options.target ?? options.project,
+			...(mcpHost.flowFetcher === undefined ? {} : { flowFetcher: mcpHost.flowFetcher }),
+		});
 		agent = await openSecAgent({
 			context,
 			project: options.project,
@@ -156,7 +180,10 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
 			model: modelRef,
 			cwd: options.cwd,
 			...(databasePath === undefined ? {} : { path: databasePath }),
-			extensions: [core, secTools],
+			extensions: [core, secTools, ...mcpHost.extensions],
+			onClose: async () => {
+				for (const error of await mcpHost.close()) process.stderr.write(`tg-sec mcp: ${error}\n`);
+			},
 		});
 		session.attach(agent.harness);
 		const stored = (await agent.root.agent(context)).model;
@@ -185,6 +212,9 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
 				readProjection: async () => ({
 					actions: await campaign.actionTree(context),
 					evidence: await readEvidenceSubjects(evidence),
+					findings: await readFindings(evidence),
+					plan: await readPlan(campaign, context),
+					terminals: await readTerminals(campaign, context),
 				}),
 				steer: async (content: string) => {
 					await campaign.root.submit(
@@ -192,6 +222,7 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
 						context,
 					);
 				},
+				approvals,
 			},
 			dataDir: join(dataDir, "sec-server"),
 			...(options.host === undefined ? {} : { hostname: options.host }),
@@ -205,7 +236,7 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
 				`  webui  ${server.url}`,
 				`  login  ${server.ticketUrl(ticket.ticket)}`,
 				"  the login URL is one-time and expires in 5 minutes; it sets the session cookie",
-				"  guard asks appear in this terminal (y allow, n deny, a always); ctrl+c stops the server",
+				"  guard asks appear in the WebUI's pending queue (allow / deny / always); ctrl+c stops the server",
 				"",
 			].join("\n"),
 		);
@@ -215,6 +246,39 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
 		throw error;
 	}
 	await shutdown();
+}
+
+/** The newest plan revision as the projection's intent source; absent before the first `plan_update`. */
+async function readPlan(agent: SecAgent, context: Context): Promise<SecProjectionPlan | undefined> {
+	const plan = await latestPlan(agent.storage, context);
+	if (plan === undefined) return undefined;
+	return {
+		revision: plan.revision,
+		rationale: plan.rationale,
+		createdAt: plan.createdAt,
+		steps: plan.steps.map((step) => ({
+			stepId: step.stepId,
+			title: step.title,
+			detail: step.detail,
+			status: step.status,
+			...(step.ownerRole === "" ? {} : { ownerRole: step.ownerRole }),
+			...(step.conversationId === 0 ? {} : { conversationId: step.conversationId }),
+		})),
+	};
+}
+
+/** Every terminal declaration; an unverified one is projected but never changes a finding. */
+async function readTerminals(agent: SecAgent, context: Context): Promise<readonly SecProjectionTerminal[]> {
+	const terminals = await listTerminals(agent.storage, context);
+	return terminals.map((terminal) => ({
+		claim: terminal.claim,
+		lane: terminal.lane,
+		status: terminal.status,
+		reason: terminal.reason,
+		...(terminal.findingId === "" ? {} : { findingId: terminal.findingId }),
+		...(terminal.snapshotId === "" ? {} : { snapshotId: terminal.snapshotId }),
+		declaredAt: terminal.declaredAt,
+	}));
 }
 
 /** One subject per evidence id, metadata only; body bytes never enter the projection. */
@@ -241,6 +305,21 @@ async function readEvidenceSubjects(store: TgSecEvidenceStore): Promise<readonly
 			return { subjectId, version: set.version, bindings };
 		}),
 	);
+}
+
+/** Every registered finding, metadata only; the projection maps its status to the wire vocabulary. */
+async function readFindings(store: TgSecEvidenceStore): Promise<readonly SecProjectionFinding[]> {
+	return (await store.listFindings()).map((finding) => ({
+		findingId: finding.findingId,
+		lane: finding.lane,
+		title: finding.title,
+		severity: finding.severity,
+		status: finding.status,
+		subjectId: finding.subjectId,
+		createdAt: finding.createdAt,
+		updatedAt: finding.updatedAt,
+		retestSnapshotId: finding.retestSnapshotId,
+	}));
 }
 
 function waitForSignal(): Promise<void> {

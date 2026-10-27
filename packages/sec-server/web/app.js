@@ -15,6 +15,9 @@ const dom = {
 	status: document.getElementById("status"),
 	statusText: document.getElementById("status-text"),
 	stats: document.getElementById("stats"),
+	approvals: document.getElementById("approvals"),
+	approvalList: document.getElementById("approval-list"),
+	countAsks: document.getElementById("count-asks"),
 	findings: document.getElementById("panel-findings"),
 	intents: document.getElementById("panel-intents"),
 	events: document.getElementById("panel-events"),
@@ -37,6 +40,7 @@ const state = {
 	selected: undefined,
 	tab: "findings",
 	feed: [],
+	asks: new Map(),
 	socket: undefined,
 	connected: false,
 	running: false,
@@ -192,9 +196,20 @@ function handleFrame(frame) {
 			state.graph = normalizeGraph(frame.payload);
 			state.running = frame.running === true;
 			state.queued = Number(frame.queued) || 0;
+			// The server replays every pending ask right after the snapshot, so the reset loses
+			// nothing and a reconnect cannot keep a settled ask on screen.
+			state.asks.clear();
 			prunePositions();
 			renderAll();
 			return;
+		case "ask": {
+			const payload = frame.payload ?? {};
+			if (typeof payload.id !== "string") return;
+			state.asks.set(payload.id, payload);
+			renderApprovals();
+			notice(`guard ask: ${payload.toolName ?? "tool"}`, payload.forced === true ? "error" : "info");
+			return;
+		}
 		case "node":
 			upsert(state.graph.nodes, frame.payload);
 			refreshGraph();
@@ -512,6 +527,7 @@ function renderAll() {
 	renderStatus();
 	renderStats();
 	renderGraph();
+	renderApprovals();
 	renderFindings();
 	renderIntents();
 	renderFeed();
@@ -598,6 +614,52 @@ function renderFeed() {
 		}),
 	);
 	if (nearBottom) dom.events.scrollTop = dom.events.scrollHeight;
+}
+
+function renderApprovals() {
+	const asks = [...state.asks.values()];
+	dom.approvals.hidden = asks.length === 0;
+	dom.countAsks.textContent = String(asks.length);
+	dom.approvalList.replaceChildren(...asks.map(renderAsk));
+}
+
+function renderAsk(ask) {
+	const item = element("div", "item");
+	const head = element("div", "item-head");
+	head.append(
+		badge(ask.forced === true ? "forced" : "review", ask.forced === true ? "critical" : "medium"),
+		element("span", "item-title", ask.toolName || ask.resource || "guard ask"),
+	);
+	item.appendChild(head);
+	item.appendChild(
+		element("div", "item-meta", `${ask.resource ?? "-"} · ${ask.forced === true ? "this call only" : "grantable"}`),
+	);
+	item.appendChild(element("div", "item-body", clip(ask.reason, 1200)));
+	const args = clip(JSON.stringify(ask.args ?? {}, null, 2), 1600);
+	if (args !== "") item.appendChild(element("pre", "ask-args", args));
+	const actions = element("div", "ask-actions");
+	actions.appendChild(askButton("allow once", "allow", () => replyAsk(ask.id, "allow")));
+	if (ask.forced !== true) actions.appendChild(askButton("always", "always", () => replyAsk(ask.id, "always")));
+	actions.appendChild(askButton("deny", "deny", () => replyAsk(ask.id, "deny")));
+	item.appendChild(actions);
+	return item;
+}
+
+function askButton(label, tone, onClick) {
+	const button = element("button", `ask-action ${tone}`, label);
+	button.type = "button";
+	button.addEventListener("click", onClick);
+	return button;
+}
+
+function replyAsk(id, reply) {
+	if (!state.asks.delete(id)) return;
+	renderApprovals();
+	if (state.socket?.readyState !== WebSocket.OPEN) {
+		notice("ask reply not sent: the WebSocket is down", "error");
+		return;
+	}
+	state.socket.send(JSON.stringify({ type: "ask_reply", id, reply }));
 }
 
 function renderDetail() {

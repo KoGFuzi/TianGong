@@ -38,6 +38,11 @@ export type OpenSecAgentOptions = {
 	readonly extensions?: readonly Extension[];
 	/** Tools never execute bare inside the orchestration process; the default resolves a Node env per conversation cwd. */
 	readonly env?: NonNullable<HarnessOptions["env"]>;
+	/**
+	 * Closed after the harness and sandbox, in assembly order's reverse. The MCP bridge hangs its
+	 * long-lived-resource cleanup here, so no listener outlives the campaign.
+	 */
+	readonly onClose?: () => Promise<void> | void;
 	readonly onReport?: (error: unknown) => void;
 	readonly now?: () => number;
 };
@@ -107,8 +112,15 @@ export async function openSecAgent(options: OpenSecAgentOptions): Promise<SecAge
 		},
 		actionTree: (context, query) => listActionTree(harness, context, query),
 		close: async (context) => {
-			await harness.close(context);
-			await sandbox.close();
+			try {
+				await harness.close(context);
+			} finally {
+				try {
+					await sandbox.close();
+				} finally {
+					await options.onClose?.();
+				}
+			}
 		},
 	};
 }

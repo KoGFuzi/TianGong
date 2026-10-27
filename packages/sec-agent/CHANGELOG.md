@@ -4,6 +4,19 @@
 
 ### Changed
 
+- The core extension's prompt sections now follow each conversation's `tg.sec.task-scope` instead
+  of the assembly-time lane. The root renders the host lane's map; a forked child renders its stored
+  role's map for its stored lane, read through `input.read`, and gibraltar's section diff patches
+  only the keys that changed at fork. Children gain a `role` section (redteam execution, binary
+  analysis, reporting forensic discipline with the rubric reference) and a role-specific tool
+  surface; a `ctf` task's child inherits the hashcat/john dictionary guardrail and an `src` child
+  inherits the business-change guardrail.
+- `task` now selects a child policy by **role** (`redteam | binary | reporting`, default `redteam`)
+  from the closed catalog in `role-policies.ts`, not by lane. `lane` is still accepted and still
+  conditions guard/sections and the `tg.span.sec.fork` span, but it no longer chooses a policy.
+  Each role fixes its extension list and an allowlisted tool surface in the child's `tg.agent`
+  document at fork time; `binary` and `reporting` cannot enable `http_request` even by naming it in
+  `modelTools`, and `reporting` is read-only (`read`, `tool_search`, `traffic_query`, `task`).
 - Windows compatibility, without touching the POSIX durability contract: the evidence blob
   writer skips the **directory** fsync on `win32` (Windows refuses to open a directory for fsync
   with EPERM); the blob file's own fsync and the staging→rename sequence are unchanged. Probe 1's
@@ -22,6 +35,10 @@
   now opens the model picker instead of printing a list.
 - The `judge-auto` judge reads its model ref at judgement time, so a model switched inside the
   shell also becomes the judge model.
+- `plan_update`, `terminal_declare`, and `task` are callable by programs through `executeTool`
+  (`callers: ["model", "tools"]`), so orchestration code and code mode can drive delegation and the
+  campaign control plane. The delegation depth gate, role policies, and host-side terminal
+  validation remain the authority; broadening the caller set does not widen the model's tool surface.
 
 ### Fixed
 
@@ -35,6 +52,16 @@
 
 ### Added
 
+- `tg-sec serve` now routes guard escalations to the WebUI instead of the terminal.
+  `createApprovalAskChannel` adapts the guard's ask channel onto the sidecar's shared
+  `SecApprovalQueue`; the browser answers `allow`/`deny`/`always`, and sec-guard's own semantics
+  (a forced ask accepts one call only, a banked grant covers the exact resource) are unchanged.
+  Shutdown closes the queue, so a tool call parked on an operator fails closed while the agent
+  unwinds.
+- Delegation is a single hop: the fork writes the child's role, lane and depth into the
+  conversation-scoped `tg.sec.task-scope` document, and a `task` call from any conversation below
+  the root fails closed. The rejection records a `tg.span.sec.fork` span with
+  `outcome: "depth-rejected"`, so a nested attempt is auditable rather than silent.
 - `tg-sec login [provider]` and `tg-sec list` now own the OAuth credential bootstrap that used to be
   published as the `tg-ai` bin. They resolve the same `builtinProviders()` OAuth providers and write
   the same `auth.json` through `FileCredentialStore`; the smoke turn's flags are unchanged.
@@ -144,6 +171,67 @@
   enumerates finding subjects for the projection without reading blob bodies. The sidecar depends
   only on chord and gibraltar; sec-agent injects the projection and steer functions, so there is no
   reverse import.
+- MCP tool bridge (`src/mcp/`): host-configured MCP servers (stdio or Streamable HTTP) are translated
+  into gibraltar `defineTool` registrations named `mcp__<server>__<tool>` — `deferred`, callable by
+  both the model and programs, and therefore subject to the same `beforeTool` guard chain as every
+  other tool; the bridge opens no separate permission surface. Role narrowing happens at assembly
+  time: one extension per role (`sec-mcp-<role>`), and `secRolePoliciesWithMcp` composes each role's
+  static policy with that extension and its tool names. A malformed config entry or a server that
+  fails to connect or list tools is reported in `errors` and never disables the remaining servers.
+- `openSecMcpHost` loads `--config` / `TG_SEC_MCP_CONFIG` / `<cwd>/.tiangong/mcp.json`, opens the
+  bridge, and returns the extensions, composed policies, `declaredTools`, a flow fetcher and a close
+  seam. The `tgsec` shell, `tg-sec serve` and the TUI hang the bridge's cleanup on
+  `openSecAgent`'s `onClose`.
+- `evidence_capture` accepts a `flowId` in place of caller-held bytes: the bridge's
+  `fetch_http_packet_by_id` adapter resolves the flow to request/response bytes, which enter the
+  existing content-addressed blob pipeline, and the snapshot records the flow id in metadata and in
+  the id preimage. Metadata addition only: rows written before this change stay readable, and their
+  ids are byte-identical because an empty flow id leaves the v1 preimage untouched.
+- Long-lived MCP resources: a successful call to a server's configured `lifecycle.startTools` is
+  recorded, and bridge `close()` calls `stopTool` once per recorded start in reverse order before
+  closing every client. Close is idempotent, so a second teardown neither stops twice nor errors.
+  `test/sec-mcp-host.test.ts` proves the campaign close seam stops a listener that an aborted
+  session had started.
+- Faux MCP acceptance coverage over `createInMemoryTransportPair`
+  (`test/mcp-stub.ts`, `sec-mcp-bridge.test.ts`, `sec-mcp-guard.test.ts`): registration, role
+  split, flow capture, lifecycle cleanup, config faults, name sanitization, and the guard's
+  scope/danger/probe-4 behavior on MCP tools. No real yak/mitan instance is connected and no
+  provider tokens are spent.
+- Findings share the evidence index: `tg_sec_findings` stores the campaign's verdict (`lane`,
+  `title`, rubric severity, lifecycle status, subject, retest snapshot) beside the snapshots, and a
+  finding write takes the same `tg_sec_evidence_versions` optimistic lock as `bind`/`edit`.
+  `finding_update` creates a finding `open` and advances it; `retest-pass`/`retest-fail` require a
+  snapshot bound to the subject that differs from the previous retest, so a retest cannot be
+  asserted without new evidence.
+- `tg.sec.report` is a session-scoped document family. `report_generate` renders the registered
+  findings deterministically (severity order, then id) with each finding's snapshot ids, stores the
+  revision and body, and returns only metadata to the transcript; the same findings produce the same
+  bytes and digest. No evidence body or timestamp enters the body.
+- The WebUI projection reads findings: `SecProjectionInput.findings` maps the five lifecycle states
+  onto the existing `pending|verified|rejected|excluded` vocabulary and the rubric severity onto the
+  node/finding severity, with no wire-contract change. An evidence subject without a finding row
+  keeps the previous unrated projection.
+- Batch-9 acceptance tests (`test/finding-loop.test.ts`) cover the open → verified → retest-pass
+  lifecycle with audit spans, retest-without-fresh-evidence rejection, rubric-external severity
+  rejection, deterministic report bytes, and the report document revision.
+- Campaign plan as documents: `tg.sec.plan` is an immutable session family keyed by decimal
+  revision, and `tg.sec.plan-head` is the session singleton that numbers the next revision in the
+  same commit, so every revision stays enumerable and replayable. `plan_update` (deferred) replaces
+  the whole ordered step list, normalizes blank step ids and duplicates, and returns the new
+  revision and open-step count; `listPlan`/`latestPlan` read the revisions back in ascending order.
+  The root prompt gains a `plan` section, and the WebUI projects the newest revision as intents.
+- Structured delegation findings: `tg.sec.task-findings` is a conversation-keyed session family.
+  `evidence_capture`, `http_request`, and `finding_update` register each finding id they touch, and
+  `task` reads the child's list when it settles and adds `findings: string[]` to its structured
+  output. The list comes from the document, not the child's summary text, and matches the evidence
+  index.
+- Lane terminal declarations: `tg.sec.terminal` stores one record per `${lane}:${claim}`. The
+  deferred `terminal_declare` tool accepts only the lane's claim (`getshell` for redteam,
+  `getflag` for ctf, `high_critical_finding` for src) and lets the host decide: a finding claim
+  needs an existing high/critical finding in `verified` or `retest-pass`, `getshell` also needs a
+  snapshot bound to that finding, and a CTF flag is checked against the host's `verifyFlag` source.
+  A failed check is persisted as `unverified`; no declaration changes a finding's status. The raw
+  flag is never stored. The root prompt gains a per-lane `terminal` section.
 
 ### Changed
 
@@ -151,3 +239,16 @@
   a strict set equality (registered tools == declared tools, so a missing **or** an extra name fails closed); a campaign
   that registers the forensic surface must declare it, and `guard-wiring.test.ts` and the `tg-sec` smoke CLI install the
   `sec-tools` extension to keep the two sets aligned.
+- `secDeclaredTools(lane, extraTools)` accepts the host's MCP tool names, so probe 4's declared set
+  is derived from the same MCP configuration that produced the registrations: adding or removing a
+  server moves both sides together instead of turning the probe red for a configuration change.
+- `test/boundary.test.ts` now asserts `@earendil-works/pi-mcp` as the second vendored edge at the
+  frozen caret range; the MCP bridge is what makes the dependency real rather than declared-only.
+- The evidence schema gains a `flow_id` column. An existing `evidence.sqlite` gets it through an
+  in-place `ALTER TABLE ... ADD COLUMN flow_id TEXT NOT NULL DEFAULT ''`, so no separate migration
+  step is required.
+- The forensic surface gains `finding_update` and `report_generate`; `secDeclaredTools`, the lane
+  filter and the role policies now name them (`redteam`/`binary` get `finding_update`, `reporting`
+  gets `report_generate` alongside its read-only traffic surface).
+- The rubric section derives its four names and order from `finding-vocabulary.ts`, the same source
+  the evidence store validates against, so prompt text and write validation cannot drift.

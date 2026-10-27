@@ -17,6 +17,10 @@
 
 ### Changed
 
+- `tg.span.sec.fork` gained a required `role` start attribute (`redteam | binary | reporting`) and
+  the `depth-rejected` outcome: `task` now selects a child's static role policy, and a nested
+  delegation below the root fails closed with that outcome while still recording the attempt. The
+  `depth` description now names the depth the call would have created instead of always being 1.
 - Rebranded from `@earendil-works/pi-telemetry` to `@OnePanda-TgSec/tg-telemetry`. The package was
   adopted from the [pi agent](https://github.com/earendil-works/pi) project; only the naming layer
   changed. No module was added, removed, or restructured, and the public API is unchanged.

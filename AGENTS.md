@@ -259,7 +259,9 @@ gibraltar ─┼──▶ sec-agent   (the campaign runtime sits on the harness,
 sec-guard ─┤
 sec-server ─┤
 telemetry ─┤
-tui ───────┘
+tui ───────┤
+codemode ──┤
+mcp ───────┘
 
 chord ──┐
 gibraltar ┘──▶ sec-server   (the WebUI sidecar sits on the harness)
@@ -271,15 +273,17 @@ Arrows point from a package toward the packages that depend on it.
 `tg-gibraltar` depends on `chord` and `tg-ai`, `tg-env` depends on `chord` and `tg-gibraltar`,
 `tg-sec-guard` depends on `chord`, `tg-ai`, `tg-gibraltar`, and `tg-telemetry`, and `tg-sec-agent`
 depends on `chord`, `tg-ai`, `tg-gibraltar`, `tg-sec-guard`, `tg-sec-server`, `tg-telemetry`, and
-`tg-tui` (plus the vendored `@earendil-works/pi-codemode` for the sandbox gibraltar's `./codemode`
-extension runs on). `tg-sec-server` depends on `chord` and `tg-gibraltar` only: the campaign host
-injects the projection and the steering entry point, so the sidecar never imports sec-agent and no
-cycle exists. `tg-tui` is what the `tgsec` bin renders through; it does not depend on sec-agent in
-return. Sec-agent does **not** depend on `tg-env`: the env resolver is typed by gibraltar
-(`env/node`, `EnvTarget`), so a host-built remote env costs the campaign runtime no edge on the env
-package. `chord`, `telemetry`, `sec-agent`, `codemode`, and `mcp` are leaves: nothing in this
-workspace depends on them. That is what keeps `chord` publishable on its own. `sec-server` is not a
-leaf because `sec-agent` hosts its `tg-sec serve` command, but the edge is one-way.
+`tg-tui` (plus the two vendored packages: `@earendil-works/pi-codemode` for the sandbox gibraltar's
+`./codemode` extension runs on, and `@earendil-works/pi-mcp` for the MCP tool bridge). `tg-sec-server`
+depends on `chord` and `tg-gibraltar` only: the campaign host injects the projection and the
+steering entry point, so the sidecar never imports sec-agent and no cycle exists. `tg-tui` is what the
+`tgsec` bin renders through; it does not depend on sec-agent in return. Sec-agent does **not** depend
+on `tg-env`: the env resolver is typed by gibraltar (`env/node`, `EnvTarget`), so a host-built remote
+env costs the campaign runtime no edge on the env package. `sec-agent` is the top of this graph:
+nothing in this workspace depends on it, which is what keeps its runtime loose. `codemode` and `mcp`
+are vendored leaves: they depend on nothing here and are reachable only by their upstream names.
+`sec-server` is not a leaf because `sec-agent` hosts its `tg-sec serve` command, but the edge is
+one-way.
 
 Do not call `bun test`. Bun reserves that name for its own runner, which would silently bypass
 every per-package Vitest and `node:test` configuration. Use `bun run test`.

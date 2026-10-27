@@ -183,8 +183,8 @@ describe("fork audit span", () => {
 			lane: "redteam",
 			policies: {
 				redteam: { extensions: ["test-child"], model: fauxModel },
-				ctf: { extensions: [] },
-				src: { extensions: [] },
+				binary: { extensions: [] },
+				reporting: { extensions: [] },
 			},
 			telemetry,
 		});
@@ -209,6 +209,7 @@ describe("fork audit span", () => {
 		const fork = telemetry.getSpans().filter((span) => span.name === "tg.span.sec.fork");
 		expect(fork).toHaveLength(1);
 		expect(fork[0]!.attributes.lane).toBe("redteam");
+		expect(fork[0]!.attributes.role).toBe("redteam");
 		expect(fork[0]!.attributes.outcome).toBe("done");
 		expect(fork[0]!.attributes.depth).toBe(1);
 		for (const value of Object.values(fork[0]!.attributes)) {

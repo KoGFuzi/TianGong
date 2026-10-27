@@ -28,24 +28,34 @@ import { createModelJudgeTransport } from "./judge-transport.ts";
 
 /**
  * The tool set every campaign lane declares: the coding tools, the deferred search surface, the
- * codemode pair, the campaign's own `task`, and the batch-5 forensic surface (`http_request`,
- * `evidence_capture`, `traffic_query`). Attestation probe 4 fails closed if the live registry drifts
+ * codemode pair, the campaign's own `task`, and the forensic surface (`http_request`,
+ * `evidence_capture`, `traffic_query`, `finding_update`, `report_generate`). Attestation probe 4
+ * fails closed if the live registry drifts
  * from this list, so a host that installs the `sec-tools` extension matches it exactly.
+ *
+ * `extraTools` carries the tools a host registered from its own MCP configuration. Deriving them
+ * from the same configuration the bridge read is what keeps probe 4 honest: removing a server must
+ * narrow the declared set, not turn the probe red.
  */
-export function secDeclaredTools(_lane: SecAgentLane): readonly string[] {
+export function secDeclaredTools(_lane: SecAgentLane, extraTools: readonly string[] = []): readonly string[] {
 	return [
 		"bash",
 		"codemode",
 		"edit",
 		"evidence_capture",
+		"finding_update",
 		"http_request",
+		"plan_update",
 		"read",
+		"report_generate",
 		"task",
+		"terminal_declare",
 		"tg.codemode.models.classify",
 		"tg.codemode.models.generateImages",
 		"tool_search",
 		"traffic_query",
 		"write",
+		...extraTools,
 	];
 }
 

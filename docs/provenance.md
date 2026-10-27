@@ -62,7 +62,10 @@ What *is* ours is the workspace that hosts them: they are built by `bun run buil
 - Vendored packages never import a house package. They cannot know about us, and a dependency in
   that direction would make the freeze unreviewable.
 - House code reaches them by their **upstream** specifiers, resolved through the root `tsconfig.json`
-  path map; no package manifest declares them as a dependency.
+  path map. A house package that imports one declares it as a runtime dependency at the vendored
+  caret range (`^1.4.0`); `packages/gibraltar` declares `pi-codemode`, and `packages/sec-agent`
+  declares both `pi-codemode` and `pi-mcp`. The range, not an exact pin, is the house rule for
+  vendored packages, because the workspace copies track upstream releases together.
 - The one exception to the byte-for-byte freeze is a locally pinned `shx` devDependency, recorded
   under [Re-syncing a vendored package](#re-syncing-a-vendored-package) below.
 

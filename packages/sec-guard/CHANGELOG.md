@@ -6,6 +6,9 @@ All notable changes to this package will be documented in this file.
 
 ### Changed
 
+- `domain` and `domains` are classified as declared connection targets (`TARGET_VALUE_PARAMETERS`),
+  so an MCP tool that names its target that way contributes strong host evidence to self-protection
+  and to the scope resolver instead of being parsed as command text.
 - Attestation probe 1 (`restricted-env`) accepts `EPERM` alongside `EACCES` as its refusal code.
   The probe still fails on success and on every other code (`ENOENT` included), so the fail-closed
   posture is unchanged; Windows surfaces an OS-refused read as `EPERM`, and the refusal — not the

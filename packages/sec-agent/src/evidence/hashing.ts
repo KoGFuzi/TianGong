@@ -21,6 +21,11 @@ export type TgSecEvidenceSnapshotFields = {
 	readonly respHash: string;
 	readonly reqLen: number;
 	readonly respLen: number;
+	/**
+	 * The Yakit http-flow id the bodies were fetched from; empty for every other capture. Absent
+	 * normalizes to `""`, which keeps the id of pre-flow snapshots byte-identical.
+	 */
+	readonly flowId?: string;
 };
 
 const EVIDENCE_HASH = /^[0-9a-f]{64}$/;
@@ -67,6 +72,7 @@ export function normalizeEvidenceFields(fields: TgSecEvidenceSnapshotFields): Tg
 		respHash: fields.respHash,
 		reqLen: fields.reqLen,
 		respLen: fields.respLen,
+		flowId: normalizeEvidenceText(fields.flowId ?? ""),
 	};
 }
 
@@ -75,9 +81,14 @@ export function normalizeEvidenceFields(fields: TgSecEvidenceSnapshotFields): Tg
  * A domain tag binds every id to this schema, and every variable-length string carries a `uint32` byte
  * length so field content can never forge a boundary between two fields. Field order is part of the
  * encoding, so reordering changes the id; id and creation time are absent by construction.
+ *
+ * A flow-referenced capture (non-empty `flowId`) uses the `v2` tag and appends the flow id after the
+ * body lengths. A capture without one uses `v1` and is byte-identical to a pre-flow snapshot, so
+ * existing rows keep verifying: appending the empty field there would invalidate every stored id.
  */
 export function encodeEvidenceSnapshotPreimage(fields: TgSecEvidenceSnapshotFields): Uint8Array {
-	const chunks: Uint8Array[] = [TAG];
+	const flowId = fields.flowId ?? "";
+	const chunks: Uint8Array[] = [flowId === "" ? TAG : FLOW_TAG];
 	pushString(chunks, fields.sourceId);
 	pushInt64(chunks, fields.capturedAt);
 	pushString(chunks, fields.url);
@@ -90,6 +101,7 @@ export function encodeEvidenceSnapshotPreimage(fields: TgSecEvidenceSnapshotFiel
 	pushHash(chunks, fields.respHash);
 	pushUint64(chunks, fields.reqLen);
 	pushUint64(chunks, fields.respLen);
+	if (flowId !== "") pushString(chunks, flowId);
 	return Buffer.concat(chunks);
 }
 
@@ -105,6 +117,7 @@ export function snapshotMetadataId(fields: TgSecEvidenceSnapshotFields): string 
 }
 
 const TAG = Buffer.from("tg.sec.evidence/v1\0", "utf8");
+const FLOW_TAG = Buffer.from("tg.sec.evidence/v2\0", "utf8");
 
 function pushString(chunks: Uint8Array[], value: string): void {
 	const bytes = Buffer.from(value, "utf8");

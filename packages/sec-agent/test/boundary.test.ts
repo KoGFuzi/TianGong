@@ -7,14 +7,14 @@ import { describe, expect, test } from "vitest";
  * Batch 3 is the first place a *new* dependency edge can be recorded as a false claim, so the edge
  * set is asserted from the two files that actually decide it — the manifest and the import graph —
  * not from a comment. The set sec-agent depends on is the seven house packages a campaign runtime
- * needs plus the two sanctioned non-house entries: gibraltar's vendored codemode, reached through
- * gibraltar's own `./codemode` subpath, and `@earendil-works/pi-codemode` itself (AGENTS.md: house
- * packages import vendored packages by their upstream name). `tg-env` is deliberately absent: the
- * env resolver is typed by gibraltar (`env/node`, `EnvTarget`), so accepting a host-built remote env
- * costs sec-agent no edge on the env package. `tg-tui` is the interactive shell the `tgsec` bin
- * renders; it is a leaf dependency, never the reverse. `tg-sec-server` is the WebUI sidecar the
- * `tg-sec serve` command starts; it depends on chord and gibraltar only, so the edge points this way
- * and no cycle exists.
+ * needs plus the two sanctioned non-house entries: `@earendil-works/pi-codemode` (the sandbox
+ * gibraltar's `./codemode` extension runs on) and `@earendil-works/pi-mcp` (the MCP tool bridge).
+ * AGENTS.md says house packages import vendored packages by their upstream name. `tg-env` is
+ * deliberately absent: the env resolver is typed by gibraltar (`env/node`, `EnvTarget`), so
+ * accepting a host-built remote env costs sec-agent no edge on the env package. `tg-tui` is the
+ * interactive shell the `tgsec` bin renders; it is a leaf dependency, never the reverse.
+ * `tg-sec-server` is the WebUI sidecar the `tg-sec serve` command starts; it depends on chord and
+ * gibraltar only, so the edge points this way and no cycle exists.
  */
 
 const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -31,6 +31,9 @@ const ALLOWED_WORKSPACE = [
 	"@OnePanda-TgSec/tg-telemetry",
 	"@OnePanda-TgSec/tg-tui",
 ];
+
+/** The vendored packages a campaign runtime is allowed to reach, by upstream name — the edge set, exactly. */
+const ALLOWED_VENDORED = ["@earendil-works/pi-codemode", "@earendil-works/pi-mcp"];
 
 /** Collapse a scope specifier to its package root so a subpath import counts once. */
 function workspaceRoot(specifier: string): string {
@@ -64,25 +67,38 @@ describe("sec-agent package boundary", () => {
 		expect(declared).toEqual([...ALLOWED_WORKSPACE].sort());
 	});
 
-	test("imports no house package outside the declared edge set", async () => {
-		const roots = new Set<string>();
-		for (const { specifier } of await specifiers()) {
-			if (!specifier.startsWith("@OnePanda-TgSec/")) continue;
-			const root = workspaceRoot(specifier);
-			roots.add(root);
-			expect(ALLOWED_WORKSPACE, `${root} is not an allowed house edge`).toContain(root);
-		}
-		// Every declared package is actually imported: a declared-but-unused edge is the same fiction.
-		expect([...roots].sort()).toEqual([...ALLOWED_WORKSPACE].sort());
+	test("declares exactly the two vendored dependencies at the frozen caret range", async () => {
+		const manifest = JSON.parse(await readFile(resolve(packageDirectory, "package.json"), "utf8")) as {
+			dependencies?: Record<string, string>;
+		};
+		const declared = Object.keys(manifest.dependencies ?? {})
+			.filter((name) => name.startsWith("@earendil-works/"))
+			.sort();
+		expect(declared).toEqual([...ALLOWED_VENDORED].sort());
+		for (const name of declared) expect(manifest.dependencies?.[name]).toBe("^1.4.0");
 	});
 
-	test("keeps mcp and the env package out of the graph", async () => {
-		const forbidden = [
-			"@OnePanda-TgSec/tg-env",
-			"@OnePanda-TgSec/tg-mcp",
-			"@OnePanda-TgSec/tg-codemode",
-			"@earendil-works/pi-mcp",
-		];
+	test("imports nothing outside the declared house and vendored edge sets", async () => {
+		const houseRoots = new Set<string>();
+		const vendoredRoots = new Set<string>();
+		for (const { specifier } of await specifiers()) {
+			if (specifier.startsWith("@OnePanda-TgSec/")) {
+				const root = workspaceRoot(specifier);
+				houseRoots.add(root);
+				expect(ALLOWED_WORKSPACE, `${root} is not an allowed house edge`).toContain(root);
+			} else if (specifier.startsWith("@earendil-works/")) {
+				const root = workspaceRoot(specifier);
+				vendoredRoots.add(root);
+				expect(ALLOWED_VENDORED, `${root} is not an allowed vendored edge`).toContain(root);
+			}
+		}
+		// Every declared package is actually imported: a declared-but-unused edge is the same fiction.
+		expect([...houseRoots].sort()).toEqual([...ALLOWED_WORKSPACE].sort());
+		expect([...vendoredRoots].sort()).toEqual([...ALLOWED_VENDORED].sort());
+	});
+
+	test("keeps mcp under the house name and the env package out of the graph", async () => {
+		const forbidden = ["@OnePanda-TgSec/tg-env", "@OnePanda-TgSec/tg-mcp", "@OnePanda-TgSec/tg-codemode"];
 		for (const { file, specifier } of await specifiers()) {
 			for (const name of forbidden) expect(specifier, `${file} must not depend on ${name}`).not.toContain(name);
 		}

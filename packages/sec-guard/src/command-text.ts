@@ -77,6 +77,8 @@ const TARGET_VALUE_PARAMETERS = new Set([
 	"hostnames",
 	"target",
 	"targets",
+	"domain",
+	"domains",
 	"endpoint",
 	"endpoints",
 	"address",

@@ -11,7 +11,7 @@ import { cleanupTempDirs, context, fauxModel, fauxSetup, tempDir, trackStore } f
 
 afterEach(cleanupTempDirs);
 
-const SEC_TOOLS = ["http_request", "evidence_capture", "traffic_query"] as const;
+const SEC_TOOLS = ["http_request", "evidence_capture", "traffic_query", "finding_update", "report_generate"] as const;
 
 /** A transport that never touches the wire; the lane test opens the agent but runs no turns. */
 const noopExecutor: RequestExecutor = {
@@ -47,7 +47,7 @@ async function openLaneAgent(lane: SecAgentLane): Promise<SecAgent> {
 		cwd: dir,
 		path: join(dir, "session.sqlite"),
 		extensions: [
-			createSecToolsExtension({ store, executor: noopExecutor }),
+			createSecToolsExtension({ store, executor: noopExecutor, lane }),
 			defineExtension({ name: "marker", tools: [markerTool()] }),
 		],
 	});
@@ -57,7 +57,7 @@ async function openLaneAgent(lane: SecAgentLane): Promise<SecAgent> {
 const names = (tools: readonly ToolRegistration[]): string[] => tools.map((tool) => tool.name);
 
 describe("sec lane tool filtering", () => {
-	it("each lane surfaces the full forensic triad in the contract", () => {
+	it("each lane surfaces the full forensic tool set in the contract", () => {
 		for (const lane of ["redteam", "ctf", "src"] as const) {
 			expect(secLaneToolFilter(lane)).toEqual(SEC_TOOLS);
 		}

@@ -25,6 +25,13 @@
 				<div id="empty" class="empty" hidden>no campaign nodes yet</div>
 			</section>
 			<aside id="side">
+				<section id="approvals" hidden aria-live="polite">
+					<div id="approvals-head">
+						<span class="approvals-title">pending guard asks <b id="count-asks">0</b></span>
+						<span class="approvals-hint">forced asks accept this call only</span>
+					</div>
+					<div id="approval-list"></div>
+				</section>
 				<nav id="tabs">
 					<button data-tab="findings" class="active" type="button">findings <span id="count-findings">0</span></button>
 					<button data-tab="intents" type="button">intents <span id="count-intents">0</span></button>

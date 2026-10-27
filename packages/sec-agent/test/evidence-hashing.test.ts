@@ -93,12 +93,33 @@ describe("evidence snapshot id", () => {
 		expect(Buffer.compare(preimage, again)).toBe(0);
 	});
 
+	it("keeps a capture with no flow id byte-identical to the pre-flow schema", () => {
+		// The flow field is a trailing, conditional extension: an empty one must not change the id,
+		// or every snapshot stored before flow references existed would stop verifying.
+		const withoutFlow = fields();
+		const withEmptyFlow = fields({ flowId: "" });
+		expect(
+			Buffer.compare(encodeEvidenceSnapshotPreimage(withoutFlow), encodeEvidenceSnapshotPreimage(withEmptyFlow)),
+		).toBe(0);
+		expect(snapshotMetadataId(withEmptyFlow)).toBe(snapshotMetadataId(withoutFlow));
+	});
+
+	it("binds a flow id under the v2 tag and changes the id", () => {
+		const tag = "tg.sec.evidence/v2\0";
+		const withFlow = fields({ flowId: "flow-42" });
+		const preimage = encodeEvidenceSnapshotPreimage(normalizeEvidenceFields(withFlow));
+		expect(Buffer.from(preimage).subarray(0, tag.length).toString("utf8")).toBe(tag);
+		expect(snapshotMetadataId(withFlow)).not.toBe(snapshotMetadataId(fields()));
+		expect(snapshotMetadataId(withFlow)).not.toBe(snapshotMetadataId(fields({ flowId: "flow-43" })));
+	});
+
 	it("folds the id fields but carries no id or creation time of its own", () => {
 		// capturedAt is in the preimage (changing it changes the id), while a caller-supplied id or
 		// created-at is structurally absent from TgSecEvidenceSnapshotFields — the id cannot echo them.
 		expect(Object.keys(normalizeEvidenceFields(fields())).sort()).toEqual([
 			"capturedAt",
 			"contentType",
+			"flowId",
 			"method",
 			"reqHash",
 			"reqHead",

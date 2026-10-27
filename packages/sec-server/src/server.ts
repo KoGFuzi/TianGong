@@ -2,10 +2,17 @@ import type { Context } from "@OnePanda-TgSec/chord";
 import { type AgentEventStream, type ConversationId, type Harness, watchEvents } from "@OnePanda-TgSec/tg-gibraltar";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import type { SecApprovalQueue, SecPendingApproval } from "./approvals.ts";
 import { loadSecWebAssets, type SecWebAsset, type SecWebAssets } from "./assets.ts";
 import { SecAuth, type SecIssuedTicket } from "./auth.ts";
-import type { SecServerFrame, SecSnapshotFrame } from "./contract.ts";
-import type { SecProjectionAction, SecProjectionEvidenceSubject, SecProjectionInput } from "./projection.ts";
+import { isSecAskReply, type SecEventFrame, type SecServerFrame, type SecSnapshotFrame } from "./contract.ts";
+import type {
+	SecProjectionAction,
+	SecProjectionEvidenceSubject,
+	SecProjectionInput,
+	SecProjectionPlan,
+	SecProjectionTerminal,
+} from "./projection.ts";
 import { initialRunState, SecGraphProjector, SecRunProjector, type SecRunState } from "./projector.ts";
 import { acceptWebSocket, rejectWebSocket, type SecWebSocket } from "./websocket.ts";
 
@@ -17,6 +24,8 @@ const LOOPBACK_HOSTS = ["127.0.0.1", "localhost", "::1"];
 export type SecServerProjection = {
 	readonly actions: readonly SecProjectionAction[];
 	readonly evidence: readonly SecProjectionEvidenceSubject[];
+	readonly plan?: SecProjectionPlan;
+	readonly terminals?: readonly SecProjectionTerminal[];
 };
 
 /**
@@ -32,6 +41,12 @@ export type SecServerHost = {
 	readonly context: Context;
 	readonly readProjection: () => Promise<SecServerProjection>;
 	readonly steer: (content: string) => Promise<void>;
+	/**
+	 * The guard approval queue the host parks asks on. Absent means the sidecar has no approval
+	 * surface: `ask_reply` frames are logged and ignored. The queue's `close`/`denyAll` belong to
+	 * the host; the server only denies pending asks on shutdown.
+	 */
+	readonly approvals?: SecApprovalQueue;
 };
 
 export type SecServerOptions = {
@@ -105,6 +120,8 @@ class SecServerRuntime {
 	private readonly graph: SecGraphProjector;
 	private readonly runProjector: SecRunProjector;
 	private readonly clients = new Set<SecWebSocket>();
+	private readonly approvals: SecApprovalQueue | undefined;
+	private unsubscribeApprovals: (() => void) | undefined;
 	private allowedHosts = new Set<string>();
 	private stream: AgentEventStream | undefined;
 	private port = 0;
@@ -117,6 +134,7 @@ class SecServerRuntime {
 
 	constructor(options: SecServerOptions, auth: SecAuth, assets: SecWebAssets) {
 		this.host = options.host;
+		this.approvals = options.host.approvals;
 		this.auth = auth;
 		this.assets = assets;
 		this.hostname = options.hostname ?? "127.0.0.1";
@@ -140,6 +158,9 @@ class SecServerRuntime {
 	}
 
 	async start(): Promise<SecServerHandle> {
+		this.unsubscribeApprovals = this.approvals?.subscribe((pending) => {
+			this.broadcast(askFrame(pending, this.now()));
+		});
 		const stream = await watchEvents(this.host.harness, this.host.conversationId, this.host.context);
 		this.stream = stream;
 		this.runProjector.adopt(stream.snapshot);
@@ -377,6 +398,9 @@ class SecServerRuntime {
 			case "ping":
 				client.send({ type: "pong", ts: this.now() });
 				return;
+			case "ask_reply":
+				this.handleAskReply(client, record);
+				return;
 			case "refresh":
 				await this.refresh();
 				this.sendSnapshot(client);
@@ -399,6 +423,11 @@ class SecServerRuntime {
 		}
 	}
 
+	/**
+	 * The snapshot is the client's reset point: the WebUI drops its ask list on it, then receives
+	 * every pending ask again. A reconnect or a `refresh` therefore cannot leave a settled ask on
+	 * screen and cannot hide one that is still waiting.
+	 */
 	private sendSnapshot(client: SecWebSocket): void {
 		const graph = this.graph.current();
 		if (graph === undefined) return;
@@ -410,6 +439,28 @@ class SecServerRuntime {
 			queued: this.run.queued,
 		};
 		client.send(frame);
+		for (const pending of this.approvals?.pending() ?? []) client.send(askFrame(pending, this.now()));
+	}
+
+	/**
+	 * Resolve one parked ask. `ask_reply` is accepted only on a connection that already passed the
+	 * upgrade gate (Origin, cookie, Host and `Sec-Fetch-Site`); a WebSocket handshake cannot carry
+	 * the `x-tg-sec-steer` header, so the connection proof is the same surface steering has.
+	 */
+	private handleAskReply(client: SecWebSocket, frame: Record<string, unknown>): void {
+		const id = frame.id;
+		const reply = frame.reply;
+		if (typeof id !== "string" || id === "" || !isSecAskReply(reply)) {
+			client.send(
+				logFrame("warn", "ask_reply ignored: a non-empty id and allow/deny/always are required", this.now()),
+			);
+			return;
+		}
+		if (this.approvals === undefined || !this.approvals.reply(id, reply)) {
+			client.send(logFrame("warn", `guard ask ${id} is no longer pending`, this.now()));
+			return;
+		}
+		this.broadcast(logFrame("info", `guard ask ${id}: ${reply}`, this.now()));
 	}
 
 	private sendSnapshotJson(response: ServerResponse): void {
@@ -469,6 +520,8 @@ class SecServerRuntime {
 				rootConversationId: this.host.conversationId,
 				actions: source.actions,
 				evidence: source.evidence,
+				...(source.plan === undefined ? {} : { plan: source.plan }),
+				...(source.terminals === undefined ? {} : { terminals: source.terminals }),
 				now: this.now(),
 			};
 			const frames = this.graph.update(input);
@@ -573,6 +626,11 @@ class SecServerRuntime {
 
 	private async shutdown(): Promise<void> {
 		this.closed = true;
+		this.unsubscribeApprovals?.();
+		this.unsubscribeApprovals = undefined;
+		// A tool call waiting on an operator cannot outlive the surface that would have asked: deny
+		// first, then stop the event stream, so the harness can finish the turn it is aborting.
+		this.approvals?.denyAll();
 		if (this.refreshTimer !== undefined) clearTimeout(this.refreshTimer);
 		if (this.heartbeatTimer !== undefined) clearInterval(this.heartbeatTimer);
 		this.refreshTimer = undefined;
@@ -605,6 +663,10 @@ function steerContentOf(value: unknown): string | undefined {
 
 function logFrame(level: "info" | "warn" | "error", text: string, now: number): SecServerFrame {
 	return { type: "log", ts: now, payload: { level, message: text } };
+}
+
+function askFrame(pending: SecPendingApproval, now: number): SecEventFrame {
+	return { type: "ask", ts: now, payload: pending };
 }
 
 function readJson(request: IncomingMessage, limit: number): Promise<unknown> {

@@ -1931,6 +1931,9 @@ export function createStorageConformance(options: StorageConformanceOptions): re
 				expect(summaries.items[0]!.meta).toEqual(secondMeta);
 				expect(summaries.items[2]!.meta).toEqual({ ...conversationMeta("root"), title: "root" });
 				expect(summaries.next).toBeUndefined();
+				// The point read reports the same row, and undefined for an absent conversation.
+				expect(await storage.conversationSummary(firstId, context)).toEqual({ id: firstId, meta: firstMeta });
+				expect(await storage.conversationSummary(idFromNumber<ConversationId>(999_999), context)).toBeUndefined();
 			},
 		),
 

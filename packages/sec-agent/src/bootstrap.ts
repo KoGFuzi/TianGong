@@ -2,6 +2,8 @@ import type { Context } from "@OnePanda-TgSec/chord";
 import type { Models } from "@OnePanda-TgSec/tg-ai";
 import {
 	type Conversation,
+	type ConversationId,
+	type ConversationMeta,
 	createRegistry,
 	type EnvTarget,
 	type Extension,
@@ -36,6 +38,13 @@ export type OpenSecAgentOptions = {
 	readonly path?: string;
 	/** Extensions beyond the base set (coding-tools, tool-search, codemode). */
 	readonly extensions?: readonly Extension[];
+	/**
+	 * Restore from one history conversation instead of the reserved root; the source stays read-only.
+	 */
+	readonly resume?: {
+		/** Source conversation; `latest` picks the newest non-archived root of this project. */
+		readonly source: ConversationId | "latest";
+	};
 	/** Tools never execute bare inside the orchestration process; the default resolves a Node env per conversation cwd. */
 	readonly env?: NonNullable<HarnessOptions["env"]>;
 	/**
@@ -98,16 +107,76 @@ export async function openSecAgent(options: OpenSecAgentOptions): Promise<SecAge
 		},
 		options.context,
 	);
-	const root = await harness.root(options.context, {
-		agent: { model: options.model, cwd: options.cwd },
-		meta: {
-			title: options.project,
-			cwd: options.cwd,
-			lane: options.lane,
-			createdAt: now(),
-			updatedAt: now(),
-		},
+	const rootMeta = (): ConversationMeta => ({
+		title: options.project,
+		cwd: options.cwd,
+		lane: options.lane,
+		createdAt: now(),
+		updatedAt: now(),
 	});
+	// The live conversation of this run: the reserved root, or a fresh fork of one history conversation
+	// (`options.resume`). The source stays read-only; every later write lands in the fork.
+	const openConversation = async (
+		resume: { readonly source: ConversationId | "latest" | undefined },
+		freshMeta: () => ConversationMeta,
+	): Promise<Conversation> => {
+		if (resume.source === undefined) {
+			return harness.root(options.context, { agent: { model: options.model, cwd: options.cwd }, meta: freshMeta() });
+		}
+		const summary =
+			resume.source === "latest"
+				? (
+						await storage.scanConversationSummaries(
+							{ roots: true, order: "descending" },
+							1,
+							undefined,
+							options.context,
+						)
+					).items[0]
+				: await storage.conversationSummary(resume.source, options.context);
+		if (summary === undefined) {
+			if (resume.source === "latest") {
+				// First run without history is not an error: open the campaign root as usual.
+				process.stderr.write("tg-sec: no history to continue; opening the campaign root conversation\n");
+				return harness.root(options.context, {
+					agent: { model: options.model, cwd: options.cwd },
+					meta: freshMeta(),
+				});
+			}
+			throw new TypeError(`Conversation ${resume.source} is not in ${path}`);
+		}
+		const source = await harness.conversation(summary.id, options.context);
+		if (source === undefined) throw new TypeError(`Conversation ${summary.id} is not in ${path}`);
+		const newest = await source.entries({ order: "descending" }, 1, undefined, options.context);
+		const forkPoint = newest.items[0];
+		if (forkPoint === undefined) {
+			throw new TypeError(`Conversation ${summary.id} has no history to restore`);
+		}
+		if (summary.meta.lane !== options.lane) {
+			process.stderr.write(
+				`tg-sec: restoring conversation ${summary.id} (lane ${summary.meta.lane}) into a ${options.lane} campaign; guard policy follows ${options.lane}\n`,
+			);
+		}
+		// The fork carries the source's identity forward: its title with a continuation mark, but this
+		// run's cwd and lane, and none of the source's archive state.
+		const title = `↳ ${summary.meta.title}`;
+		return source.fork(
+			forkPoint.id,
+			{
+				ownership: { kind: "ownerless" },
+				agent: { model: options.model, cwd: options.cwd },
+				meta: {
+					title: title.length > 80 ? `${title.slice(0, 80)}…` : title,
+					cwd: options.cwd,
+					lane: options.lane,
+					createdAt: now(),
+					updatedAt: now(),
+				},
+			},
+			options.context,
+		);
+	};
+	const root = await openConversation({ source: options.resume?.source }, rootMeta);
 	harness.resume();
 
 	return {

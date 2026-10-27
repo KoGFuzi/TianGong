@@ -333,25 +333,40 @@ export class SqliteStorage implements Storage {
 			...params,
 		);
 		return page(
-			rows.map((row) => {
-				const record = parseJson<ConversationRecord>(row.record);
-				return {
-					id: idFromNumber<ConversationId>(row.id),
-					...(record.parent === undefined ? {} : { parent: record.parent }),
-					...(record.owner === undefined ? {} : { owner: record.owner }),
-					meta: {
-						title: parseJson<string>(row.title),
-						cwd: parseJson<string>(row.cwd),
-						lane: parseJson<string>(row.lane),
-						createdAt: row.created_at,
-						updatedAt: row.updated_at,
-						...(row.archived_at === null ? {} : { archivedAt: row.archived_at }),
-					},
-				};
-			}),
+			rows.map((row) => this.conversationSummaryOf(row)),
 			limit,
 			start.order,
 		);
+	}
+
+	/** Look up one conversation's identity, ancestry, and metadata by exact ID. */
+	async conversationSummary(id: ConversationId, _context: Context): Promise<ConversationSummary | undefined> {
+		this.assertOpen();
+		const row = await this.db.get<ConversationMetaRow & { readonly id: number; readonly record: string }>(
+			`SELECT id, record, title, cwd, lane, created_at, updated_at, archived_at
+			FROM ${this.schema.tables.conversations} WHERE id = ? AND project_id = ?`,
+			id,
+			this.project,
+		);
+		return row === undefined ? undefined : this.conversationSummaryOf(row);
+	}
+
+	/** Expand one conversations row into its summary; ancestry and ownership come from the record JSON. */
+	private conversationSummaryOf(row: ConversationMetaRow & { readonly id: number; readonly record: string }) {
+		const record = parseJson<ConversationRecord>(row.record);
+		return {
+			id: idFromNumber<ConversationId>(row.id),
+			...(record.parent === undefined ? {} : { parent: record.parent }),
+			...(record.owner === undefined ? {} : { owner: record.owner }),
+			meta: {
+				title: parseJson<string>(row.title),
+				cwd: parseJson<string>(row.cwd),
+				lane: parseJson<string>(row.lane),
+				createdAt: row.created_at,
+				updatedAt: row.updated_at,
+				...(row.archived_at === null ? {} : { archivedAt: row.archived_at }),
+			},
+		};
 	}
 	entry(id: EntryId, context: Context): Promise<{ readonly entry: EntryRecord; readonly commitSeq: Seq } | undefined>;
 	entry(

@@ -972,6 +972,10 @@ class GuardedStorage implements Storage {
 		return this.#call(context, () => this.#storage.scanConversationSummaries(query, limit, cursor, context));
 	}
 
+	conversationSummary(id: ConversationId, context: Context): Promise<ConversationSummary | undefined> {
+		return this.#call(context, () => this.#storage.conversationSummary(id, context));
+	}
+
 	deleteConversation(id: ConversationId, context: Context): Promise<ConversationDeletion | undefined> {
 		return this.#call(context, () => this.#storage.deleteConversation(id, context));
 	}

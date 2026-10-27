@@ -509,6 +509,20 @@ export class MemoryStorage implements Storage {
 		return page(values, limit, start.order);
 	}
 
+	/** Look up one conversation's identity, ancestry, and metadata by exact ID. */
+	async conversationSummary(id: ConversationId, _context: Context): Promise<ConversationSummary | undefined> {
+		this.assertOpen();
+		const record = this.state.conversations.get(id);
+		const meta = this.state.conversationMeta.get(id);
+		if (record === undefined || meta === undefined) return undefined;
+		return {
+			id,
+			...(record.parent === undefined ? {} : { parent: record.parent }),
+			...(record.owner === undefined ? {} : { owner: record.owner }),
+			meta: clone(meta),
+		};
+	}
+
 	entry(id: EntryId, context: Context): Promise<{ readonly entry: EntryRecord; readonly commitSeq: Seq } | undefined>;
 	entry(
 		conversationId: ConversationId,

@@ -1165,6 +1165,9 @@ export interface Storage {
 		context: Context,
 	): Promise<Page<ConversationSummary, Cursor>>;
 
+	/** Look up one conversation's identity, ancestry, and metadata by exact ID. */
+	conversationSummary(id: ConversationId, context: Context): Promise<ConversationSummary | undefined>;
+
 	/** Look up one global entry and the sequence of the commit that persisted it. */
 	entry(id: EntryId, context: Context): Promise<{ readonly entry: EntryRecord; readonly commitSeq: Seq } | undefined>;
 	/** Look up one entry only when it is visible through the requested conversation's ancestry. */

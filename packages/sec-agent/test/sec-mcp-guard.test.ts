@@ -1,12 +1,13 @@
 import { fauxAssistantMessage, fauxToolCall, type JsonObject } from "@OnePanda-TgSec/tg-ai";
 import { createTgSecScopeRegistry } from "@OnePanda-TgSec/tg-sec-guard";
+import { InMemoryTelemetryContext } from "@OnePanda-TgSec/tg-telemetry";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createQueueAskChannel } from "../src/ask.ts";
 import { openSecAgent, type SecAgent, type SecAgentLane } from "../src/bootstrap.ts";
 import { createSecCoreExtension } from "../src/core-extension.ts";
 import { openTgSecEvidenceStore } from "../src/evidence/store.ts";
-import { buildSecGuard, secAttestForbiddenRead, secDeclaredTools } from "../src/guard-wiring.ts";
+import { buildSecGuard, type SecGuardWiring, secAttestForbiddenRead, secDeclaredTools } from "../src/guard-wiring.ts";
 import { openSecMcpBridge, SEC_MCP_FLOW_TOOL, type SecMcpBridge } from "../src/mcp/bridge.ts";
 import type { SecMcpServerConfig } from "../src/mcp/config.ts";
 import { secRolePoliciesWithMcp } from "../src/role-policies.ts";
@@ -35,6 +36,8 @@ type McpAgent = {
 	readonly stubs: ReadonlyMap<string, TgSecMcpStub>;
 	readonly asked: ReturnType<typeof createQueueAskChannel>["asked"];
 	readonly faux: ReturnType<typeof fauxSetup>["faux"];
+	readonly wiring: SecGuardWiring;
+	readonly telemetry: InMemoryTelemetryContext;
 };
 
 /**
@@ -74,6 +77,7 @@ async function openMcpAgent(options: {
 	});
 	const queue = createQueueAskChannel(options.reply === undefined ? [] : [options.reply]);
 	const policies = secRolePoliciesWithMcp(bridge.toolNamesByRole);
+	const telemetry = new InMemoryTelemetryContext();
 	const wiring = await buildSecGuard({
 		session: agent.harness,
 		lane,
@@ -83,6 +87,7 @@ async function openMcpAgent(options: {
 			{ kind: "exact-host", pattern: "target.example", effect: "allow", enabled: true },
 		]),
 		askChannel: queue.ask,
+		telemetry,
 		attestParts: {
 			forbiddenRead: secAttestForbiddenRead(join(dir, "confine")),
 			registeredTools: () =>
@@ -94,7 +99,7 @@ async function openMcpAgent(options: {
 		},
 	});
 	agent.registry.install(createSecCoreExtension({ lane, wiring, policies }));
-	return { agent, bridge, stubs, asked: queue.asked, faux };
+	return { agent, bridge, stubs, asked: queue.asked, faux, wiring, telemetry };
 }
 
 async function toolResultText(agent: SecAgent): Promise<string> {
@@ -216,4 +221,92 @@ describe("MCP tools through the campaign guard", () => {
 		const flow = await bridge.flowFetcher!("f-1");
 		expect(Buffer.from(flow.response).toString("utf8")).toBe("ok");
 	});
+});
+
+describe("dual-channel campaign commands", () => {
+	function guardSpans(telemetry: InMemoryTelemetryContext): Record<string, unknown>[] {
+		return telemetry
+			.getSpans()
+			.filter((span) => span.name === "tg.span.sec.guard")
+			.map((span) => span.attributes as Record<string, unknown>);
+	}
+
+	const bashHydra = (host: string) => ({
+		toolName: "bash",
+		resource: "tool:bash",
+		arguments: { command: `hydra -l root -P /tmp/candidates.txt ssh://${host}` },
+	});
+	const mcpHydra = (host: string) => ({
+		toolName: "mcp__yak__hydra_attack",
+		resource: "tool:mcp__yak__hydra_attack",
+		arguments: { target: host },
+	});
+
+	it("forces a scope ask for a hydra run outside the registered scope", async () => {
+		const { agent, asked, faux, telemetry } = await openMcpAgent({
+			project: "bash-hydra-scope",
+			tools: { yak: [{ name: "hydra_attack", description: "Run hydra" }] },
+			reply: "deny",
+		});
+		faux.setResponses([
+			fauxAssistantMessage([fauxToolCall("bash", bashHydra("outside.example").arguments, { id: "h-1" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("stopped"),
+		]);
+		const submission = await agent.root.submit({ type: "input", content: "run hydra" }, context);
+		expect((await submission.wait(context)).status).toBe("done");
+
+		expect(asked).toHaveLength(1);
+		expect(asked[0]?.request.toolName).toBe("bash");
+		expect(asked[0]?.decision).toMatchObject({ effect: "ask", forced: true });
+		expect(asked[0]?.decision.reason).toContain("not in the registered scope");
+		const spans = guardSpans(telemetry);
+		expect(spans.filter((span) => span.layer === "scope")).toHaveLength(1);
+		expect(await toolResultText(agent)).toContain("not in the registered scope");
+		await agent.close(context);
+	}, 30_000);
+
+	it("returns the same verdict for the same target on the MCP and bash channels", async () => {
+		const { agent, wiring, telemetry } = await openMcpAgent({
+			project: "hydra-parity",
+			tools: { yak: [{ name: "hydra_attack", description: "Run hydra" }] },
+		});
+		const guard = wiring.guard;
+		const bashOut = await guard.decisionFor(bashHydra("outside.example"));
+		const mcpOut = await guard.decisionFor(mcpHydra("outside.example"));
+		expect(mcpOut).toEqual(bashOut);
+		expect(bashOut).toMatchObject({ effect: "ask", forced: true });
+
+		const bashIn = await guard.decisionFor(bashHydra("target.example"));
+		const mcpIn = await guard.decisionFor(mcpHydra("target.example"));
+		expect(mcpIn).toEqual(bashIn);
+		expect(bashIn).toEqual({ effect: "allow" });
+
+		const layers = guardSpans(telemetry).map((span) => span.layer);
+		expect(layers).toEqual(["scope", "scope", "mode", "mode"]);
+		await agent.close(context);
+	}, 30_000);
+
+	it("forces danger-set B asks for persistence commands", async () => {
+		const { agent, wiring, telemetry } = await openMcpAgent({ project: "persist-danger", tools: {} });
+		const guard = wiring.guard;
+		const crontab = await guard.decisionFor({
+			toolName: "bash",
+			resource: "tool:bash",
+			arguments: { command: "crontab /tmp/campaign-cron" },
+		});
+		const keys = await guard.decisionFor({
+			toolName: "bash",
+			resource: "tool:bash",
+			arguments: { command: 'echo "ssh-ed25519 AAAA" >> ~/.ssh/authorized_keys' },
+		});
+		expect(crontab).toMatchObject({ effect: "ask", forced: true });
+		expect(keys).toMatchObject({ effect: "ask", forced: true });
+
+		const spans = guardSpans(telemetry);
+		expect(spans.map((span) => span.layer)).toEqual(["danger", "danger"]);
+		expect(spans.map((span) => span.rule)).toEqual(["danger.persist.crontab", "danger.persist.authorized-keys"]);
+		await agent.close(context);
+	}, 30_000);
 });

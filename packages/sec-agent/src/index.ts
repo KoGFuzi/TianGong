@@ -193,6 +193,11 @@ export {
 export { createSecTools, createSecToolsExtension, type SecToolsExtensionOptions } from "./tools/extension.ts";
 export { createFindingUpdateTool, type FindingToolOptions } from "./tools/finding-tools.ts";
 export { createHttpRequestTool, type HttpRequestToolOptions } from "./tools/http-tool.ts";
+export {
+	createLocalToolCheckTool,
+	type LocalToolCheckEntry,
+	TG_SEC_LOCAL_TOOL_CHECK_LIMIT,
+} from "./tools/local-tool-check.ts";
 export { createPlanUpdateTool, type PlanToolOptions } from "./tools/plan-tool.ts";
 export { createReportGenerateTool, type ReportToolOptions } from "./tools/report-tool.ts";
 export { createTerminalDeclareTool, type TerminalToolOptions } from "./tools/terminal-tool.ts";

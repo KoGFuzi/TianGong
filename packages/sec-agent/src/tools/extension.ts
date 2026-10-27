@@ -5,6 +5,7 @@ import type { TgSecFlowFetcher } from "../mcp/flow.ts";
 import { createEvidenceTools } from "./evidence-tools.ts";
 import { createFindingUpdateTool } from "./finding-tools.ts";
 import { createHttpRequestTool } from "./http-tool.ts";
+import { createLocalToolCheckTool } from "./local-tool-check.ts";
 import { createPlanUpdateTool } from "./plan-tool.ts";
 import { createReportGenerateTool } from "./report-tool.ts";
 import { createTerminalDeclareTool } from "./terminal-tool.ts";
@@ -29,11 +30,11 @@ export type SecToolsExtensionOptions = {
 /**
  * The campaign's forensic and campaign-control tool surface as one installable extension:
  * `http_request`, `evidence_capture`, `traffic_query`, `finding_update`, `report_generate`,
- * `plan_update`, and `terminal_declare`. It carries **no hooks** — the `sec-core` extension's
- * `beforeTool` already runs for every registered tool, so the scope and danger layers guard these
- * tools the moment they enter the registry. All are deferred: the model reaches them through
- * `tool_search`, and role/lane filtering decides which are offered. Programs and orchestration tools
- * may call them directly via `executeTool`.
+ * `plan_update`, `terminal_declare`, and the local availability probe `local_tool_check`. It
+ * carries **no hooks** — the `sec-core` extension's `beforeTool` already runs for every registered
+ * tool, so the scope and danger layers guard these tools the moment they enter the registry. All
+ * are deferred: the model reaches them through `tool_search`, and role/lane filtering decides which
+ * are offered. Programs and orchestration tools may call them directly via `executeTool`.
  */
 export function createSecTools(options: SecToolsExtensionOptions): readonly ToolRegistration[] {
 	return [
@@ -47,6 +48,7 @@ export function createSecTools(options: SecToolsExtensionOptions): readonly Tool
 			...(options.now === undefined ? {} : { now: options.now }),
 		}),
 		createPlanUpdateTool(options.now === undefined ? {} : { now: options.now }),
+		createLocalToolCheckTool(),
 		createTerminalDeclareTool({
 			lane: options.lane,
 			store: options.store,

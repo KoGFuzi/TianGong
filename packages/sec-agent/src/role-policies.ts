@@ -41,6 +41,7 @@ export const secRolePolicies: Readonly<Record<TgSecAgentRole, TaskChildPolicy>> 
 			...CODEMODE_TOOLS,
 			SEARCH_TOOL,
 			TASK_TOOL,
+			"local_tool_check",
 			"http_request",
 			"evidence_capture",
 			"traffic_query",
@@ -49,7 +50,15 @@ export const secRolePolicies: Readonly<Record<TgSecAgentRole, TaskChildPolicy>> 
 	},
 	binary: {
 		extensions: ["coding-tools", "tool-search", "codemode", "sec-core", "sec-tools"],
-		tools: [...CODING_TOOLS, ...CODEMODE_TOOLS, SEARCH_TOOL, TASK_TOOL, "evidence_capture", "finding_update"],
+		tools: [
+			...CODING_TOOLS,
+			...CODEMODE_TOOLS,
+			SEARCH_TOOL,
+			TASK_TOOL,
+			"local_tool_check",
+			"evidence_capture",
+			"finding_update",
+		],
 	},
 	reporting: {
 		extensions: ["coding-tools", "tool-search", "sec-core", "sec-tools"],

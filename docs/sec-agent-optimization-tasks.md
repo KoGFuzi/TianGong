@@ -41,7 +41,10 @@
 | T10-2 task 返回 findings 清单 | 批10 | 已完成 | T9-1, T10-1 可先行 |
 | T10-3 终局声明工具 | 批10 | 已完成 | T9-1 |
 | T10-4 批10 验收测试 | 批10 | 已完成 | T10-1..3 |
-| T11-* 批11+ backlog | 批11+ | 拉动式，不提前做 | 按战役需求 |
+| T11-1 local_tool_check | 批11 | 已完成 | 按战役需求拉动 |
+| T11-2 双通道同链验收钉 | 批11 | 已完成 | T11-1 |
+| T11-3 输出截断确认 | 批11 | 已完成 | 既有 truncate.ts |
+| T11-* 其余 backlog（二进制缺口 / Go sidecar） | 批11+ | 拉动式，不预置 | 实测缺口出现再立项 |
 
 状态取值：未开始 / 进行中 / 已完成 / 阻塞（附因）。
 
@@ -484,6 +487,41 @@
 - Kali 终端工具默认本地已配置 bash 直跑，**零新增装配**（guard bash scope 解析链与危险集已覆盖）。
 - tg-env 主场景 = 远端跳板机 SSH 控制；sec-agent 维持不依赖 tg-env（批3 勘误 7），env 宿主注入。
 - 二进制安全缺口（调试器壳、样本哈希入账等）与自写 Go sidecar：实测缺口出现再立项，不预置。
+
+**批11 落地记录（2026-10-27）**
+
+- T11-1：`tools/local-tool-check.ts` 落地 deferred 的 `local_tool_check`。一次 `sh -c` 批量探测
+  至多 32 个名字：`command -v` 取路径，`timeout 3 <path> --version | head -n 1` 取版本首行
+  （宿主无 `timeout` 时版本留空，不冒挂死风险）。名字经 `"$@"` 位置参数传入、从不拼进脚本，
+  空名/NUL 名直接 `TypeError`；输出用 NUL 分隔三元组解析，版本再截到 200 字符。探测跑在调用
+  的 `api.env` 上，所以本地与宿主注入的远端环境得到同一语义；结果只进工具返回，工具不产生
+  span。`redteam` 与 `binary` 的角色档案加入该工具，`secDeclaredTools` 同步（probe 4），
+  `sec-tools` 扩展与根/角色提示词各补一条说明。测试以真实 `command -v`/`--version` 对照，
+  并断言未知名字为 `available: false`、该工具初始 deferred。
+- T11-2：`test/sec-mcp-guard.test.ts` 增双通道钉。hydra 的 `ssh://<host>` 形式在 bash 与 MCP
+  `target` 参数上抽出同一目标：scope 外都得到 `effect: ask, forced: true`，guard span 的
+  `layer` 为 `scope`；scope 内都为 `allow`，`layer` 为 `mode`，两条通道的 decision 逐字段相等。
+  权限维持样本 `crontab <file>` 与 `authorized_keys` 追加都命中危险集 B，span 分别记录
+  `danger.persist.crontab` 与 `danger.persist.authorized-keys`。kali-mcp 按角色注册与本地 bash
+  保底由批8 既有测试继续覆盖，本批只钉判定一致性。
+- T11-3：`test/batch11.test.ts` 在战役 bash 通道上钉住既有 `truncate.ts` 限额：5000 行流保留
+  不超过 2000 行且末行仍在，约 90KB 流保留不超过 50KB，两者都置 `truncated` 并给出
+  `fullOutputPath`，落盘全文以首行/长度核对。零新增截断代码。
+- 未预置：二进制安全缺口与 Go sidecar 未立项；`tg-env` 依赖边不变，本地 bash 零新增装配。
+  `bun run check` 全绿；`bun run test packages/sec-agent`（32 文件/192 用例）全绿。
+
+**批11+ backlog 缺口审计（2026-10-27）**
+
+- 结论：三项均无实测缺口，维持不立项。触发条件是"具体战役需求 + 接口形状 + 验收钉点"，
+  缺任何一项就只是自造需求。
+- 调试器壳：参考 kali-kit 只列本地二进制（含 `gdb`），没有长驻会话工具的形态。现有
+  `local_tool_check` + bash 已覆盖"先确认二进制存在再调用"；长驻 gdb 会话的断点/步进状态
+  归属、超时与清理语义没有定义，先写实现等于自定接口。
+- 样本哈希入账：evidence store 已内容寻址（`req_hash`/`resp_hash` 即样本字节 SHA-256），
+  字节同一性可核；`TgSecFindingRecord` 没有样本哈希字段，但目前也没有"样本 → finding"
+  对账的调用方。缺的是需求，不是实现。
+- Go sidecar：需独立批次评审，且没有进程隔离/性能实测数据支撑立项。
+- 已核实工作区：`bun run check` 全绿，`bun run test packages/sec-agent` 32 文件/192 用例全绿。
 
 ---
 

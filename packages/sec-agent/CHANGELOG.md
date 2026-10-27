@@ -232,6 +232,19 @@
   snapshot bound to that finding, and a CTF flag is checked against the host's `verifyFlag` source.
   A failed check is persisted as `unverified`; no declaration changes a finding's status. The raw
   flag is never stored. The root prompt gains a per-lane `terminal` section.
+- Local terminal availability: the deferred `local_tool_check` tool probes up to 32 executable names
+  in one shell call (`command -v` for the path, the first line of `--version` for the version) in the
+  call's execution environment and returns `{name, path, available, version}` per tool. The probe is
+  read-only, names arrive as shell positional parameters rather than interpolated text, version
+  probes are bounded by `timeout` (left empty when the host lacks it), and the free-text result
+  stays in the tool return — it emits no span. `redteam` and `binary` carry it in their role
+  surfaces, and probe 4's declared set names it.
+- Batch-11 acceptance pins (`test/batch11.test.ts`, `test/sec-mcp-guard.test.ts`): the hydra command
+  form from either channel resolves the same target and gets the same verdict (scope forced ask
+  outside the registry, allow inside it, `layer` asserted from the guard span); persistence samples
+  (`crontab <file>`, an `authorized_keys` append) hit danger set B with their rule ids; a 5,000-line
+  stream keeps 2,000 lines and a 90KB stream keeps the 50KB window, each spilling the full output to
+  a file, so the existing `truncate.ts` limits are pinned on the campaign's bash path.
 
 ### Changed
 

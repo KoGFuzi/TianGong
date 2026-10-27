@@ -45,6 +45,7 @@ export function secDeclaredTools(_lane: SecAgentLane, extraTools: readonly strin
 		"evidence_capture",
 		"finding_update",
 		"http_request",
+		"local_tool_check",
 		"plan_update",
 		"read",
 		"report_generate",

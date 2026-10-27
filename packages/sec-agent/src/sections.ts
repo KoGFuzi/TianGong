@@ -111,6 +111,7 @@ const TOOL_SURFACE_CORE = [
 	"- traffic_query：按 findingId 列出已入账快照的元数据，或按 snapshotId 读取某一侧 body（base64，只回给调用程序，不进 transcript）。",
 	"- finding_update：登记或推进漏洞结论；首次写入需 lane/title/severity 并以 open 起步，状态迁移受校验，retest-pass/retest-fail 必须附新绑定的证据 snapshotId。",
 	"- report_generate：把已登记发现按严重度渲染为确定性报告文档；正文只含元数据与 snapshotId 清单，不含证据正文。",
+	"- local_tool_check：用 command -v 批量探测本地是否安装了某个终端工具，并取 --version 首行；只回答问题，不执行目标动作。",
 	"- 取证纪律：每个结论都要能回溯到 evidence 快照 id；未抓证的观察只是待验证假设，不计入评级。",
 ];
 
@@ -174,6 +175,7 @@ const BINARY_TOOLS = [
 	"- evidence_capture：把样本、管道输出或手工 PoC 的字节体冻结为证据快照，可绑定 findingId；正文不回显进 transcript。",
 	"- finding_update：登记样本分析结论并推进状态；复测必须附新证据快照。",
 	"- codemode：在 QuickJS 沙箱内运行分析脚本，不落盘、不发网络请求。",
+	"- local_tool_check：探测本地二进制工具（objdump/gdb 等）是否安装及版本首行，只回答问题。",
 	"- 本角色没有 http_request / traffic_query；需要线上流量时交由父会话或红队子会话取证。",
 ].join("\n");
 
